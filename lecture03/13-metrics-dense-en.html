@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="The retriever improved and the second question's right passage moved to the top, yet the top-3 count stayed stuck at 0.667. We need numbers that can see that change, and at the end you read Stanford's metric slides yourself.">
+<title>Lesson 13: Measuring a retriever (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+  .rank { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
+  .rank .item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 10px; font-size: 15px; }
+  .rank .item.rel { border-color: var(--accent); }
+  .rank .item .pos { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .rank .item .g { font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .rank .item button { font: 600 13px/1 var(--sans); background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 5px 8px; cursor: pointer; color: var(--ink); }
+  .rank .item.cut { opacity: .45; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 13 / 18 · <a href="13-metrics-en.html">Easy</a> · <b>Dense</b> · <a href="13-metrics-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 13 · Dense version</p>
+  <h1>Measuring a retriever: Hit@k, MRR, Recall@k and nDCG</h1>
+  <p class="lede"><b>Measuring a retriever means looking at its lists for a set of queries and counting how many right passages came back, and how high they sit.</b> First someone has to write down the right passages for every query, and then each metric turns the lists into one number.</p>
+  <p class="lede"><a href="02-retrieval-dense-en.html#recall-ceiling">Lesson 2</a> counted recall roughly. Now run a retriever on the same 3 queries. For the first query the right passage comes back at rank 1, for the second at rank 2, and for the third not at all. In the top 3, the right passage arrived for 2 of the 3 queries, which is 0.667.</p>
+  <p class="lede">Then you improve the retriever, and the second query's right passage moves up to rank 1. If only one passage goes into the prompt, that query can now be answered too. Yet the top-3 count stays stuck at 0.667. This lesson builds numbers that can see that change.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 10 steps. The first 5 are the same as in the easy version, and steps 6 to 10 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#labels">Relevance labels and sets</a><span class="can">Write R<sub>q</sub>, Top<sub>k</sub>(q), ∩ and |A| for our example.</span></li>
+      <li><a href="#hit">Hit@k and Failed@k</a><span class="can">Work out Hit@3 and Failed@3 by hand.</span></li>
+      <li><a href="#mrr">MRR@k</a><span class="can">Work out the reciprocal rank, and show that MRR sees the improvement.</span></li>
+      <li><a href="#recallk">Recall@k</a><span class="can">Work out Recall@k, choose the right k, and read Stanford's MRR and Recall slide.</span></li>
+      <li><a href="#ndcg">nDCG@k</a><span class="can">Work out nDCG by hand, read Stanford's other slide, and choose the right metric.</span></li>
+      <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#notation">The slides' symbols, and the rules of sets and 𝟙</a><span class="can">Tie every symbol in the five formulas to your own numbers, and prove that Failed@k = 1 − Hit@k.</span></li>
+      <li><a href="#logmath">The maths of the discount, and the ideal DCG</a><span class="can">Explain why the nDCG discount falls slowly, and build the IDCG correctly.</span></li>
+      <li><a href="#average">Averaging over queries, percentages and points, and the nDCG@10 chart</a><span class="can">Read averages and percentages correctly, and read Stanford's nDCG@10 chart.</span></li>
+      <li><a href="#papers">These metrics in the course's papers</a><span class="can">Read the DPR, MS MARCO and ColBERT numbers as this lesson's metrics.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line of the three slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="02-retrieval-dense-en.html#corpus">Lesson 2</a> (the 6 passages of the corpus, top-K, recall, the recall ceiling), <a href="03-vectors-dense-en.html">Lesson 3</a> (the ∑ sign) and <a href="04-probability-tools-dense-en.html#loss">Lesson 4</a> (ln). From step 6 on, <a href="08-contextual-retrieval-dense-en.html#late">Lesson 8</a> (late chunking), <a href="10-vector-search-dense-en.html">Lesson 10</a> (ANN) and <a href="12-dpr-dense-en.html#results">Lesson 12</a> (DPR, top-k accuracy) also help. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="labels">
+  <h3><span class="cn">1</span>Relevance labels and sets: write down the right passages first</h3>
+
+  <p><b>Relevance labels are a list in which a person writes down, for each query, which passages are right.</b> A retriever cannot tell you whether its own list is right, so before you can measure it, someone has to read the passages and make this list. Each passage can also get a grade: 3 means very useful, 1 means a little useful, and 0 means not useful.</p>
+
+  <p>The whole lesson uses the same 3 <button class="def" data-w="w-query">queries</button> over lesson 2's corpus. Suppose a <button class="def" data-w="w-retriever">retriever</button> returns 5 passages for each query, with each passage's grade in brackets. <span class="mine">my retriever and grades</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query</th><th>The retriever's order (grade)</th><th>Right passages</th></tr></thead>
+    <tbody>
+      <tr><td>q1: Least crowded office hour?</td><td>queue log (3), old forum post (0), office hours page (1), syllabus (0), project page (0)</td><td>queue log, office hours page</td></tr>
+      <tr><td>q2: When is the milestone due?</td><td>project page (0), syllabus (3), Homework 1 announcement (0), office hours page (0), queue log (0)</td><td>syllabus</td></tr>
+      <tr><td>q3: When can I get help from a TA?</td><td>syllabus (0), Homework 1 announcement (0), project page (0), old forum post (0), queue log (0)</td><td>office hours page, grade 2</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>q1 has two right passages. The queue log has the crowd data, and the office hours page says that the Thursday 9am office hour is on Zoom. The real answer is in the queue log, so it gets grade 3, and the office hours page gets 1. q3's right passage is nowhere in the retriever's list.</p>
+
+  <h4 class="sub" id="sets">Sets: short names for the right passages</h4>
+
+  <p>The metric formulas give these lists short names, and for that they use sets. A <b class="term">set</b> is a group of things written inside { }, and the order inside it does not matter.</p>
+
+  <p>The set of right passages for query q is written R<sub>q</sub>, for example R<sub>q1</sub> = {queue log, office hours page}. The set of the retriever's top k passages is Top<sub>k</sub>(q). This k is the same as lesson 2's <button class="def" data-w="w-topk">K</button>, only written small in formulas. So Top<sub>3</sub>(q1) = {queue log, old forum post, office hours page}. Three more signs come with sets:</p>
+  <ul class="plain">
+    <li><b>∩</b> gives the things that are in both sets. R<sub>q1</sub> ∩ Top<sub>3</sub>(q1) = {queue log, office hours page}, so both of q1's right passages are in the top 3.</li>
+    <li><b>∅</b> is the empty set, with nothing in it. For q3, {office hours page} ∩ {syllabus, Homework 1 announcement, project page} has nothing in common, so it is ∅.</li>
+    <li><b>|A|</b> is how many things set A holds. |R<sub>q1</sub>| = 2, and for the set Q of all queries, |Q| = 3.</li>
+  </ul>
+
+  <p>Labels have a cost. A person has to read and decide the right passages for every query, which is expensive. If that person misses a right passage, a retriever that finds it still loses on every metric.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="hit">
+  <h3><span class="cn">2</span>Hit@k and Failed@k: did a right passage arrive?</h3>
+
+  <p><b>Hit@k checks, for each query, whether the top k holds at least one right passage, and then averages over the queries.</b> If it does, the query gets 1, otherwise 0. At k = 3, q1's top 3 holds the queue log and the office hours page, so 1. q2's top 3 holds the syllabus, so 1. q3's top 3 holds no right passage, so 0.</p>
+  <ol class="plain">
+    <li>Add the three queries' numbers: 1 + 1 + 0 = 2.</li>
+    <li>Divide by the number of queries, which gives the average: 2 ÷ 3 = 0.667.</li>
+  </ol>
+  <p>Hit@3 = 0.667, the number from the start of the lesson.</p>
+
+  <p>This “1 if true, 0 if false” rule has its own sign: <button class="def" data-w="w-indicator">𝟙[condition]</button>. For example, 𝟙[2 &gt; 1] = 1 and 𝟙[2 &gt; 3] = 0. In Hit@k the condition is that R<sub>q</sub> ∩ Top<sub>k</sub>(q) is not empty, written ≠ ∅, where ≠ means “not equal to”. For q3 the intersection is empty, so 𝟙[R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) ≠ ∅] = 0. The formula holds the two steps above:</p>
+  <div class="formula">Hit@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> 𝟙[R<sub>q</sub> ∩ Top<sub>k</sub>(q) ≠ ∅]</div>
+  <dl class="sym">
+    <dt><button class="def" data-w="w-sigma">∑</button><sub>q ∈ Q</sub></dt><dd>Add over every query q in Q. ∈ means “one of the members of this set”. Here 1 + 1 + 0 = 2.</dd>
+    <dt>1 ÷ |Q|</dt><dd>Divide by the number of queries, which makes it an average. Here 2 ÷ 3 = 0.667.</dd>
+  </dl>
+
+  <p><b class="term">Failed@k</b> is the opposite: the share of queries where not a single right passage reached the top k. Each query scores 1 on either Hit or Failed, never both, so Failed@k = 1 − Hit@k. Here Failed@3 = 1 − 0.667 = 0.333, because 1 query out of 3, q3, failed.</p>
+
+  <p>Hit@3 = 0.667 is also lesson 2's <button class="def" data-w="w-ceiling">recall ceiling</button> here, because no more than 2 of the 3 queries can be answered from the passages. The same numbers come back later under other names. The <button class="def" data-w="w-failed20">failed retrievals@20</button> of <a href="08-contextual-retrieval-dense-en.html#contextual">lesson 8</a> is Failed@20, because each query there had one right chunk. The <button class="def" data-w="w-topkacc">top-k retrieval accuracy</button> of <a href="12-dpr-dense-en.html#results">lesson 12</a> is Hit@20.</p>
+
+  <p>Now look at the improvement from the start. q2's syllabus moved from rank 2 to rank 1, but both times it is inside the top 3, so q2 gets 1 both times. <b>Hit@k does not look at where inside the top k the right passage sits.</b> Stanford's slide says so under Hit@k: <q>Position in the top k does not matter</q>.</p>
+
+  <p>Take k = 1 and the improvement shows: Hit@1 was 1 ÷ 3 = 0.333, and after the improvement it is 2 ÷ 3 = 0.667. But then Hit@1 cannot tell rank 2 from rank 5, because both get 0. So at any single k, Hit@k sees only one slice of the order.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="mrr">
+  <h3><span class="cn">3</span>MRR@k: how high the first right passage is</h3>
+
+  <p><b>The reciprocal rank is 1 divided by the rank of the first right passage, and MRR is its average over the queries.</b> The reciprocal of a number is 1 divided by that number. If the first right passage is at rank 1, the reciprocal rank is 1 ÷ 1 = 1. At rank 2 it is 1 ÷ 2 = 0.5, and at rank 3 it is 1 ÷ 3 = 0.333. If no right passage is in the top k, it is 0.</p>
+
+  <p>Now look at the three queries at k = 3. q1's first right passage, the queue log, is at rank 1, so 1. q2's syllabus is at rank 2, so 0.5. q3 has no right passage in the top 3, so 0.</p>
+  <ol class="plain">
+    <li>Add the three reciprocal ranks: 1 + 0.5 + 0 = 1.5.</li>
+    <li>Divide by 3 queries: 1.5 ÷ 3 = 0.5.</li>
+  </ol>
+  <p>This average is called <b class="term">MRR</b>, the mean reciprocal rank, and here MRR@3 = 0.5. The formula holds the same two steps:</p>
+  <div class="formula">MRR@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> <span class="frac"><span>1</span><span>rank<sub>q</sub></span></span></div>
+  <dl class="sym">
+    <dt>rank<sub>q</sub></dt><dd>The rank of query q's first right passage: 1 for q1, and 2 for q2. q3 has none in the top 3, so it adds 0.</dd>
+  </dl>
+
+  <p>Now look at the improvement from the start. q2's syllabus moved to rank 1, so q2's reciprocal rank went from 0.5 to 1, and MRR@3 = (1 + 1 + 0) ÷ 3 = 0.667. <b>Hit@3 did not move, but MRR@3 went from 0.5 to 0.667.</b> <span class="mine">my example of an improvement</span></p>
+
+  <p>MRR is most useful when one right passage is enough, as for q2, whose whole date is in the syllabus. The retrievers in <a href="14-hybrid-rerank-dense-en.html">lessons 14</a> and <a href="15-colbert-dense-en.html">15</a> are also compared by MRR@10.</p>
+
+  <p>But MRR looks only at the first right passage. Whether q1's office hours page is at rank 3 or outside the top 3, q1's reciprocal rank stays 1. Yet a full answer to q1 needs both passages: the time from the queue log, and the fact that it is on Zoom from the office hours page.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="recallk">
+  <h3><span class="cn">4</span>Recall@k: how many of the right passages arrived</h3>
+
+  <p><b>Recall@k counts, for each query, what share of all its right passages made the top k, and then averages over the queries.</b> For a query like q1 one right passage is not enough, because the reader gets the time from the queue log and the place from the office hours page.</p>
+
+  <p>At k = 3, q1 found 2 of its 2 right passages, q2 found 1 of 1, and q3 found 0 of 1.</p>
+  <ol class="plain">
+    <li>Each query's share: 2 ÷ 2 = 1 for q1, 1 ÷ 1 = 1 for q2, and 0 ÷ 1 = 0 for q3.</li>
+    <li>The average: (1 + 1 + 0) ÷ 3 = 0.667.</li>
+  </ol>
+  <p>This number is called <b class="term">Recall@k</b>. Lesson 2 introduced <button class="def" data-w="w-recall">recall</button> roughly, for example the right passage found for 60 of 100 questions, which is 0.6. This is its exact form.</p>
+
+  <p>At k = 1 Recall and Hit come apart. q1's top 1 holds only the queue log, 1 of 2, so 0.5. q2 and q3 get 0. Recall@1 = (0.5 + 0 + 0) ÷ 3 = 0.167, while Hit@1 = 0.333. Hit@1 gave q1 a full 1, and Recall@1 gave it only half, because the office hours page was missed.</p>
+
+  <div class="formula">Recall@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> <span class="frac"><span>|R<sub>q</sub> ∩ Top<sub>k</sub>(q)|</span><span>|R<sub>q</sub>|</span></span></div>
+  <dl class="sym">
+    <dt>|R<sub>q</sub> ∩ Top<sub>k</sub>(q)|</dt><dd>How many right passages are in the top k. At k = 1 for q1, |{queue log}| = 1.</dd>
+    <dt>|R<sub>q</sub>|</dt><dd>How many right passages the query has in total. For q1 that is 2, so q1's share is 1 ÷ 2 = 0.5.</dd>
+  </dl>
+
+  <p>Recall@k has a weakness: it never goes down as k grows, because passages only join the top k and never leave it. At k = 1,000 recall will look very high, but by lesson 2's count the <button class="def" data-w="w-prompt">prompt</button> holds only about 14 passages. <b>So look at Recall@k at the k you actually put into the prompt.</b> Recall@k also ignores the order inside the top k: whether the queue log is at rank 1 or rank 3, q1's Recall@3 is the same.</p>
+
+  <p>The recall of <button class="def" data-w="w-ann">ANN</button> search in <a href="10-vector-search-dense-en.html">lesson 10</a> compares against the list from exact search: if 9 of the exact top 10 come back, it is 0.9. Recall@k compares against relevance labels that a person wrote.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p46.png"><img src="img/slide-p46.png" alt="Stanford slide: the formulas for MRR@k and Recall@k" loading="lazy"></a>
+    <figcaption>Stanford's slide: the formulas for MRR@k and Recall@k. You can now read every line of it. Click the image to open it at full size.</figcaption>
+  </figure>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="ndcg">
+  <h3><span class="cn">5</span>nDCG@k: is the most useful passage on top?</h3>
+
+  <p><b>nDCG@k reduces each grade according to its rank, adds them up, and divides the sum by the sum for the best possible order.</b> So it looks at two things together: how useful a passage is, and how high it sits. In the three metrics so far, a passage was simply right or wrong.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Reverse q1's order: office hours page (1), old forum post (0), queue log (3). Which of Hit@3, the reciprocal rank and Recall@3 changes for q1?</p>
+    <details><summary>Show the answer</summary>
+      <p>None of them. Hit is 1, the reciprocal rank is also 1 because the office hours page is right too, and Recall is 2 of 2. But for the reader this list is worse, because the crowd data is now at rank 3.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">A first attempt could be to add up the grades in the top k. But the original order gives 3 + 0 + 1 = 4, and the reversed order gives 1 + 0 + 3 = 4, so the sum sees the grades but not the order. That is why each grade is reduced according to its rank, so that a lower passage counts for less.</p>
+
+  <h4 class="sub" id="discount">Dividing by log<sub>2</sub>(rank + 1)</h4>
+
+  <p>The reduction divides each grade by <button class="def" data-w="w-log2">log<sub>2</sub></button>(rank + 1). log<sub>2</sub> x answers the question: to what power must you raise 2 to get x? 2<sup>1</sup> = 2, 2<sup>2</sup> = 4 and 2<sup>3</sup> = 8, so log<sub>2</sub> 2 = 1, log<sub>2</sub> 4 = 2 and log<sub>2</sub> 8 = 3. The log<sub>2</sub> of 3 lies between 1 and 2, because 3 lies between 2 and 4: log<sub>2</sub> 3 = 1.585. Check: 2<sup>1.585</sup> = 3.000.</p>
+
+  <p>This is the same idea as <button class="def" data-w="w-ln">ln</button> from lesson 4, where the base was e, about 2.718, and here it is 2. The 1 is added to the rank so that rank 1 has the divisor log<sub>2</sub> 2 = 1, and the top passage keeps its full grade:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Rank</th><th class="numh">log<sub>2</sub>(rank + 1)</th><th class="numh">Share of the grade that counts</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="num">log<sub>2</sub> 2 = 1</td><td class="num">1 ÷ 1 = 1</td></tr>
+      <tr><td>2</td><td class="num">log<sub>2</sub> 3 = 1.585</td><td class="num">1 ÷ 1.585 = 0.631</td></tr>
+      <tr><td>3</td><td class="num">log<sub>2</sub> 4 = 2</td><td class="num">1 ÷ 2 = 0.5</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Now work out the sum for q1's original order:</p>
+  <ol class="plain">
+    <li>Rank 1, queue log: 3 ÷ 1 = 3.</li>
+    <li>Rank 2, old forum post: 0 ÷ 1.585 = 0.</li>
+    <li>Rank 3, office hours page: 1 ÷ 2 = 0.5.</li>
+    <li>Sum: 3 + 0 + 0.5 = 3.5.</li>
+  </ol>
+  <p>In the reversed order the office hours page is at rank 1 and the queue log at rank 3: 1 ÷ 1 + 0 + 3 ÷ 2 = 1 + 1.5 = 2.5. Now the order shows, because 3.5 and 2.5 differ. This sum is called the <button class="def" data-w="w-dcg">DCG</button>, the discounted cumulative gain. Gain means the grade, cumulative means added up, and discounted means reduced by rank.</p>
+
+  <h4 class="sub" id="idcg">Dividing by the IDCG: bringing every query between 0 and 1</h4>
+
+  <p>One problem remains: how large the DCG can get depends on the query. q1 has two right passages, with grades 3 and 1, so its DCG can reach 3.631. q3 has one right passage, with grade 2, so its DCG can never go above 2. A plain average would give more weight to queries with more right passages.</p>
+
+  <p>So each query's DCG is divided by the DCG of the best possible order for that same query, called the IDCG, the ideal DCG. q1's best order is queue log (3), office hours page (1), so IDCG = 3 ÷ 1 + 1 ÷ 1.585 = 3.631. This order comes from all the labels, not from the retriever's list, which is why q3's IDCG is 2.</p>
+
+  <p>Now the original order gives 3.5 ÷ 3.631 = 0.964, and the reversed order gives 2.5 ÷ 3.631 = 0.689. This ratio is called <b class="term">nDCG</b>, where the n stands for normalized. It always lies between 0 and 1, and 1 means no better order is possible.</p>
+
+  <p><b>Hit, the reciprocal rank and Recall missed the reversed order, but nDCG fell from 0.964 to 0.689.</b> The formula holds the same arithmetic, followed by the average of every query's nDCG:</p>
+  <div class="formula">DCG<sub>q</sub>@k = <span class="sum"><span class="op">∑</span><span class="lim">i = 1 … k</span></span> <span class="frac"><span>rel<sub>q,i</sub></span><span>log<sub>2</sub>(i + 1)</span></span>, &nbsp; nDCG@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> <span class="frac"><span>DCG<sub>q</sub>@k</span><span>IDCG<sub>q</sub>@k</span></span></div>
+  <p>Here rel<sub>q,i</sub> is the grade of the passage at rank i, which is 3, 0 and 1 in q1's original order. The same arithmetic works for the other two queries. q3's right passage is not in the top 3, so its DCG is 0, and its nDCG is 0 too.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query, k = 3</th><th class="numh">DCG</th><th class="numh">IDCG</th><th class="numh">nDCG</th></tr></thead>
+    <tbody>
+      <tr><td>q1<span class="sub">queue log (3), forum post (0), office hours page (1)</span></td><td class="num">3.5</td><td class="num">3.631</td><td class="num">0.964</td></tr>
+      <tr class="hi"><td>q2<span class="sub">project page (0), syllabus (3), Homework 1 (0)</span></td><td class="num">?</td><td class="num">3</td><td class="num">?</td></tr>
+      <tr><td>q3<span class="sub">syllabus (0), Homework 1 (0), project page (0)</span></td><td class="num">0</td><td class="num">2</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Work out the second row</p>
+    <p>q2's right passage, the syllabus (grade 3), is at rank 2. What are its DCG and nDCG? Then work out nDCG@3 over all three queries.</p>
+    <details><summary>Show the answer</summary>
+      <p>DCG = 3 ÷ log<sub>2</sub> 3 = 3 ÷ 1.585 = 1.893. IDCG = 3 ÷ 1 = 3, because the best order would put the syllabus at rank 1. nDCG = 1.893 ÷ 3 = <b>0.631</b>.</p>
+      <p>nDCG@3 = (0.964 + 0.631 + 0) ÷ 3 = <b>0.532</b>.</p>
+    </details>
+  </div>
+
+  <div class="widget" id="mw">
+    <h4>Change q1's order</h4>
+    <p class="hint">Press “Up” to move a passage up one rank, and change k. The right passages have a coloured border. Build the reversed order and watch nDCG drop to 0.689.</p>
+    <div class="ctl"><label for="mw-k">k</label><input id="mw-k" type="range" min="1" max="5" step="1" value="3"><output id="mw-ko">3</output></div>
+    <div class="btns">
+      <button type="button" data-o="0,1,2,3,4">Original order</button>
+      <button type="button" data-o="2,1,0,3,4">Reversed order</button>
+    </div>
+    <div class="rank" id="mw-list"></div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Metric (q1 only)</th><th class="numh">Value</th></tr></thead>
+      <tbody id="mw-body"></tbody>
+    </table></div>
+  </div>
+
+  <figure class="slide">
+    <a href="img/slide-p45.png"><img src="img/slide-p45.png" alt="Stanford slide: the formulas for Hit@k, Failed@k and nDCG@k" loading="lazy"></a>
+    <figcaption>Stanford's slide: the formulas for Hit@k, Failed@k and nDCG@k. You can now read every line of it.</figcaption>
+  </figure>
+
+  <h4 class="sub" id="together">One retriever, four numbers</h4>
+
+  <p>Now put the starting retriever's four numbers side by side. The list is the same and k = 3, yet four different numbers come out:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query</th><th class="numh">Hit@3</th><th class="numh">Reciprocal rank</th><th class="numh">Recall@3</th><th class="numh">nDCG@3</th></tr></thead>
+    <tbody>
+      <tr><td>q1</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">0.964</td></tr>
+      <tr><td>q2</td><td class="num">1</td><td class="num">0.5</td><td class="num">1</td><td class="num">0.631</td></tr>
+      <tr><td>q3</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+      <tr class="total"><td>Average</td><td class="num">0.667</td><td class="num">0.5<span class="sub">MRR@3</span></td><td class="num">0.667</td><td class="num">0.532</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Now look at the improvement from the start once more. When q2's syllabus moves to rank 1, its nDCG becomes 3 ÷ 3 = 1, and nDCG@3 = (0.964 + 1 + 0) ÷ 3 = 0.655. MRR@3 also becomes 0.667, while Hit@3 and Recall@3 stay at 0.667.</p>
+
+  <p>The cost of nDCG is that it needs grades, which are even more expensive than right-or-wrong labels. The late chunking scores in <a href="08-contextual-retrieval-dense-en.html#late">lesson 8</a> were this nDCG@10, written as percentages. Each metric answers a different question:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Metric</th><th>The question it answers</th><th>When to use it</th></tr></thead>
+    <tbody>
+      <tr><td>Hit@k, Failed@k</td><td>Did the reader get at least one right passage?</td><td>To measure the recall ceiling</td></tr>
+      <tr><td>MRR@k</td><td>How high is the first right passage?</td><td>When one right passage is enough</td></tr>
+      <tr><td>Recall@k</td><td>How many of the right passages arrived?</td><td>When the answer is spread over several passages</td></tr>
+      <tr><td>nDCG@k</td><td>Are the more useful passages on top?</td><td>When you have grades and the order matters</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>A support bot puts the top 5 passages into its prompt, and most answers sit in a single passage. Retriever A has its first right passage at rank 2 for every query. Retriever B has it at rank 1 for half the queries and outside the top 5 for the other half. Work out MRR@5 and Hit@5 for both. Which one would you choose?</p>
+    <details><summary>Show the answer</summary>
+      <p>MRR@5: A = 0.5, and B = (1 + 0) ÷ 2 = 0.5, so they are <b>equal</b>. Hit@5: A = 1.0, and B = 0.5.</p>
+      <p><b>Choose A.</b> A brings a right passage to the reader for every query, while B gives it nothing for half of them. Looking at MRR alone, you would never see this difference.</p>
+    </details>
+  </div>
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The 5 steps above are the same as in the easy version. The 5 steps below take you to the level of the Stanford slides. First come every symbol on the slides and the rules of sets, then the maths of the discount and the ideal DCG. After that come averaging over queries and the nDCG@10 chart, then these metrics in the course's papers, and finally you read the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="notation">
+  <h3><span class="cn">6</span>The slides' symbols, and the rules of sets and 𝟙</h3>
+
+  <p>So far each metric came on its own. Stanford's two slides write all five formulas in one shared language: sets, 𝟙, and an average over queries. The table below ties each symbol to a number from our example:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>Meaning</th><th>In our example</th></tr></thead>
+    <tbody>
+      <tr><td>Q</td><td>The set of all test queries</td><td>{q1, q2, q3}</td></tr>
+      <tr><td>q ∈ Q</td><td>One query in Q. ∈ means “is a member of this set”.</td><td>q1</td></tr>
+      <tr><td>|Q|</td><td>How many queries Q holds</td><td>3</td></tr>
+      <tr><td>R<sub>q</sub></td><td>The set of right passages for query q, from the labels</td><td>R<sub>q1</sub> = {queue log, office hours page}</td></tr>
+      <tr><td>Top<sub>k</sub>(q)</td><td>The set of the retriever's top k passages</td><td>Top<sub>3</sub>(q2) = {project page, syllabus, Homework 1 announcement}</td></tr>
+      <tr><td>R<sub>q</sub> ∩ Top<sub>k</sub>(q)</td><td>The right passages that made the top k</td><td>{syllabus} for q2</td></tr>
+      <tr><td>≠ ∅ and = ∅</td><td>Not empty, and empty</td><td>≠ ∅ for q2, = ∅ for q3</td></tr>
+      <tr><td>𝟙[ · ]</td><td>1 if the condition in the brackets is true, 0 if not</td><td>𝟙[R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) ≠ ∅] = 0 for q3</td></tr>
+      <tr><td>rank<sub>q</sub></td><td>The rank of the first right passage</td><td>2 for q2</td></tr>
+      <tr><td>i and rel<sub>q,i</sub></td><td>A rank from 1 to k, and the grade of the passage at that rank</td><td>rel<sub>q2,2</sub> = 3 for q2</td></tr>
+      <tr><td><span class="frac"><span>1</span><span>|Q|</span></span> ∑<sub>q ∈ Q</sub></td><td>Add every query's number and divide by |Q|, which is the average</td><td>÷ 3</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>One thing to keep in mind: in <a href="03-vectors-dense-en.html">lesson 3</a>, |a| was the length of a vector, but here |A| is the size of a set. The bars look the same, and the meaning depends on whether a vector or a set sits inside them.</p>
+
+  <h4 class="sub" id="failedproof">Why Failed@k = 1 − Hit@k always holds</h4>
+
+  <p>The slide's Failed@k formula is the same as Hit@k, except that the condition says = ∅ instead of ≠ ∅. First run it directly on our numbers:</p>
+  <ol class="plain">
+    <li>q1: R<sub>q1</sub> ∩ Top<sub>3</sub>(q1) = {queue log, office hours page}, which is not empty, so 𝟙[ = ∅] = 0.</li>
+    <li>q2: {syllabus}, also not empty, so 0.</li>
+    <li>q3: ∅, so 1.</li>
+    <li>Average: (0 + 0 + 1) ÷ 3 = 0.333.</li>
+  </ol>
+  <p>That equals 1 − 0.667, and it is no coincidence. For every query exactly one of the two conditions holds, because a set is either empty or not. So for every query 𝟙[ = ∅] + 𝟙[ ≠ ∅] = 1, and over the three queries these add up to 3. Divide by 3, and Failed@k + Hit@k = 1. Check: 0.333 + 0.667 = 1.</p>
+
+  <h4 class="sub" id="setfacts">Three facts that follow from sets</h4>
+
+  <p>The first fact needs one more sign. <button class="def" data-w="w-subset">A ⊆ B</button> means that everything in A is also in B, and A is called a subset of B. For example, Top<sub>3</sub>(q1) ⊆ Top<sub>5</sub>(q1), because the top 5 holds the three passages of the top 3 plus two more.</p>
+  <ul class="plain">
+    <li><b>Recall@k never goes down, and never goes above 1.</b> Top<sub>3</sub> ⊆ Top<sub>5</sub>, so R<sub>q</sub> ∩ Top<sub>3</sub> ⊆ R<sub>q</sub> ∩ Top<sub>5</sub>, and the bigger set cannot be smaller in size. Also R<sub>q</sub> ∩ Top<sub>k</sub> ⊆ R<sub>q</sub>, so the top of the fraction cannot exceed the bottom.</li>
+    <li><b>For a query with a single right passage, Recall@k and Hit@k are equal.</b> If |R<sub>q</sub>| = 1, then |R<sub>q</sub> ∩ Top<sub>k</sub>| is either 0 or 1, and the division is by 1. q2 and q3 are such queries, and both their Recall@3 and Hit@3 are 1 and 0. This is why lesson 8's <q>1 minus recall@20</q> is Failed@20.</li>
+    <li><b>For each query, the reciprocal rank is never larger than Hit.</b> 1 ÷ rank<sub>q</sub> is at most 1, and both are 0 when nothing is found. So MRR@k ≤ Hit@k.</li>
+  </ul>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Work out MRR@1 and Hit@1 for the list before the improvement. Why are they equal?</p>
+    <details><summary>Show the answer</summary>
+      <p>Only q1's first passage is right, so both are (1 + 0 + 0) ÷ 3 = <b>0.333</b>. At k = 1, a right passage that is found must sit at rank 1, so the reciprocal rank is either 1 or 0. A difference appears only when k is larger.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">There is also an edge case. If a query has no right passage in the corpus at all, then R<sub>q</sub> = ∅ and |R<sub>q</sub>| = 0. Recall would then divide by 0, which is impossible, and the IDCG in nDCG is 0 as well. So every query in a test set needs at least one right passage.</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="logmath">
+  <h3><span class="cn">7</span>The maths of the discount: logs, the harmonic series and the ideal DCG</h3>
+
+  <p>Step 5 divided each grade by log<sub>2</sub>(rank + 1), while MRR simply takes 1 ÷ rank. Put the two discounts side by side over 10 ranks, and the difference shows:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Rank</th><th class="numh">1 ÷ rank</th><th class="numh">log<sub>2</sub>(rank + 1)</th><th class="numh">1 ÷ log<sub>2</sub>(rank + 1)</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="num">1</td><td class="num">1</td><td class="num">1</td></tr>
+      <tr><td>2</td><td class="num">0.5</td><td class="num">1.585</td><td class="num">0.631</td></tr>
+      <tr><td>3</td><td class="num">0.333</td><td class="num">2</td><td class="num">0.5</td></tr>
+      <tr><td>4</td><td class="num">0.25</td><td class="num">2.322</td><td class="num">0.431</td></tr>
+      <tr><td>5</td><td class="num">0.2</td><td class="num">2.585</td><td class="num">0.387</td></tr>
+      <tr><td>6</td><td class="num">0.167</td><td class="num">2.807</td><td class="num">0.356</td></tr>
+      <tr><td>7</td><td class="num">0.143</td><td class="num">3</td><td class="num">0.333</td></tr>
+      <tr><td>8</td><td class="num">0.125</td><td class="num">3.170</td><td class="num">0.315</td></tr>
+      <tr><td>9</td><td class="num">0.111</td><td class="num">3.322</td><td class="num">0.301</td></tr>
+      <tr class="hi"><td>10</td><td class="num">0.1</td><td class="num">3.459</td><td class="num">0.289</td></tr>
+    </tbody>
+  </table></div>
+  <p>1 ÷ rank falls very fast: to half at rank 2, and to 0.1 at rank 10. 1 ÷ log<sub>2</sub>(rank + 1) falls slowly: it reaches half only at rank 3, and still keeps 0.289 at rank 10. <b>So nDCG still counts the lower ranks, while a 1 ÷ rank discount almost ignores them.</b></p>
+
+  <p>The 2002 paper by Järvelin and Kekäläinen gives exactly this reason. The discount should shrink with rank, but not as steeply as dividing by the rank, so that a user who keeps reading further down still counts. Their example: log<sub>2</sub> 1024 = 10, so a document at rank 1024 still keeps a tenth of its value. Under 1 ÷ rank it would keep only 1 ÷ 1024 = 0.001. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="harmonic">The harmonic series, and the divisor in nDCG</h4>
+
+  <p>The list 1, 1/2, 1/3, 1/4, … is called the <button class="def" data-w="w-harmonic">harmonic series</button>, and MRR's reciprocal ranks are exactly these numbers. Their running sum grows very slowly: the first 10 add up to 2.929, the first 100 to 5.187, and the first 1,000 to 7.485. A rule shows here: the sum of the first n is about ln n + 0.577, where 0.577 is a fixed number. Check: ln 1000 = 6.908, and 6.908 + 0.577 = 7.485.</p>
+
+  <p>So the harmonic sum grows like a log. The same link shows up from the other side in the divisor of nDCG. Logs follow a rule you met with ln in lesson 4: log<sub>2</sub>(a × b) = log<sub>2</sub> a + log<sub>2</sub> b. Since 4 = 2 × 1.5 × (4 ÷ 3):</p>
+  <ol class="plain">
+    <li>log<sub>2</sub> 2 = 1, the divisor at rank 1.</li>
+    <li>log<sub>2</sub> 1.5 = 0.585, the step from rank 1 to rank 2.</li>
+    <li>log<sub>2</sub>(4 ÷ 3) = 0.415, the step from rank 2 to rank 3.</li>
+    <li>Sum: 1 + 0.585 + 0.415 = 2 = log<sub>2</sub> 4, the divisor at rank 3.</li>
+  </ol>
+  <p>At rank i the divisor grows by a step of log<sub>2</sub>(1 + 1 ÷ i): 1, 0.585, 0.415, 0.322, and 0.138 at rank 10. Compare these with the harmonic numbers 1, 0.5, 0.333, 0.25 and 0.1. Each step is equal to 1 ÷ i or a little bigger, and for large i it is about 1.443 ÷ i, as at i = 100, where both are 0.0144. Here 1.443 = 1 ÷ ln 2.</p>
+  <p><b>So the divisor in nDCG grows by shrinking steps like those of the harmonic series, while the divisor of 1 ÷ rank grows by a full 1 at every rank.</b> That is why the log discount falls slowly.</p>
+
+  <h4 class="sub" id="original">The paper's original formula</h4>
+
+  <p>The slide's log<sub>2</sub>(i + 1) is the later, common form. The 2002 paper divided by log<sub>b</sub> i, the log of the rank in base b. At rank 1 the log is 0, so the paper applies no discount to ranks below b. With b = 2, ranks 1 and 2 both keep their full grade, because log<sub>2</sub> 2 = 1, and rank 3 is divided by log<sub>2</sub> 3 = 1.585. <span class="mine">from the paper</span></p>
+
+  <p>The paper's own example starts with grades 3, 2, 3, and gives a DCG of 3 + 2 + 3 ÷ 1.585 = 6.89 at rank 3, which is also the number printed in the paper. The same formula gives q1's original order (3 + 0 + 1 ÷ 1.585) ÷ (3 + 1) = 0.908, and the reversed order (1 + 0 + 3 ÷ 1.585) ÷ 4 = 0.723. <span class="mine">my arithmetic for q1</span></p>
+
+  <p>The slide's formula gave 0.964 and 0.689 for the same two lists. The numbers changed, but both formulas rank the original order higher. So read an nDCG number only when you know which formula produced it.</p>
+
+  <p>The paper describes base 2 as a model of an impatient user and base 10 as a model of a persistent one. It also tried other gains in place of the grades, for example treating grades 0, 1, 2 and 3 as 0, 1, 10 and 100. <span class="mine">from the paper</span> With those gains, q1's original order gives 0.999 and the reversed order 0.507, because the grade-3 queue log now weighs 100 times as much as anything else. <span class="mine">my arithmetic</span></p>
+
+  <h4 class="sub" id="ideal">The ideal DCG: built from all the labels, and cut at k</h4>
+
+  <p>Two rules build the IDCG, and both show in our example.</p>
+  <ul class="plain">
+    <li><b>The best order comes from all the labels, not from the retriever's list.</b> The paper says the same: the ideal rests on all the relevant documents for the topic, not on the output of some system. <span class="mine">from the paper</span> That is why q3's IDCG is 2, even though the retriever never returned the office hours page.</li>
+    <li><b>IDCG@k takes only the k largest grades.</b> Suppose a query has 4 right passages, with grades 3, 3, 2 and 1. Then IDCG@3 = 3 + 3 ÷ 1.585 + 2 ÷ 2 = 5.893, and the grade-1 passage gets no place in the top 3. IDCG@4 is 6.323. <span class="mine">my grades</span></li>
+  </ul>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>For q1 the retriever returns only the queue log at rank 1, and the other four passages are wrong. What is nDCG@3? What would happen if the IDCG were built from the retriever's list?</p>
+    <details><summary>Show the answer</summary>
+      <p>DCG = 3 ÷ 1 = 3, and the IDCG from all the labels is 3.631, so nDCG = 3 ÷ 3.631 = <b>0.826</b>. If the IDCG came from the list, the best order of that list would also give only 3, and nDCG would be 3 ÷ 3 = 1. Missing the office hours page would then cost nothing.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="average">
+  <h3><span class="cn">8</span>Averaging over queries, percentages and points, and the nDCG@10 chart</h3>
+
+  <p>All five formulas end with 1 ÷ |Q| and ∑, an average over the queries. <b>In this average every query has the same weight, so q1 and q3 each contribute 1 ÷ 3.</b> That is why step 5 first divided each query by its own IDCG, and only then took the average.</p>
+
+  <p>Average the DCG without that division, and you get (3.5 + 1.893 + 0) ÷ 3 = 1.798. Whether that is good or bad is hard to say, because the DCG has no fixed upper limit. On top of that, q1 alone supplies 3.5 of the total 5.393, a share of 0.649. nDCG@3 = 0.532 can be read directly: on average, the lists earned 53.2% of the DCG of the best possible order.</p>
+
+  <p>Even so, one average can hide a lot. Retriever C gives every query an nDCG of 0.5, and retriever D gives half the queries 1 and the other half 0. Both average 0.5, but D gives the reader nothing for half the queries. <span class="mine">my example</span> So look at Failed@k next to the average, which was also the lesson of the support bot in step 5.</p>
+
+  <h4 class="sub" id="points">Percentages and points</h4>
+
+  <p>Papers often multiply these numbers by 100, writing 0.532 as 53.2. In the table in <a href="08-contextual-retrieval-dense-en.html#late">lesson 8</a>, the average for 256-token chunks is 52.2 for naive chunking and 54.0 for late chunking. Now “how much better” has two answers:</p>
+  <ol class="plain">
+    <li>The plain difference: 54.0 − 52.2 = 1.8. This is called 1.8 <button class="def" data-w="w-points">points</button>.</li>
+    <li>Relative to the old number: 1.8 ÷ 52.2 = 0.0345, an improvement of about 3.45%.</li>
+  </ol>
+  <p>The paper gives both: 1.8% absolute and 3.46% relative. <span class="mine">from the paper</span> The table's numbers are rounded to one decimal, so a small gap like the one between 3.45% by hand and the paper's 3.46% can appear. When someone says a new method is “3% better”, ask whether that means points or a relative change.</p>
+
+  <h4 class="sub" id="chart">Stanford's nDCG@10 chart</h4>
+
+  <figure class="slide">
+    <a href="img/slide-p31-charts.png"><img src="img/slide-p31-charts.png" alt="The three charts from the late chunking slide: nDCG@10 by chunk size on three datasets" loading="lazy"></a>
+    <figcaption>The three charts from Stanford's late chunking slide, enlarged. Blue bars are naive chunking, and green bars are late chunking.</figcaption>
+  </figure>
+
+  <p>These charts come from the late chunking paper of <a href="08-contextual-retrieval-dense-en.html#late">lesson 8</a>. <b>Each bar is one dataset's nDCG@10, multiplied by 100.</b> The nDCG of the top 10 was computed for every query of that dataset, and then averaged over all its queries. So a bar at 60 means that, on average, the top-10 lists earned 60% of the DCG of the best possible order.</p>
+
+  <p>The paper's relevance labels are in a <button class="def" data-w="w-qrels">QRels</button> file, which lists the IDs of the right documents for each query. But the retriever returns chunks, not documents. So the paper replaces each chunk with its document, and when a document appears several times in the list, it keeps only its first position. <span class="mine">from the paper</span> That way one document cannot fill two ranks and count twice, just as a set holds each thing only once.</p>
+
+  <p>The x-axis is chunk size, from 8 to 512 tokens, each size double the one before. The y-axis is nDCG@10 in percent, from 0 to 100. The three datasets, WikiMultiHopQA, SummScreenFD and QMSum, come from a benchmark called LongEmbed, and the encoder is jina-embeddings-v2-small. <span class="mine">from the paper</span> Reading exact numbers off a chart is unreliable, so read its shape instead:</p>
+  <ul class="plain">
+    <li>In every chart, at every chunk size, the green bar is as high as the blue one or higher. On SummScreenFD at 512 tokens the two are about equal.</li>
+    <li>The gap is largest for small chunks. On QMSum at 8 tokens the blue bar is below the 40 line, and the green bar is above 60.</li>
+    <li>On WikiMultiHopQA every bar is above 80. nDCG cannot go above 100, so there is little room left to improve.</li>
+  </ul>
+  <p>Lesson 8 explains why late chunking wins on small chunks. For this lesson it is enough that each bar is an average over all the queries of its dataset. Every part of that average is step 5's DCG ÷ IDCG.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>On some dataset, half the queries have nDCG@10 = 1 and the other half 0. Where would its bar be? Could you tell it apart, from the bar alone, from a dataset where every query has nDCG@10 = 0.5?</p>
+    <details><summary>Show the answer</summary>
+      <p>The bar would be at 50, because (1 + 0) ÷ 2 = 0.5, and 0.5 × 100 = 50. The second dataset would also be at 50, so the bar shows no difference. For that you need the numbers per query, or a number like Failed@10.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="papers">
+  <h3><span class="cn">9</span>These metrics in the course's papers</h3>
+
+  <p>The retrieval numbers in lessons 8, 12, 14 and 15 are this lesson's metrics. The only difference is that each paper chose its labels and its k in its own way, and you need to know both before you read the number.</p>
+
+  <h4 class="sub" id="dprhit">DPR: Hit@20 with labels made without people</h4>
+
+  <p>The DPR paper's top-k retrieval accuracy counts the share of questions whose top-k passages contain a piece of text that answers the question. <span class="mine">from the paper</span> So there R<sub>q</sub> is the set of all passages that contain the answer text, and no person picked the passages. That makes labels cheap even for 21 million passages.</p>
+
+  <p>The cost is that a passage counts as right even when the answer text appears in some other context. For example, q2's answer is <q>Week 6</q>, so any passage containing Week 6 would count as right, even one about a different deadline. <span class="mine">my example</span> Turn lesson 12's NQ numbers into Failed@20: 100 − 78.4 = 21.6% for DPR, and 100 − 59.1 = 40.9% for BM25. So with BM25, for 40.9% of the questions the top 20 holds no passage with the answer, and nothing useful reaches the reader.</p>
+
+  <h4 class="sub" id="msmarco">MS MARCO: MRR@10, and reading MRR correctly</h4>
+
+  <p>The MRR@10 numbers in lessons 14 and 15 are on the MS MARCO dataset. According to the ColBERT paper, it holds 8.8 million passages from Web pages, gathered from Bing's results for 1 million real queries. Each query has only one or very few passages marked as relevant, and no passage is explicitly marked as irrelevant. The official metric is MRR@10. <span class="mine">from the paper</span></p>
+
+  <p>Step 6 explains this choice. When each query has a single right passage, Recall@k and Hit@k are equal, and the only question left is how high that passage sits. But “no passage marked irrelevant” also means that an unlabeled passage may well be right. A retriever that puts such a passage at rank 1 still gets 0, which is the cost of labels from step 1.</p>
+
+  <p>It is tempting to read MRR@10 = 0.349 as “the average rank is about 1 ÷ 0.349 = 2.9”, but that is wrong. The average of reciprocals is not the reciprocal of the average rank. Take two queries whose first right passages sit at rank 1 and rank 10: <span class="mine">my example</span></p>
+  <ol class="plain">
+    <li>MRR = (1 ÷ 1 + 1 ÷ 10) ÷ 2 = (1 + 0.1) ÷ 2 = 0.55.</li>
+    <li>1 ÷ 0.55 = 1.82, while the real average rank is (1 + 10) ÷ 2 = 5.5.</li>
+  </ol>
+  <p>The reason is the shape of 1 ÷ x, which is the first column of step 7's table. Moving from rank 1 to rank 2 drops the reciprocal rank by 0.5. Moving from rank 9 to rank 10 drops it by only 1 ÷ 9 − 1 ÷ 10 = 0.011. <b>So MRR mostly measures whether the first right passage is at rank 1 or 2.</b> A passage at rank 11 counts in MRR@10 exactly like a passage that was never found: 0.</p>
+
+  <h4 class="sub" id="recall1000">ColBERT: Recall@1000, and a recall that reranking cannot change</h4>
+
+  <p>For retrievers that search all 8.8 million passages themselves, the ColBERT paper also reports Recall@50, Recall@200 and Recall@1000. The paper calls these numbers important for a retriever that filters a large collection down for a later step. <span class="mine">from the paper</span> In lesson 15, ColBERT's Recall@1000 was 96.8 and BM25's (Anserini) was 85.7, which is 11.1 points more.</p>
+
+  <p>One row in the same table shows the rule of sets directly. The official BM25 has a Recall@1000 of 81.4, and reranking those same top 1,000 with ColBERT still gives a Recall@1000 of 81.4. <span class="mine">from the paper</span> Reranking only changes the order of the same 1,000 passages, so the set Top<sub>1000</sub> stays the same, and so does |R<sub>q</sub> ∩ Top<sub>1000</sub>|. ColBERT searching on its own reaches a Recall@50 of 82.9, which is higher than the official BM25's Recall@1000.</p>
+
+  <p>The rule from step 4 applies here too: look at Recall@k at the k that the next step reads. For a reranker that reads 1,000 passages, Recall@1000 matters, and for a reader that reads about 14 passages, a number like Recall@14.</p>
+
+  <h4 class="sub" id="annrecall">Lesson 10's recall and Recall@k</h4>
+
+  <p>Both recalls are fractions of the same shape: |A ∩ B| ÷ |B|, the share of what should have been found that was found. The difference is in B. In the <button class="def" data-w="w-ann">ANN</button> recall of <a href="10-vector-search-dense-en.html">lesson 10</a>, B is the top-k vectors from exact search, and A is the ANN list. For example, if 9 of the exact top 10 come back, the recall is 9 ÷ 10 = 0.9. In Recall@k, B is R<sub>q</sub> from the labels a person wrote.</p>
+
+  <p>So the ANN recall can be 1.0 while Recall@k is still 0. Suppose ANN returned exactly the vectors that exact search would. If the encoder placed the right passage's vector far away, it is not in the exact top k either. The phrase <q>trade a little recall for a lot of speed</q> on the lesson 10 slide is about the ANN recall.</p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are this lesson's two Stanford slides, plus the late chunking slide whose charts appeared in step 8. Under each slide are a few questions. Think of the answer first, then open it. If a symbol stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image to open it at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p45.png"><img src="img/slide-p45.png" alt="Stanford slide: Hit@k, Failed@k and nDCG@k" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p45-hit.png"><img src="img/slide-p45-hit.png" alt="The Hit@k and Failed@k formulas from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p45-ndcg.png"><img src="img/slide-p45-ndcg.png" alt="The nDCG@k and DCG formulas from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's first metrics slide, and below it its two halves, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the Hit@k, Failed@k and nDCG@k slide</p>
+    <ol class="plain">
+      <li>
+        <p>Above Hit@k, in green, it says <q>1 if any relevant passage is in the top k, else 0</q>. Which part of the formula does this, and what is its value for q3?</p>
+        <details><summary>Show the answer</summary>
+          <p>𝟙[R<sub>q</sub> ∩ Top<sub>k</sub>(q) ≠ ∅]. q3's top 3 does not hold the office hours page, so the intersection is empty, and the value is 0. (Steps 2 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>The Failed@k line ends with <q>= 1 − Hit@k</q>. Why does this equality hold for every retriever?</p>
+        <details><summary>Show the answer</summary>
+          <p>For each query the set is either empty or not, so 𝟙[ = ∅] + 𝟙[ ≠ ∅] = 1. Add over all queries and divide by |Q|, and Failed@k + Hit@k = 1. In our example, 0.333 + 0.667 = 1. (Step 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Under nDCG it says <q>Normalized by the ideal ranking's DCG</q>. Why is q3's IDCG 2, even though the retriever never returned the office hours page? And at rank 2, what share of the grade survives <q>Discounted by rank position</q>?</p>
+        <details><summary>Show the answer</summary>
+          <p>The ideal order is built from all the labels, and q3's labels contain the office hours page with grade 2, so IDCG = 2 ÷ 1 = 2. At rank 2 the divisor is log<sub>2</sub> 3 = 1.585, so a share of 0.631 of the grade counts. (Steps 5 and 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p46.png"><img src="img/slide-p46.png" alt="Stanford slide: MRR@k and Recall@k" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p46-mrr.png"><img src="img/slide-p46-mrr.png" alt="The MRR@k formula from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p46-recall.png"><img src="img/slide-p46-recall.png" alt="The Recall@k formula from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's second metrics slide, and below it its two formulas, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the MRR@k and Recall@k slide</p>
+    <ol class="plain">
+      <li>
+        <p><q>Counts as 0 if not in the top k</q>: what does q3 add to MRR@3? And what does a first right passage at rank 11 add to MRR@10?</p>
+        <details><summary>Show the answer</summary>
+          <p>0 in both cases. q3 has no right passage in the top 3, and rank 11 is outside the top 10. So for MRR@10, rank 11 and “never found” are the same. (Steps 3 and 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>The green box on Recall says <q>Relevant passages found in the top k</q>, and the pink box says <q>All relevant passages for the query</q>. What is in each box for q1 at k = 1?</p>
+        <details><summary>Show the answer</summary>
+          <p>The green box is |{queue log}| = 1, and the pink box is |{queue log, office hours page}| = 2. q1's share is 1 ÷ 2 = 0.5, and Recall@1 over the three queries is 0.5 ÷ 3 = 0.167. (Step 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>The <q>Average over all queries</q> part appears in all five formulas. If a query in the test set has no right passage at all, what goes wrong in Recall?</p>
+        <details><summary>Show the answer</summary>
+          <p>Then |R<sub>q</sub>| = 0, and you cannot divide by 0. In nDCG the IDCG is 0 as well. So every query in a test set needs at least one right passage. (Step 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p31.png"><img src="img/slide-p31.png" alt="Stanford slide: late chunking results for different chunk sizes" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p31-charts.png"><img src="img/slide-p31-charts.png" alt="The three charts from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's late chunking slide, and below it its three charts, enlarged. Lesson 8 teaches the table at the top.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the nDCG@10 charts</p>
+    <ol class="plain">
+      <li>
+        <p>The y-axis says <q>nDCG@10 [%]</q>. What does a bar at 60 say in terms of nDCG?</p>
+        <details><summary>Show the answer</summary>
+          <p>For every query in that dataset the DCG ÷ IDCG of the top 10 was computed, their average is 0.6, and the chart shows it multiplied by 100 as 60. So on average the lists earned 60% of the DCG of the best possible order. (Steps 5 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>The paper's labels are for documents, but the retriever returns chunks. What does the paper do before computing nDCG@10, and why?</p>
+        <details><summary>Show the answer</summary>
+          <p>It replaces each chunk with its document, and when a document appears several times, it keeps only the first position. Otherwise one right document could fill several ranks and count several times. (Step 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Why does the gap between green and blue look smaller on WikiMultiHopQA than in the other two charts?</p>
+        <details><summary>Show the answer</summary>
+          <p>There every bar is above 80, and nDCG cannot go above 100, so there is little room to improve. Lesson 8 explains when late chunking helps. (Step 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>Every metric needs relevance labels: the right passages R<sub>q</sub> for each query, and sometimes their grades. The rules of sets and 𝟙 give Failed@k = 1 − Hit@k, and show that Recall@k never goes down as k grows.</li>
+    <li>Hit@k asks whether a right passage arrived, and MRR how high the first right passage is. Recall@k asks how many arrived, and nDCG whether the more useful passage is on top. The log discount of nDCG falls more slowly than 1 ÷ rank, so it still counts the lower ranks.</li>
+    <li>Every metric is an equal-weight average over queries, and one average can hide very different pictures. Papers take it with their own labels and k: DPR's Hit@20, MS MARCO's MRR@10 and ColBERT's Recall@1000.</li>
+  </ol>
+
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-labels">Relevance labels</dt><dd>The right passages fixed in advance for each query, sometimes with grades. For example, for q1 the queue log (grade 3) and the office hours page (grade 1).</dd>
+    <dt id="w-set">Set, ∩, ∅, |A|</dt><dd>A group of things, the things two sets share, the empty set, and how many things a set holds. For example, |{queue log, office hours page}| = 2, and for q3, R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) = ∅.</dd>
+    <dt id="w-indicator">𝟙[condition]</dt><dd>1 if the condition is true, 0 if not. For example, q3's top 3 holds no right passage, so 𝟙[R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) ≠ ∅] = 0.</dd>
+    <dt id="w-hitk">Hit@k</dt><dd>The share of queries with at least one right passage in the top k. For example, at k = 3, 2 of 3 queries, so 0.667.</dd>
+    <dt id="w-failedk">Failed@k</dt><dd>1 − Hit@k, the share of queries with no right passage in the top k. For example, Failed@3 = 1 − 0.667 = 0.333.</dd>
+    <dt id="w-mrr">MRR@k</dt><dd>1 ÷ the rank of the first right passage, averaged over the queries, with 0 if none is in the top k. For example, ranks 1, 2 and none give (1 + 0.5 + 0) ÷ 3 = 0.5.</dd>
+    <dt id="w-recallk">Recall@k</dt><dd>Right passages found in the top k ÷ all right passages, averaged over the queries. For example, at k = 1 q1 found 1 of 2, so 0.5.</dd>
+    <dt id="w-log2">log<sub>2</sub></dt><dd>The power you must raise 2 to in order to get a number. For example, log<sub>2</sub> 4 = 2, and log<sub>2</sub> 3 = 1.585.</dd>
+    <dt id="w-dcg">DCG and IDCG</dt><dd>Each rank's grade ÷ log<sub>2</sub>(rank + 1), added up. The IDCG is the DCG of the best order. For example, q1's order queue log (3), forum post (0), office hours page (1) gives DCG 3.5 and IDCG 3.631.</dd>
+    <dt id="w-ndcg">nDCG@k</dt><dd>DCG ÷ IDCG, between 0 and 1, which looks at both grade and order. For example, q1's reversed order gives 2.5 ÷ 3.631 = 0.689.</dd>
+    <dt id="w-subset">⊆ (subset)</dt><dd>A ⊆ B means everything in A is also in B. For example, Top<sub>3</sub>(q1) ⊆ Top<sub>5</sub>(q1), so Recall@5 is never lower than Recall@3.</dd>
+    <dt id="w-harmonic">Harmonic series</dt><dd>1 + 1/2 + 1/3 + …, the 1 ÷ rank numbers that MRR uses. Their sum grows slowly, about ln n + 0.577. For example, the first 1,000 add up to 7.485.</dd>
+    <dt id="w-points">Points (absolute difference)</dt><dd>The plain difference between two percentages. For example, 52.2 to 54.0 is 1.8 points, which is an improvement of about 3.45% relative to 52.2.</dd>
+    <dt id="w-qrels">QRels</dt><dd>A file of relevance labels: the IDs of the right documents for each query. For example, the late chunking paper computed nDCG@10 from such a file.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="12-dpr-dense-en.html">Previous: Lesson 12</a>
+    <a href="14-hybrid-rerank-dense-en.html">Next: Lesson 14, Hybrid search and reranking</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Papers: Järvelin and Kekäläinen, 2002, “Cumulated Gain-Based Evaluation of IR Techniques”. Karpukhin et al., 2020, “Dense Passage Retrieval for Open-Domain Question Answering”. Khattab and Zaharia, 2020, “ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT”. Günther et al., 2024, “Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding Models”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in these papers but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var START = [
+    { name: "Queue log", g: 3 },
+    { name: "Old forum post", g: 0 },
+    { name: "Office hours page", g: 1 },
+    { name: "Syllabus", g: 0 },
+    { name: "Project page", g: 0 }
+  ];
+  var T = { up: "Up", grade: "grade ", rr: "Reciprocal rank (MRR@" };
+  var items = START.slice();
+  var R = START.filter(function (x) { return x.g > 0; }).length;
+  var IDEAL = START.map(function (x) { return x.g; }).sort(function (a, b) { return b - a; });
+  var kIn = document.getElementById("mw-k"), list = document.getElementById("mw-list"), body = document.getElementById("mw-body");
+  var btns = document.querySelectorAll("#mw .btns button");
+  function dcg(gs) { return gs.reduce(function (s, g, i) { return s + g / (Math.log(i + 2) / Math.log(2)); }, 0); }
+  function render() {
+    var k = Number(kIn.value);
+    document.getElementById("mw-ko").textContent = k;
+    list.innerHTML = items.map(function (x, i) {
+      return '<div class="item' + (x.g > 0 ? " rel" : "") + (i >= k ? " cut" : "") + '"><span class="pos">' + (i + 1) + "</span><span>" + x.name +
+        '</span><span class="g">' + T.grade + x.g + "</span>" + (i > 0 ? '<button type="button" data-i="' + i + '">' + T.up + "</button>" : "<span></span>") + "</div>";
+    }).join("");
+    list.querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { var i = Number(b.dataset.i); var t = items[i]; items[i] = items[i - 1]; items[i - 1] = t; render(); });
+    });
+    var top = items.slice(0, k);
+    var hit = top.some(function (x) { return x.g > 0; }) ? 1 : 0;
+    var first = -1;
+    top.forEach(function (x, i) { if (first < 0 && x.g > 0) first = i + 1; });
+    var rr = first > 0 ? 1 / first : 0;
+    var rec = top.filter(function (x) { return x.g > 0; }).length / R;
+    var d = dcg(top.map(function (x) { return x.g; })), id = dcg(IDEAL.slice(0, k));
+    body.innerHTML = [
+      ["Hit@" + k, hit.toFixed(0)],
+      [T.rr + k + ")", rr.toFixed(3)],
+      ["Recall@" + k, rec.toFixed(3)],
+      ["DCG@" + k, d.toFixed(3)],
+      ["IDCG@" + k, id.toFixed(3)],
+      ["nDCG@" + k, (id ? d / id : 0).toFixed(3)]
+    ].map(function (r) { return "<tr><td>" + r[0] + '</td><td class="num">' + r[1] + "</td></tr>"; }).join("");
+    var key = items.map(function (x) { return START.indexOf(x); }).join(",");
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.o === key ? "true" : "false"); });
+  }
+  btns.forEach(function (b) { b.addEventListener("click", function () { items = b.dataset.o.split(",").map(function (i) { return START[Number(i)]; }); render(); }); });
+  kIn.addEventListener("input", render);
+  render();
+})();
+</script>
+</body>
+</html>

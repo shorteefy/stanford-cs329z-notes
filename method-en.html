@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How these lessons were written</title>
+<meta name="description" content="The teaching and writing rules behind the CS 329Z lessons, their sources, and how each lesson was checked.">
+<link rel="stylesheet" href="lecture03/study.css">
+<style>
+  .topbar .switch b { color: var(--ink); }
+  section { margin: 0 0 44px; }
+  section > h2 { font-size: 24px; margin: 0 0 12px; }
+  ol.rules > li { margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">AI Agents, from first principles</a>
+  <span class="switch"><a href="method.html">हिन्दी</a> · <b>English</b></span>
+</nav>
+
+<header style="margin-bottom:40px">
+  <p class="kicker">Method</p>
+  <h1>How these lessons were written</h1>
+  <p class="lede">This page describes the rules the lessons follow, where those rules come from, and how each lesson was checked. At the end it also says where the lessons fall short.</p>
+</header>
+
+<section>
+  <h2>Who the reader is</h2>
+  <p>The lessons are written for a working software engineer who reads code and knows school maths. ML and statistics terms are new to this reader. The goal is to understand the course technically, not just at the surface, and in the end to read the Stanford slides without help.</p>
+</section>
+
+<section>
+  <h2>The teaching rules</h2>
+  <ol class="plain rules">
+    <li><b>From first principles.</b> Each new term is explained where it first appears. A term from an earlier lesson opens its definition when you click it.</li>
+    <li><b>The concept first, then the failure.</b> Each step first says what the new idea is and what it does. Then it applies the idea to a real failure, such as BM25 ranking the old forum post above the queue log.</li>
+    <li><b>No analogies, a small version of the real system.</b> All lessons run on the same small corpus: a course's office hours page, queue log, syllabus, an old 2024 forum post and the Homework 1 announcement. So the numbers stay consistent from one lesson to the next.</li>
+    <li><b>Numbers before formulas.</b> Every formula is first worked by hand on small numbers. Then each symbol in the formula is tied to those numbers.</li>
+    <li><b>Maths taught where it is used.</b> Logarithms, matrix products and rates of change all come in from school level, with numbers, and with a check wherever possible.</li>
+    <li><b>A ladder.</b> Each lesson opens with a list of steps. Under each step it says what you will be able to do after it, so you can skip what you already know.</li>
+    <li><b>Connected sentences.</b> Each sentence starts from what came before, and new information comes at the end. No line exists only to land a point, and headings name their content.</li>
+    <li><b>The right form for each kind of content.</b> Explanations are paragraphs, steps are numbered lists, and comparisons are tables. The most important sentence of each part is in bold.</li>
+    <li><b>Think first.</b> In many places the answer is hidden, so that you work it out yourself first.</li>
+  </ol>
+  <p>The Hindi pages follow Spoken Hindi rules: Hindi words in Devanagari, technical terms in English letters, sentences of at most 25 words, and active voice. The English pages use plain English, and both languages carry the same numbers and sections.</p>
+</section>
+
+<section>
+  <h2>Easy and dense</h2>
+  <p>The easy version holds only the core: one worked calculation for each idea, and the maths that calculation needs. The dense version contains the whole easy lesson word for word. It then marks “From here: the Stanford level”, followed by steps that tie every symbol on the slides to numbers, read the paper's real setup and experiments, and finally have you read the slide images yourself, with questions.</p>
+</section>
+
+<section>
+  <h2>Where the rules come from</h2>
+  <p>Each rule rests on research or a well-known book about teaching or writing:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Idea</th><th>Source</th><th>In the lessons</th></tr></thead>
+    <tbody>
+      <tr><td>A sentence should start with what the reader already knows, and put new information at the end.</td><td>Gopen and Swan (1990), “The Science of Scientific Writing”. Joseph Williams, “Style”.</td><td>Connected sentences</td></tr>
+      <tr><td>Readers new to a topic need connected text. When the connecting words are cut, they get stuck.</td><td>McNamara et al. (1996), “Are Good Texts Always Better?”</td><td>Words like because, so and which means are kept</td></tr>
+      <tr><td>Holding a label and its meaning in mind costs effort. Novices learn faster from worked examples.</td><td>Sweller's cognitive load theory</td><td>Passages named by content, not P3-style labels, and a worked calculation for each idea</td></tr>
+      <tr><td>New material settles more easily into a structure given up front.</td><td>Ausubel's advance organizer</td><td>The ladder at the top, and the concept first</td></tr>
+      <tr><td>People learn better from conversational text.</td><td>Mayer's personalization principle</td><td>The pages address the reader directly</td></tr>
+      <tr><td>Trying before seeing the answer makes it stick.</td><td>The generation effect (Slamecka and Graf, 1978) and the pretesting effect (Richland, Kornell and Kao, 2009)</td><td>“Think first” questions</td></tr>
+      <tr><td>If the writer does not do the work of explaining, every reader has to do it.</td><td>Olah and Carter (2017), “Research Debt”</td><td>The dense version's full path to the slides</td></tr>
+      <tr><td>Simple means ordinary words and plain sentences.</td><td>Paul Graham, “Write Simply”</td><td>Spoken Hindi and plain English</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>How the writing went</h2>
+  <ul class="plain">
+    <li><b>8 Oct 2026:</b> a first version, told as a story along the slides.</li>
+    <li><b>13 Oct:</b> the first version read as choppy and full of punchlines. The research above produced the rules, and lesson 12 was rewritten in all four versions as the model.</li>
+    <li><b>13 to 15 Oct:</b> the other 17 lessons followed this model and one written brief, and every lesson was checked the same way. The brief changed three times after feedback: clearer maths, no references to the PDF, and dense = easy + the Stanford level.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>How each lesson was checked</h2>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Check</th><th>What it catches</th></tr></thead>
+    <tbody>
+      <tr><td>Number script</td><td>Each lesson's own script recomputes every number and matches it against the page text.</td></tr>
+      <tr><td>Spoken Hindi checker</td><td>Hindi sentences over 25 words, passive voice, formal words and Roman Hindi.</td></tr>
+      <tr><td>Lesson checker</td><td>Broken links and anchors, glossary terms, the switch, and matching sections in the Hindi and English pages.</td></tr>
+      <tr><td>Phone check</td><td>Pages, tables, formulas and images on a 360 px wide screen.</td></tr>
+      <tr><td>Source marks</td><td>“From the paper” on facts from a paper, and “my” on the lesson's own examples.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Where the lessons fall short</h2>
+  <ul class="plain">
+    <li>The checks covered numbers, links and language, but they do not catch every mistake. Where you find one, trust the slides and the paper.</li>
+    <li>Some points are the author's own reading. On the page they are marked “my estimate” or “my”.</li>
+    <li>The slides and papers belong to their authors. These lessons do not replace them. They prepare you to read them.</li>
+  </ul>
+</section>
+
+<footer>
+  Course: CS 329Z “Engineering AI Agents”, Stanford University, Diyi Yang. Notes: October 2026. <a href="index-en.html">Course home</a>
+</footer>
+</main>
+</body>
+</html>

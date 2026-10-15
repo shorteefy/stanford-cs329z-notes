@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="The answer to “What are all the deadlines?” is spread over three passages, so top-K brings back only one piece of it. RAPTOR and GraphRAG solve this with summaries, and at the end you read Stanford's four slides yourself.">
+<title>Lesson 9: RAPTOR and GraphRAG (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 9 / 18 · <a href="09-raptor-graphrag-en.html">Easy</a> · <b>Dense</b> · <a href="09-raptor-graphrag-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 9 · Dense version</p>
+  <h1>Questions spread across a whole document: RAPTOR and GraphRAG</h1>
+  <p class="lede"><b>RAPTOR and GraphRAG put summaries into the index next to the chunks, so that answers spread across a whole document can still be found.</b> RAPTOR builds a tree of summaries, and GraphRAG builds a graph of the things in the text and how they relate.</p>
+  <p class="lede">You can see the need with this question: <q>What are all the deadlines?</q> The answer is 4 dates in the course, spread over three passages from lesson 2. The syllabus has the milestone (Week 6) and the final report (Week 10). The project page has the proposal (Oct 9), and the Homework 1 announcement has its release date (Oct 5). The retriever ranks the project page first, so with K = 1 the reader gets 1 of the 4 dates. <span class="mine">from my vectors</span></p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 10 steps. The first 5 are the same as in the easy version, and steps 6 to 10 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#theme">Top-K brings back only pieces</a><span class="can">Show with cosine numbers how a detail question differs from a thematic one.</span></li>
+      <li><a href="#clustering">Groups of similar passages: clustering</a><span class="can">Compute a cosine and a centroid by hand.</span></li>
+      <li><a href="#raptor">RAPTOR: a tree of summaries, built bottom up</a><span class="can">List the steps that build the tree, and read the RAPTOR slide.</span></li>
+      <li><a href="#levels">Searching every level of the tree</a><span class="can">Say which question matches a leaf and which matches a summary.</span></li>
+      <li><a href="#graphrag">GraphRAG: a graph of things and relations</a><span class="can">Explain a knowledge graph, a community and query-focused summarization.</span></li>
+      <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#gmm">The maths of RAPTOR's clustering</a><span class="can">Work out soft membership by hand from distance, a Gaussian and a mixture, and say what BIC and UMAP do.</span></li>
+      <li><a href="#raptorpaper">The RAPTOR paper</a><span class="can">Show with numbers how tree traversal and the collapsed tree differ, and read the paper's results.</span></li>
+      <li><a href="#graphragpaper">The GraphRAG paper</a><span class="can">Explain Leiden, map-reduce and the win rate, and work out the token savings.</span></li>
+      <li><a href="#variants">The whole GraphRAG family</a><span class="can">Name the survey's five parts and the kinds of graphs.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain everything on this lesson's four Stanford slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="03-vectors-dense-en.html#cosine">Lesson 3</a> (vector, cosine), <a href="06-rag-pipeline-dense-en.html#naive">Lesson 6</a> (indexing time, query time) and <a href="07-chunking-dense-en.html#big">Lesson 7</a> (chunk, mean pooling). From step 6 on, <a href="04-probability-tools-dense-en.html#marginal">Lesson 4</a> (exp, softmax, marginalization, likelihood) also helps. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="theme">
+  <h3><span class="cn">1</span>Top-K brings back only pieces</h3>
+
+  <p><b>A detail question has its answer written in one passage, while the answer to a thematic question is built from several passages.</b> <q>When is the milestone due?</q> is a detail question, because the answer is one line of the syllabus. <q>What are all the deadlines?</q> is thematic, because its 4 dates sit in three passages.</p>
+
+  <p>The retriever scores every passage on its own and returns the top K. For a thematic question, each passage holds only part of the answer. Below, every text has a vector of 4 numbers. The first number says how much the text is about the milestone, the second about the other deadlines, and the third about office hours. The fourth says how many things the text pulls together, that is, how much of an overview it is. <span class="mine">my vectors</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage, and its vector</th><th class="numh">Cosine with the milestone question</th><th class="numh">Cosine with the all-deadlines question</th></tr></thead>
+    <tbody>
+      <tr><td>Syllabus: milestone Week 6, final report Week 10<span class="sub mono">[0.9, 0.3, 0, 0.1]</span></td><td class="num"><b>0.99</b></td><td class="num">0.60</td></tr>
+      <tr class="hi"><td>Project page: proposal Oct 9<span class="sub mono">[0.3, 0.9, 0, 0.1]</span></td><td class="num">0.51</td><td class="num"><b>0.66</b></td></tr>
+      <tr><td>Homework 1 announcement: Oct 5<span class="sub mono">[0.1, 0.9, 0, 0.1]</span></td><td class="num">0.32</td><td class="num">0.61</td></tr>
+      <tr><td>Office hours page<span class="sub mono">[0, 0, 0.9, 0.1]</span></td><td class="num">0.01</td><td class="num">0.09</td></tr>
+      <tr><td>Queue log<span class="sub mono">[0, 0.05, 0.85, 0.1]</span></td><td class="num">0.02</td><td class="num">0.12</td></tr>
+      <tr><td>Old forum post<span class="sub mono">[0, 0, 0.8, 0.15]</span></td><td class="num">0.01</td><td class="num">0.14</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">The milestone question's vector is [0.95, 0.2, 0, 0.05], and the all-deadlines question's is [0.4, 0.5, 0, 0.8].</p>
+
+  <p><button class="def" data-w="w-cosine">Cosine</button> is the measure from lesson 3: divide the dot product by the product of the two vectors' lengths. For the syllabus and the all-deadlines question it takes three steps:</p>
+  <ol class="plain">
+    <li>Dot product: 0.9 × 0.4 + 0.3 × 0.5 + 0 × 0 + 0.1 × 0.8 = 0.36 + 0.15 + 0 + 0.08 = 0.59.</li>
+    <li>Lengths: the question's is √(0.16 + 0.25 + 0 + 0.64) = √1.05 = 1.025, and the syllabus's is √(0.81 + 0.09 + 0 + 0.01) = √0.91 = 0.954.</li>
+    <li>Cosine: 0.59 ÷ (1.025 × 0.954) = 0.59 ÷ 0.977 = 0.60.</li>
+  </ol>
+
+  <p>On the detail question the syllabus gets 0.99, a clear win. On the thematic question the highest cosine is the project page's 0.66, and it holds 1 of the 4 dates. <b>No passage is about “all the deadlines”, so none of them gets a high cosine.</b> The question's fourth number is 0.8, because it asks for an overview, while every passage's fourth number is only 0.1 or 0.15.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>How many dates does the reader get with K = 3? And if a 40-page syllabus had 10 deadlines in 10 separate chunks, how many would K = 3 bring?</p>
+    <details><summary>Show the answer</summary>
+      <p>Among these 6 passages the top 3 are the project page (0.66), the Homework 1 announcement (0.61) and the syllabus (0.60), so all four dates arrive. But in the 10-chunk syllabus, K = 3 leaves out at least 7 deadlines. K is fixed in advance, and the retriever does not know how many pieces a question needs. <span class="mine">my example</span></p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">One big chunk for the whole syllabus does not work either. In lesson 7 a big chunk's vector was the average of its topics, which is <button class="def" data-w="w-pooling">mean pooling</button>. There, mixing just two topics dropped the cosine from 1.00 to 0.71. So the index needs a text that is itself about all the deadlines, a written summary of several passages.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="clustering">
+  <h3><span class="cn">2</span>Groups of similar passages: clustering</h3>
+
+  <p>One summary of all 6 passages would be too coarse. A summary of the deadlines and a separate one of office hours are more useful. So before writing summaries, split the passages into groups by topic.</p>
+
+  <p><b>Clustering means splitting vectors into groups so that the vectors in a group are close to each other and far from the other groups.</b> Each group is called a <b class="term">cluster</b>. Here cosine is enough to measure “close”: the nearer the cosine is to 1, the more the two vectors point the same way.</p>
+
+  <p>To keep the arithmetic small, use the 2-number vectors from lesson 3. The first number says how much the text is about office hours, and the second how much it is about deadlines. <span class="mine">my vectors</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Pair</th><th class="numh">Cosine</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Syllabus [0.1, 0.9] and project page [0.2, 0.8]</td><td class="num">0.99</td><td>Same cluster</td></tr>
+      <tr><td>Office hours page [0.9, 0.1] and queue log [0.85, 0.2]</td><td class="num">0.99</td><td>Same cluster</td></tr>
+      <tr><td>Syllabus [0.1, 0.9] and office hours page [0.9, 0.1]</td><td class="num">0.22</td><td>Different clusters</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The first row works out like this. The dot product is 0.1 × 0.2 + 0.9 × 0.8 = 0.02 + 0.72 = 0.74. The lengths are √(0.01 + 0.81) = 0.906 and √(0.04 + 0.64) = 0.825, so the cosine is 0.74 ÷ (0.906 × 0.825) = 0.74 ÷ 0.747 = 0.99.</p>
+
+  <p>Compare the other pairs the same way and two clusters form. The deadlines cluster holds the syllabus, the project page and the Homework 1 announcement [0.15, 0.85]. The office hours cluster holds the office hours page, the queue log and the old forum post [0.8, 0.15].</p>
+
+  <p>Each cluster also has a middle point that can stand in for the whole cluster. The <b class="term">centroid</b> is the average of the cluster's vectors, taken separately for each position. In the deadlines cluster the first number is (0.1 + 0.2 + 0.15) ÷ 3 = 0.15, and the second is (0.9 + 0.8 + 0.85) ÷ 3 = 0.85. So the centroid is [0.15, 0.85], and the office hours cluster's is [0.85, 0.15]. In <a href="10-vector-search-dense-en.html">lesson 10</a>, centroids make search faster.</p>
+
+  <p>Some passages sit between two topics. The long FAQ page from lesson 3, [1.6, 1.4], has a cosine of 0.86 with the office hours centroid and 0.78 with the deadlines centroid. <b>RAPTOR can put such a passage into both clusters, so that its content reaches both summaries.</b> This is called <b class="term">soft clustering</b>.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="raptor">
+  <h3><span class="cn">3</span>RAPTOR: a tree of summaries, built bottom up</h3>
+
+  <p><b>RAPTOR has an LLM write a summary of each cluster, and stores that summary in the index just like a chunk.</b> The summary is new text, not an average of vectors. So its vector points towards “all the deadlines”, whereas the vector of lesson 7's big chunk got lost in the average.</p>
+
+  <p>Summaries can themselves be summarized: the deadlines summary and the office hours summary give one summary of the whole course. A structure with levels like this is called a <b class="term">tree</b>. Each box in the tree is a <b class="term">node</b>. The nodes at the bottom, the actual chunks, are called <b class="term">leaves</b>, and the node at the top is the <b class="term">root</b>.</p>
+
+  <p>RAPTOR stands for Recursive Abstractive Processing for Tree-Organized Retrieval, and Sarthi and colleagues at Stanford built it in 2024 <span class="mine">from the paper</span>. The tree is built bottom up in five steps:</p>
+  <ol class="plain">
+    <li>Embed every chunk.</li>
+    <li>Cluster the embeddings.</li>
+    <li>Give each cluster's chunks to an LLM and have it write their summary. The summary is a new node one level up.</li>
+    <li>Embed the summaries.</li>
+    <li>Repeat steps 2 to 4 until only a handful of nodes are left at the top.</li>
+  </ol>
+
+  <p>On the course corpus the tree looks like this. The 6 passages are the leaves, there are 2 summaries above them, and 1 root at the top. <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Level</th><th>Node</th><th>Text</th></tr></thead>
+    <tbody>
+      <tr><td>2, root</td><td>R, course overview</td><td>CS 329Z logistics: deadlines from Oct 5 to Week 10, and office hours on Tuesday and Thursday.</td></tr>
+      <tr class="hi"><td>1</td><td>A, deadlines summary</td><td>Homework 1 releases Oct 5. Proposal due Oct 9. Milestone due Week 6, Thursday 11:59pm, no late days. Final report Week 10.</td></tr>
+      <tr><td>1</td><td>B, office hours summary</td><td>Tuesday 4pm in Room 104 (busy, about 14 waiting) and Thursday 9am on Zoom (about 3). An old 2024 post says midweek afternoons are quiet.</td></tr>
+      <tr><td>0, leaves</td><td>6 passages</td><td>The 6 passages from lesson 2</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="slide">
+    <a href="img/slide-p32.png"><img src="img/slide-p32.png" alt="Stanford slide: the RAPTOR tree, how one level forms, and what a node holds" loading="lazy"></a>
+    <figcaption>Stanford's RAPTOR slide: the whole tree on the left, the two steps that form one level in the middle, and the contents of one node on the right. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>In the middle box, 5 chunks form 3 groups: {3, 5}, {1, 4, 5} and {2, 3}. Chunks 3 and 5 are each in two groups, so this is soft clustering. Each group's summary becomes a node above: 6, 7 and 8. The right box shows node 8's children (2 and 3), their summary, and the embedding of that summary.</p>
+
+  <p>The cost comes at indexing time, because every cluster on every level needs one LLM call. An LLM writes the summaries, so it can drop a fine detail or get something wrong. Node B puts the old post's opinion on the same footing as the queue log's data. So the old forum post's problem now sits inside a summary.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>A corpus has 64 chunks, and each cluster holds about 4 nodes. How many levels does it take to reach the root, and how many summaries are there in total?</p>
+    <details><summary>Show the answer</summary>
+      <p>Level 1 has 64 ÷ 4 = 16 summaries, level 2 has 16 ÷ 4 = 4, and level 3 has 4 ÷ 4 = 1 root. That is 16 + 4 + 1 = <b>21 summaries</b> in total, so 21 LLM calls at indexing time. There are 3 levels above the leaves.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="levels">
+  <h3><span class="cn">4</span>Searching every level of the tree</h3>
+
+  <p><b>RAPTOR matches the question against nodes on every level of the tree, the leaves and the summaries alike.</b> Leaves and summaries sit in the same index, so the retriever computes a cosine for every node and returns the top ones. In the widget every node has a 4-number vector, and the summaries have a large fourth number, because they pull many things together. <span class="mine">my vectors</span></p>
+
+  <div class="widget" id="tw">
+    <h4>Which level of the tree does a question match?</h4>
+    <p class="hint">Pick a question. The table shows every node's cosine, highest first. Before you pick, guess which level's node the question will match.</p>
+    <div class="btns" id="tw-q"></div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Node</th><th>Level</th><th class="numh">Cosine</th></tr></thead>
+      <tbody id="tw-body"></tbody>
+    </table></div>
+    <p class="out" id="tw-out"></p>
+  </div>
+
+  <p>The milestone question matches the syllabus leaf at 0.99. The all-deadlines question matches summary A at 1.00, and A holds all four dates. <b>In step 1 the best passage, the project page, reached only 0.66 and held 1 date.</b> The overview question matches the root R. I made the vectors of A and R equal to the questions' vectors, so their cosine is exactly 1.00. With real embeddings it would be below 1.</p>
+
+  <p>Stanford's slide says the same in one line: a detail question matches a leaf, and a thematic question matches a node higher up. The RAPTOR paper showed this with two questions about the Cinderella story: <q>central theme of the story?</q> and <q>how did she find a happy ending?</q></p>
+
+  <figure class="slide">
+    <a href="img/slide-p33.png"><img src="img/slide-p33.png" alt="Stanford slide: the nodes RAPTOR and DPR chose for two Cinderella questions" loading="lazy"></a>
+    <figcaption>Stanford's Cinderella slide. Boxes with a coloured border are the nodes RAPTOR chose, and the arrows at the bottom mark the leaves DPR chose. Orange is the first question, and purple the second.</figcaption>
+  </figure>
+
+  <p><button class="def" data-w="w-dpr">DPR</button>, the retriever in the RAG model of <a href="05-rag-model-dense-en.html#retriever">lesson 5</a>, searches only the leaves. RAPTOR chose nodes from the upper levels too, for both questions. According to the slide, what DPR's leaves say is usually already in RAPTOR's context, either directly or inside a summary.</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="graphrag">
+  <h3><span class="cn">5</span>GraphRAG: a graph of things and relations</h3>
+
+  <p>RAPTOR forms its groups by how close the vectors are. But documents also state relations between things outright: the milestone is due in Week 6, and the TAs run office hours. <b>GraphRAG forms its groups from these relations, and answers questions about the whole corpus from each group's summary.</b></p>
+
+  <p>Any named thing is called an <b class="term">entity</b>: a person, a place, a course, a document or a date. Examples are Project milestone, Week 6, TAs and Room 104. A link between two entities is called a <b class="term">relation</b>, and it is written in three parts: (entity, relation, entity). For example, (Project milestone, due, Week 6).</p>
+
+  <p>In GraphRAG an LLM reads every chunk and pulls out these relations. The course corpus gives these 7 rows: <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Entity</th><th>Relation</th><th>Entity</th></tr></thead>
+    <tbody>
+      <tr><td>Project</td><td>has part</td><td>Proposal, Project milestone, Final report</td></tr>
+      <tr><td>Proposal</td><td>due</td><td>Oct 9</td></tr>
+      <tr><td>Project milestone</td><td>due</td><td>Week 6</td></tr>
+      <tr><td>Final report</td><td>due</td><td>Week 10</td></tr>
+      <tr><td>Homework 1</td><td>released</td><td>Oct 5</td></tr>
+      <tr><td>Office hours</td><td>run by</td><td>TAs</td></tr>
+      <tr><td>Office hours</td><td>held in</td><td>Room 104, Zoom</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Now make every entity a node, and every relation a line between two nodes. These lines are called <b class="term">edges</b>, and a network of nodes and edges is a graph. A graph of entities and relations is called a <b class="term">knowledge graph</b>. From the first row, Project links to three nodes, and each part links to its date.</p>
+
+  <p>In some parts of a graph the nodes are tightly linked to each other and only loosely to the rest. Such a part is called a <b class="term">community</b>. Our graph has three communities, and no edge links them to each other. The first holds Project, its three parts and their dates. The second holds Office hours, TAs, Room 104 and Zoom, and the third holds Homework 1 and Oct 5.</p>
+
+  <p>Edge and colleagues at Microsoft Research built GraphRAG in 2024 <span class="mine">from the paper</span>. It has five steps at indexing time and two at query time:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Indexing time</th><th>Query time</th></tr></thead>
+    <tbody>
+      <tr><td>1. Split the documents into chunks.<br>2. An LLM pulls entities and relations out of every chunk.<br>3. Build the knowledge graph from them.<br>4. Find the communities in the graph.<br>5. An LLM writes a summary of each community.</td><td>6. From each community's summary, an LLM writes a partial answer to the question.<br>7. An LLM combines all the partial answers into one global answer.</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="slide">
+    <a href="img/slide-p34.png"><img src="img/slide-p34.png" alt="Stanford slide: GraphRAG's indexing and query steps, and a graph with communities" loading="lazy"></a>
+    <figcaption>Stanford's GraphRAG slide. The indexing steps run down the left, and the query steps run up the middle. On the far right is a real graph, where each colour is one community.</figcaption>
+  </figure>
+
+  <p>For our question, step 6 writes one partial answer per community. The Project community gives three dates, the Homework 1 community gives one, and the office hours community gives none. Step 7 combines them into an answer with all four dates.</p>
+
+  <p>In steps 6 and 7 the LLM writes its summary with the question in mind, which is called <b class="term">query-focused summarization</b>. The slide's title uses exactly this term. RAPTOR's summaries are written before any question arrives, while GraphRAG's final summary is written when the question arrives.</p>
+
+  <p>GraphRAG pays off on global questions about the whole corpus, where top-K passages do not work at all. The cost is high: LLM calls for every chunk and every community at indexing time, and one call per community at query time too. <b>If the LLM extracts a wrong entity or relation, the mistake settles in the graph and reaches that community's summary.</b></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Your company has 2,000 support tickets. Two questions come in: (a) <q>Which product is ticket #4471 about?</q> (b) <q>What do customers complain about most?</q> For which one is plain top-K enough, and for which is it not?</p>
+    <details><summary>Show the answer</summary>
+      <p>(a) is a detail question, because its answer is written in one ticket, so top-K is enough. (b) is thematic, because the answer comes from combining hundreds of tickets, and no single ticket will score high. It needs summaries, and since the question covers the whole corpus, GraphRAG fits.</p>
+    </details>
+  </div>
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The 5 steps above are the same as in the easy version. The 5 steps below take you to the level of the Stanford slides: first the maths of RAPTOR's clustering, then the methods and results of the RAPTOR and GraphRAG papers, then the whole GraphRAG family, and finally reading the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="gmm">
+  <h3><span class="cn">6</span>The maths of RAPTOR's clustering: the Gaussian mixture and soft membership</h3>
+
+  <p>In step 2 the clusters were formed by hand from cosines, and the FAQ page went into both. RAPTOR makes this decision with a probability model called a <b class="term">Gaussian mixture model</b> (GMM) <span class="mine">from the paper</span>. The model gives every passage a probability for every cluster, and soft clustering runs on that probability. We build it in four moves: distance, the bell curve of one cluster, the mixture of several curves, and membership.</p>
+
+  <h4 class="sub" id="dist">Distance: how far from the centroid</h4>
+
+  <p>A GMM looks at <button class="def" data-w="w-distance">distance</button> instead of cosine. The distance between two vectors is the length of their difference: square each number of the difference, add them up, and take the square root. The old forum post is [0.8, 0.15], and the office hours centroid is [0.85, 0.15]. The difference is [−0.05, 0], so the distance is √(0.0025 + 0) = 0.05.</p>
+
+  <p>From the deadlines centroid [0.15, 0.85] the difference is [0.65, −0.7], and the distance is √(0.4225 + 0.49) = √0.9125 = 0.955. So the forum post sits very close to the office hours centroid, and about 19 times as far from the deadlines one.</p>
+
+  <h4 class="sub" id="bell">One cluster: a bell curve</h4>
+
+  <p><b>A GMM treats each cluster as a bell curve that is highest at the centroid and falls quickly as you move away.</b> This curve is called a <b class="term">Gaussian</b>. Its height follows e<sup>−d²/(2σ²)</sup>, where d is the distance from the centroid. σ (sigma) is the cluster's spread, how far its points usually lie from the centroid, and it is called the <button class="def" data-w="w-std">standard deviation</button>.</p>
+
+  <p>A negative power of e is smaller than 1, because e<sup>−a</sup> = 1 ÷ e<sup>a</sup>. In lesson 4, <button class="def" data-w="w-exp">exp</button>(−1) = 1 ÷ 2.718 = 0.368. So the further the distance, the faster the height falls:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Distance d from the centroid</th><th>d²/(2σ²)</th><th class="numh">Height e<sup>−d²/(2σ²)</sup></th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>0</td><td class="num">1.000</td></tr>
+      <tr><td>σ</td><td>0.5</td><td class="num">0.607</td></tr>
+      <tr><td>2σ</td><td>2</td><td class="num">0.135</td></tr>
+      <tr><td>3σ</td><td>4.5</td><td class="num">0.011</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>For data with one number, the full Gaussian formula is this, where x is the point and μ (mu) is the middle of the curve:</p>
+  <div class="formula">𝒩(x; μ, σ) = <span class="frac"><span>1</span><span>σ√(2π)</span></span> e<sup>−(x − μ)²/(2σ²)</sup></div>
+  <p>The factor 1 ÷ (σ√(2π)) in front only makes the total area under the curve equal 1. With μ = 0 and σ = 1, the height is 0.399 at x = 0, 0.242 at x = 1 and 0.054 at x = 2. Check: 0.242 ÷ 0.399 = 0.607, the second row of the table. This height is not a probability. It is called a density, and for a narrow curve it can go above 1.</p>
+
+  <p>For a vector with two numbers, (x − μ)² is replaced by d², the squared distance from the centroid, and the factor in front becomes 1 ÷ (2πσ²). Here I assume the spread is the same in every direction, and that both clusters have σ = 0.25 <span class="mine">my choice of σ</span>. Then 2σ² = 0.125, and the factor in front is 1 ÷ (2π × 0.0625) = 2.546.</p>
+
+  <h4 class="sub" id="mixture">Several clusters: the mixture</h4>
+
+  <p><b>A Gaussian mixture is a weighted sum of several bell curves.</b> Each cluster k has a weight π<sub>k</sub>, the share of all passages that belong to it. Our 6 passages split 3 and 3, so both weights are 0.5, and the height of the mixture at a point x is:</p>
+  <div class="formula">P(x) = 0.5 × 𝒩<sub>office hours</sub>(x) + 0.5 × 𝒩<sub>deadlines</sub>(x)</div>
+  <p>This is the <button class="def" data-w="w-marginal">marginalization</button> from lesson 4: each case's weight times that case's probability, then add them all, as in 0.5 × 0.8 + 0.5 × 0.1 = 0.45. There the cases were days, and here the cases are clusters. The paper writes the same thing for K clusters:</p>
+  <div class="formula">P(x) = ∑<sub>k=1</sub><sup>K</sup> π<sub>k</sub> 𝒩(x; μ<sub>k</sub>, Σ<sub>k</sub>)</div>
+  <p>In our example K = 2, both π<sub>k</sub> are 0.5, and the μ<sub>k</sub> are the two centroids, [0.85, 0.15] and [0.15, 0.85]. Here Σ<sub>k</sub> is not the summation sign. It is the spread of cluster k, which can differ from direction to direction. In our simplification it is σ² = 0.0625 in every direction.</p>
+
+  <h4 class="sub" id="member">Soft membership: a probability for each cluster</h4>
+
+  <p>Now take a new passage that mixes both topics: <q>In milestone week, the Thursday office hours will run longer.</q> Its vector is [0.6, 0.4] <span class="mine">my passage</span>. <b>Membership is the probability that this passage came from cluster k.</b> To get it, multiply the cluster's height by its weight, and divide by the total height P(x). In lesson 4, p(Tuesday | full) = 0.40 ÷ 0.45 = 0.89 came out exactly this way.</p>
+  <ol class="plain">
+    <li>Squared distances: from the office hours centroid, (0.6 − 0.85)² + (0.4 − 0.15)² = 0.0625 + 0.0625 = 0.125, and from the deadlines one, (0.6 − 0.15)² + (0.4 − 0.85)² = 0.2025 + 0.2025 = 0.405.</li>
+    <li>Heights: e<sup>−0.125/0.125</sup> = e<sup>−1</sup> = 0.368, and e<sup>−0.405/0.125</sup> = e<sup>−3.24</sup> = 0.0392. Multiplying by 2.546 gives 𝒩<sub>office hours</sub> = 0.937 and 𝒩<sub>deadlines</sub> = 0.0997.</li>
+    <li>Times the weights: 0.5 × 0.937 = 0.468 and 0.5 × 0.0997 = 0.0499. The sum P(x) is 0.518.</li>
+    <li>Membership: office hours 0.468 ÷ 0.518 = 0.904, and deadlines 0.0499 ÷ 0.518 = 0.096. The two add up to 1.</li>
+  </ol>
+  <div class="formula">p(k | x) = <span class="frac"><span>π<sub>k</sub> 𝒩(x; μ<sub>k</sub>, Σ<sub>k</sub>)</span><span>∑<sub>j</sub> π<sub>j</sub> 𝒩(x; μ<sub>j</sub>, Σ<sub>j</sub>)</span></span></div>
+  <p>The top is the 0.468 from step 3, and the bottom is the sum 0.518. The 2.546 and the 0.5 appear on both top and bottom, so they cancel in the division. What remains is just the <button class="def" data-w="w-softmax">softmax</button> of e<sup>−1</sup> and e<sup>−3.24</sup>: 0.368 ÷ (0.368 + 0.0392) = 0.904.</p>
+
+  <p>In RAPTOR's code a passage joins every cluster where its membership is above 0.1 <span class="mine">from the RAPTOR code</span>. Our passage's deadlines membership is 0.096, which is below 0.1. So it joins only the office hours cluster.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Lesson 7's big chunk [0.5, 0.5] was an equal average of office hours and deadlines. What are its two memberships, and how many clusters does it join?</p>
+    <details><summary>Show the answer</summary>
+      <p>Its squared distance from both centroids is (0.35)² + (0.35)² = 0.245, so both heights are the same: e<sup>−1.96</sup> = 0.141. The memberships are 0.5 and 0.5, both above 0.1, so the chunk joins both clusters. (Steps 2 and 6)</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">I chose σ = 0.25 so the numbers stay readable. A real GMM works out μ, σ and π from the data itself, using a method called Expectation-Maximization (EM) <span class="mine">from the paper</span>. EM first computes every passage's memberships, then uses them to recompute the centroids, spreads and weights. It alternates these two moves until the numbers settle.</p>
+
+  <p>On our 6 points such a fit gives about σ = 0.04, because the points in each cluster are very close together <span class="mine">my arithmetic</span>. With σ that small, most memberships are almost exactly 0 or 1, and only passages right in the middle get split.</p>
+
+  <details class="more">
+    <summary>How many clusters: choosing with BIC</summary>
+    <p>A GMM has to be told how many clusters there are. RAPTOR picks the count with <b class="term">BIC</b> (the Bayesian Information Criterion): try several counts and keep the one with the smallest BIC <span class="mine">from the paper</span>. The paper's formula is:</p>
+    <div class="formula">BIC = ln(N) · k − 2 ln(L̂)</div>
+    <p>N is the number of passages, here 6, and ln 6 = 1.792. L̂ is the <button class="def" data-w="w-likelihood">likelihood</button> of the best fit, the product of every passage's P(x). Lesson 4's rule ln(a × b) = ln a + ln b turns that product into a sum. k is the number of model parameters, the numbers the fit decides.</p>
+    <p>In our simplified model each centroid has 2 numbers, and all clusters share one σ. K clusters have K − 1 weights, because the last weight is fixed by the others. <span class="mine">my arithmetic</span></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Clusters K</th><th class="numh">ln L̂</th><th class="numh">k, and ln(6) · k</th><th class="numh">BIC</th></tr></thead>
+      <tbody>
+        <tr><td>1: all passages together</td><td class="num">−4.51</td><td class="num">3, 5.38</td><td class="num">14.40</td></tr>
+        <tr class="hi"><td>2: deadlines and office hours</td><td class="num">17.20</td><td class="num">6, 10.75</td><td class="num">−23.64</td></tr>
+        <tr><td>3: office hours page on its own</td><td class="num">18.12</td><td class="num">9, 16.13</td><td class="num">−20.11</td></tr>
+      </tbody>
+    </table></div>
+    <p>The K = 2 row works out like this. In each passage's P(x) the other cluster's part is almost 0, so ln P(x) = ln 0.5 + ln 𝒩. The fit's σ² is 0.001667, and the squared distances add up to 0.02.</p>
+    <ol class="plain">
+      <li>Weights: 6 × ln 0.5 = 6 × (−0.693) = −4.159.</li>
+      <li>Factor in front: 1 ÷ (2π × 0.001667) = 95.5, and 6 × ln 95.5 = 6 × 4.559 = 27.354.</li>
+      <li>Distances: −0.02 ÷ (2 × 0.001667) = −0.02 ÷ 0.003333 = −6.0.</li>
+      <li>Sum: −4.159 + 27.354 − 6.0 = 17.195, or 17.20. Then BIC = 1.792 × 6 − 2 × 17.195 = 10.75 − 34.39 = −23.64.</li>
+    </ol>
+    <p>ln L̂ is positive here because the densities of narrow curves are above 1. At K = 3, ln L̂ rises only from 17.20 to 18.12, but the parameter penalty grows from 10.75 to 16.13. So BIC is smallest at K = 2, and RAPTOR would pick that count.</p>
+  </details>
+
+  <h4 class="sub" id="umap">UMAP: shrinking the vectors first</h4>
+
+  <p>The paper points out one more problem: in vectors with very many numbers, distance stops telling points apart well <span class="mine">from the paper</span>. To see this, I took 200 random points, each number between 0 and 1. Then I measured the distance from a random query to the nearest and the farthest point: <span class="mine">my random points</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Numbers per vector</th><th class="numh">Nearest, farthest</th><th class="numh">Farthest ÷ nearest</th></tr></thead>
+    <tbody>
+      <tr><td>2</td><td class="num">0.03, 0.80</td><td class="num">25.94</td></tr>
+      <tr><td>10</td><td class="num">0.58, 1.79</td><td class="num">3.09</td></tr>
+      <tr class="hi"><td>768</td><td class="num">10.82, 12.07</td><td class="num">1.11</td></tr>
+    </tbody>
+  </table></div>
+  <p>With 768 numbers the nearest and the farthest point are almost equally far away, so “close” loses its meaning. That is why RAPTOR runs <b class="term">UMAP</b> before clustering. UMAP turns each vector into one with far fewer numbers, and tries to keep points that were close before close in the new vectors. In RAPTOR's code the new vectors have 10 numbers <span class="mine">from the RAPTOR code</span>.</p>
+
+  <p>UMAP's n_neighbors sets how many neighbours each point looks at to decide its place. A large n_neighbors keeps the rough shape of the whole data, and a small one keeps the fine detail nearby. RAPTOR first forms rough global clusters, then local clusters inside each global one. If a cluster's text is longer than the summary model's token limit, RAPTOR clusters again inside it. <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="raptorpaper">
+  <h3><span class="cn">7</span>The RAPTOR paper: two ways to search the tree, the setup and the results</h3>
+
+  <h4 class="sub" id="collapsed">Tree traversal and the collapsed tree</h4>
+
+  <p>The paper tries two ways of searching the tree <span class="mine">from the paper</span>. <b class="term">Tree traversal</b> works top down. From the top level, pick the k nodes closest to the question, then the k closest among only their children, and so on down to the leaves. The <b class="term">collapsed tree</b> turns the whole tree into one list and sorts all nodes by cosine. It then adds nodes from the top until a token limit is full.</p>
+
+  <p>On our tree, traversal with k = 1 runs like this for the all-deadlines question. The root R is alone, so traversal starts there. Among its children, A (1.00) beats B (0.62). Among A's children, the project page (0.66) beats Homework (0.61) and the syllabus (0.60). The context is R, A and the project page.</p>
+
+  <p>The collapsed tree needs each node's token count, and we set the limit at 100 tokens: <span class="mine">my token counts</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Node, in cosine order</th><th class="numh">Cosine</th><th class="numh">Tokens, and running total</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>A, deadlines summary</td><td class="num">1.00</td><td class="num">30, 30</td></tr>
+      <tr class="hi"><td>R, course overview</td><td class="num">0.89</td><td class="num">25, 55</td></tr>
+      <tr class="hi"><td>Project page</td><td class="num">0.66</td><td class="num">15, 70</td></tr>
+      <tr><td>B, office hours summary</td><td class="num">0.62</td><td class="num">35, skipped (would be 105)</td></tr>
+      <tr class="hi"><td>Homework 1 announcement</td><td class="num">0.61</td><td class="num">10, 80</td></tr>
+      <tr class="hi"><td>Syllabus</td><td class="num">0.60</td><td class="num">20, 100</td></tr>
+    </tbody>
+  </table></div>
+  <p>The difference shows on a detail question. On the milestone question, traversal takes one node per level: R (0.33), A (0.52), and then the syllabus (0.99). The collapsed tree puts the syllabus first. <b>In traversal the mix of levels is the same for every question, while the collapsed tree picks the level to suit the question.</b> The paper tried both on 20 QASPER stories, and the collapsed tree did better in every setting.</p>
+
+  <p>For its main experiments RAPTOR runs the collapsed tree with a limit of 2,000 tokens, which is about the top 20 nodes. The UnifiedQA reader reads only 512 tokens at a time, so it gets 400 tokens of context. The baselines get the same number of tokens. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="setup">How the tree was built</h4>
+
+  <p>The paper's setup: <span class="mine">from the paper</span></p>
+  <ul class="plain">
+    <li>Chunks are 100 tokens long. If a sentence would cross the 100-token limit, the whole sentence moves to the next chunk instead of being cut.</li>
+    <li>Embeddings come from SBERT, a BERT-based encoder (multi-qa-mpnet-base-cos-v1).</li>
+    <li>gpt-3.5-turbo writes the summaries, with the prompt <q>Write a summary of the following, including as many key details as possible</q>.</li>
+    <li>A parent has 6.7 children on average, and a summary is about 0.28 times as long as its children's text combined, so 72% shorter.</li>
+    <li>The authors checked 150 nodes by hand and found a minor hallucination in 6 of them, which is 4%. These errors did not spread to the summaries above, and showed no effect on the answers.</li>
+    <li>Both the tokens and the time needed to build the tree grow in a straight line with the document's length.</li>
+  </ul>
+
+  <h4 class="sub" id="raptorresults">Results on three datasets</h4>
+
+  <p>The paper measures on three datasets. NarrativeQA has questions about books and movie scripts, 1,572 documents in all. QASPER has 5,049 questions about 1,585 NLP papers, and QuALITY has multiple-choice questions about passages of about 5,000 tokens. <span class="mine">from the paper</span></p>
+
+  <p>QASPER is scored with <b class="term">F1</b>, which compares the words of the reader's answer with the words of the right answer. Say the answer has 4 words, the right answer has 5, and 3 words appear in both <span class="mine">my numbers</span>. <button class="def" data-w="w-precision">Precision</button> is 3 ÷ 4 = 0.75, and <button class="def" data-w="w-recall">recall</button> is 3 ÷ 5 = 0.6. F1 = 2 × 0.75 × 0.6 ÷ (0.75 + 0.6) = 0.9 ÷ 1.35 = 0.667, written as a percentage.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Retriever</th><th class="numh">GPT-3</th><th class="numh">GPT-4</th><th class="numh">UnifiedQA</th></tr></thead>
+    <tbody>
+      <tr><td>BM25</td><td class="num">46.6</td><td class="num">50.2</td><td class="num">26.4</td></tr>
+      <tr><td>DPR</td><td class="num">51.3</td><td class="num">53.0</td><td class="num">32.1</td></tr>
+      <tr class="hi"><td>RAPTOR</td><td class="num">53.1</td><td class="num">55.7</td><td class="num">36.6</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">F1 (%) on QASPER. The columns are the reader that writes the answer, and the rows are the retriever. <span class="mine">from the paper</span></p>
+
+  <p>RAPTOR leads with all three readers: by 1.8, 2.7 and 4.5 points over DPR, and by 6.5, 5.5 and 10.2 points over BM25. On QuALITY with GPT-3, accuracy is 57.3% for BM25, 60.4% for DPR and 62.4% for RAPTOR. RAPTOR helps every retriever: with UnifiedQA on QuALITY, BM25 goes from 49.9 to 52.1, and DPR from 53.1 to 54.7. <span class="mine">from the paper</span></p>
+
+  <p>Paired with GPT-4, RAPTOR reaches 82.6% accuracy on QuALITY, against a previous best of 62.3%, so 20.3 points higher. On the HARD subset, the hardest questions, it is 76.2 against 54.7, so 21.5 points. On QASPER, RAPTOR with GPT-4 reaches an F1 of 55.7, 1.8 above the previous best of 53.9. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="layers">Which levels helped</h4>
+
+  <p>On one QuALITY story the paper limited the search to different levels. Searching only the leaves gave 57.9% accuracy, and searching all three levels gave 73.68%. Of the nodes the collapsed tree returned, between 18.5% and 57% were not leaves but summaries from higher up, depending on the dataset and the retriever. <span class="mine">from the paper</span></p>
+
+  <p>The paper also measured how much the clustering itself helps. Summarizing runs of 7 neighbouring chunks instead of clusters gave 55.8% accuracy on QuALITY. With GMM clustering it was 56.6%, a difference of 0.8 points. On Cinderella, GPT-4 given DPR's context said the happy ending could not be determined. Given RAPTOR's context, it answered correctly. <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="graphragpaper">
+  <h3><span class="cn">8</span>The GraphRAG paper: building the graph, the map-reduce answer and the results</h3>
+
+  <h4 class="sub" id="extract">From chunks to a graph</h4>
+
+  <p>GraphRAG splits documents into chunks of 600 tokens with a 100-token <button class="def" data-w="w-chunkoverlap">overlap</button> <span class="mine">from the paper</span>. So each new chunk brings 500 new tokens. Chunk size is a trade-off: larger chunks need fewer LLM calls, but the LLM misses entities in them. On HotPotQA data, GPT-4 found almost twice as many entity references in 600-token chunks as in 2,400-token chunks.</p>
+
+  <p>So GraphRAG gives the LLM a second pass, called gleaning. After extraction, GraphRAG asks the LLM a yes-or-no question: were any entities missed? If yes, the next prompt says many entities were missed, and the LLM extracts more. GraphRAG repeats this up to a set number of times. <span class="mine">from the paper</span></p>
+
+  <p>The LLM also writes a short description for every entity and relation. It extracts claims as well, factual statements such as dates or events. When the same entity comes out of several chunks, it becomes one node, and the LLM summarizes its descriptions. The more times a relation is extracted, the higher its edge weight. If (Office hours, run by, TAs) came out of two passages, that edge would have weight 2.</p>
+
+  <h4 class="sub" id="leiden">Levels of communities: Leiden</h4>
+
+  <p>To find communities, GraphRAG runs the <b class="term">Leiden</b> algorithm <span class="mine">from the paper</span>. Leiden splits a graph into parts with many edges inside and few edges between them. GraphRAG runs it again and again: first communities, then sub-communities inside each community, until nothing can be split further.</p>
+
+  <p>This gives levels of communities: C0 is the top level, with the fewest communities, and C3 the bottom, with the most. On each level every node is in exactly one community. <b>Here GraphRAG differs from RAPTOR, where one passage could sit in two clusters.</b> Our graph would have three communities at level 0. At a lower level the Project community could split into a proposal part and a milestone part.</p>
+
+  <p>When writing a community's summary, the LLM's token limit can fill up, so GraphRAG puts the important parts first. A node's <b class="term">degree</b> is the number of edges on it, and an edge's importance is the sum of its two nodes' degrees. In our graph Project has degree 3 and Proposal has degree 2. So (Project, has part, Proposal) has importance 3 + 2 = 5, and (Proposal, due, Oct 9) has 2 + 1 = 3. The edges with 5 go into the summary first.</p>
+
+  <h4 class="sub" id="mapreduce">When a question arrives: map-reduce</h4>
+
+  <p>At query time GraphRAG writes its answer with <b class="term">map-reduce</b>. Map means doing the same job on each piece separately, and reduce means combining all the results. In the paper this takes three steps: <span class="mine">from the paper</span></p>
+  <ol class="plain">
+    <li>Shuffle the community summaries of the chosen level, and split them into pieces of a fixed number of tokens.</li>
+    <li>Map: from each piece the LLM writes a partial answer. It also gives a score from 0 to 100 for how helpful the answer is, and parts that score 0 are dropped.</li>
+    <li>Reduce: the remaining parts are added in score order until the context window is full, and the LLM writes the final answer from them.</li>
+  </ol>
+  <p>For our question, the Project part scores 95, the Homework 1 part 80, and the office hours part 0 <span class="mine">my scores</span>. The office hours part is dropped, and the reduce step reads the Project part, then the Homework 1 part, and writes all four dates. The paper used an 8k-token window for the summaries, the partial answers and the final answer.</p>
+
+  <h4 class="sub" id="graphresults">Results from an LLM judge</h4>
+
+  <p>Global questions have no single right answer, so the paper had an LLM write the questions too. For each dataset the LLM imagined 5 kinds of users, and 5 tasks for each user. Each task got 5 questions, so 5 × 5 × 5 = 125 questions. An example from a tech journalist: <q>Which episodes deal primarily with tech policy and government regulation?</q> <span class="mine">from the paper</span></p>
+
+  <p>The paper used two datasets. The podcast transcripts were 1,669 chunks of 600 tokens (about 1 million tokens), and the news articles 3,197 chunks (about 1.7 million tokens). The graph built from the podcasts had 8,564 nodes and 20,691 edges, and indexing it with gpt-4-turbo took 281 minutes. <span class="mine">from the paper</span></p>
+
+  <p>A second LLM then acted as the judge. It got a question and two systems' answers, and said for each criterion which answer was better, or that they were equal. There were four criteria: comprehensiveness (how much it covers), diversity (how many different angles), empowerment (how well the reader can understand and decide), and directness (how direct the answer is). The paper kept directness on purpose, as a check on the other results. It is the opposite of comprehensiveness, so no method can win on all four criteria.</p>
+
+  <p>Each pair was compared 5 times on every question, which gives 125 × 5 = 625 judgments. The <b class="term">win rate</b> is the percentage of these in which the judge preferred one system, and 50% means a tie. A 72% win rate, for example, means about 0.72 × 625 = 450 judgments <span class="mine">my arithmetic</span>.</p>
+
+  <p>The paper compared six methods: the four community levels C0 to C3, TS and SS. TS runs the same map-reduce directly on the chunks, without a graph, and SS is ordinary vector RAG, which takes the closest chunks. <b>On comprehensiveness, the global methods (the graph levels and TS) had win rates over SS of 72% to 83% on the podcasts and 72% to 80% on the news.</b> On diversity they were 75% to 82% and 62% to 71%. On directness SS won, as expected. <span class="mine">from the paper</span></p>
+
+  <p>The token cost differs too. The table shows how much context was read to answer each question on the podcasts: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Answered from</th><th class="numh">Units</th><th class="numh">Tokens per question</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>C0, the top communities</td><td class="num">34</td><td class="num">26,657</td></tr>
+      <tr><td>C1</td><td class="num">367</td><td class="num">225,756</td></tr>
+      <tr><td>C2</td><td class="num">969</td><td class="num">565,720</td></tr>
+      <tr><td>C3, the bottom communities</td><td class="num">1,310</td><td class="num">746,100</td></tr>
+      <tr><td>TS, the chunks directly</td><td class="num">1,669</td><td class="num">1,014,611</td></tr>
+    </tbody>
+  </table></div>
+  <p>C0 needs only 26,657 ÷ 1,014,611 = 2.6% of TS's tokens, about 38 times fewer. On the news it is 39,770 ÷ 1,707,694 = 2.3%, about 43 times fewer. Even with so few tokens, C0 kept a 72% comprehensiveness win rate and a 62% diversity win rate over SS. <span class="mine">from the paper</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>RAPTOR</th><th>GraphRAG</th></tr></thead>
+    <tbody>
+      <tr><td>How groups form</td><td>By closeness of vectors (GMM), one passage can be in several clusters</td><td>From written relations (Leiden), each node in one community</td></tr>
+      <tr><td>When summaries are written</td><td>At indexing time</td><td>At indexing time, and again when the question arrives</td></tr>
+      <tr><td>Good for</td><td>Detail and thematic questions, from one index</td><td>Global questions about the whole corpus</td></tr>
+    </tbody>
+  </table></div>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="variants">
+  <h3><span class="cn">9</span>The whole GraphRAG family: the survey by Han and colleagues</h3>
+
+  <p>Edge's GraphRAG is one system, but the name is now also used for a whole family. The 2025 survey by Han and colleagues calls any RAG whose data source is a graph a GraphRAG <span class="mine">from the paper</span>. Stanford's last GraphRAG slide comes from this survey, and you read it in step 10.</p>
+
+  <p>The survey splits every GraphRAG into five parts, and these are the five boxes in the middle of the slide. For our all-deadlines question they look like this: <span class="mine">my course example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Part</th><th>Job</th><th>In our course</th></tr></thead>
+    <tbody>
+      <tr><td>Query processor</td><td>Make the question searchable</td><td>Turn “deadlines” into entities: Proposal, Project milestone, Final report, Homework 1</td></tr>
+      <tr><td>Retriever</td><td>Fetch the useful part of the graph</td><td>Walk the due and released edges from these nodes to fetch the dates</td></tr>
+      <tr><td>Data source</td><td>The graph itself</td><td>The knowledge graph from step 5</td></tr>
+      <tr><td>Organizer</td><td>Trim and order what was fetched</td><td>Write the four relations as four lines of text</td></tr>
+      <tr><td>Generator</td><td>Write the answer</td><td>The LLM, which writes the four dates</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The left part of the slide shows ordinary RAG data: text and images. According to the survey, text is a line of tokens, and an image is a grid of small patches. Different sentences share the same tokens. Graph data has no shared unit like that, and its structure differs from domain to domain. So each domain needs its own GraphRAG design. <span class="mine">from the paper</span></p>
+
+  <p>The right part of the slide shows kinds of graphs:</p>
+  <ul class="plain">
+    <li><b>What nodes are:</b> entities, research papers, products or customers. For example, citation edges between papers, or purchase edges between customers and products.</li>
+    <li><b>Graph:</b> one row of a knowledge graph, (California, State, USA), which has the same shape as our (Project milestone, due, Week 6). A protein's structure is also a graph.</li>
+    <li><b>Cellular complex:</b> besides edges, it has parts that treat several nodes as one unit. Examples are the whole ring of benzene, or the four members of a club who are all linked to each other.</li>
+    <li><b>Homophily and heterophily:</b> in homophily, linked nodes are alike, like friends in a social network. In heterophily, linked nodes are of different kinds, as in a dating network.</li>
+    <li><b>Proximity similar and role similar:</b> in the slide's tree, 2 and 4 are alike because they are linked. 2 and 3 are not linked, but they hold the same position: both are children of 1, and both have two children. In our graph, Project milestone and Final report are role similar, because both are parts of Project and both have a due date.</li>
+    <li><b>6-cycle and 4-cycle:</b> benzene has a ring of 6 nodes, and a street grid has rings of 4 nodes. In drug design or city planning, the retriever has to recognize such shapes.</li>
+  </ul>
+  <p>The survey lists 10 such domains: knowledge, document, scientific, social, planning and reasoning, tabular, infrastructure, biological, scene and random graphs. Edge's GraphRAG belongs to the document graph domain. <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are this lesson's four Stanford slides, unchanged. Under each slide are a few questions. Think of the answer first, then open it. If something stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image to open it at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p32.png"><img src="img/slide-p32.png" alt="Stanford slide: the RAPTOR tree, how one level forms, and what a node holds" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p32-tree.png"><img src="img/slide-p32-tree.png" alt="The three boxes of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's RAPTOR slide, and below it its three boxes, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the RAPTOR slide</p>
+    <ol class="plain">
+      <li>
+        <p>In the middle box, which nodes is chunk 5 under, and what kind of clustering is this?</p>
+        <details><summary>Show the answer</summary>
+          <p>Chunk 5 is in two groups, {3, 5} and {1, 4, 5}, so it sits under both node 6 and node 7. This is soft clustering. In RAPTOR the decision comes from the GMM membership, and in the code a chunk joins a cluster when its membership is above 0.1. (Steps 2 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>The right box shows four things inside node 8. What is the “Text Embedding” [3, .1, 4, .1, 5] used for?</p>
+        <details><summary>Show the answer</summary>
+          <p>It is the embedding of node 8's summary, and at retrieval time the cosine with the question is computed on this vector. The 5 numbers on the slide are only for illustration. Index #8 is the node's identifier, and Child Nodes 2, 3 say which nodes the summary covers. (Steps 3 and 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>The last line says <q>a detail question matches a leaf, a thematic question matches a node</q>. Where did you see this, and how does the paper do it?</p>
+        <details><summary>Show the answer</summary>
+          <p>In the widget of step 4, the milestone question matched the syllabus leaf at 0.99, and the all-deadlines question matched summary A at 1.00. The paper does it with the collapsed tree, which sorts the nodes of all levels in one list. (Steps 4 and 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p33.png"><img src="img/slide-p33.png" alt="Stanford slide: the nodes RAPTOR and DPR chose for two Cinderella questions" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p33-tree.png"><img src="img/slide-p33-tree.png" alt="The tree from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p33-legend.png"><img src="img/slide-p33-legend.png" alt="The colour legend from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's Cinderella slide, and below it the tree and the colour legend, enlarged. Orange is the first question's colour, and purple the second's.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the Cinderella slide</p>
+    <ol class="plain">
+      <li>
+        <p>How many nodes does each level of this tree have? And why are there 4 nodes at the top instead of 1 root?</p>
+        <details><summary>Show the answer</summary>
+          <p>There are 16 leaves, 0 to 15, then 7 in the middle, 16 to 22, and 4 at the top, 23 to 26. That is 27 nodes in all. RAPTOR stops when further clustering is no longer possible, so several nodes can remain at the top. The tree on the first slide also had two nodes at the top, 9 and 10. (Step 3)</p>
+        </details>
+      </li>
+      <li>
+        <p>For the first question, the central theme, which levels did RAPTOR choose nodes from?</p>
+        <details><summary>Show the answer</summary>
+          <p>From all three: 25 from the top, 16, 18 and 19 from the middle, and 11 and 15 from the leaves. For a thematic question most of the nodes are summaries, but two leaves also made it, because RAPTOR matches the question against nodes on every level. (Steps 4 and 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>For the second question RAPTOR chose only 25, 16, 17 and 19, no leaves. DPR chose the leaves 2, 3, 4, 5 and 11. How does DPR's content reach RAPTOR's context, and what difference did this make to the answer?</p>
+        <details><summary>Show the answer</summary>
+          <p>Nodes 16 to 26 are summaries of the nodes below them, so the leaves' content reaches them inside the summaries. That is what the slide's last line says. In the paper, GPT-4 given only DPR's context said the happy ending could not be determined. Given RAPTOR's context, it answered correctly. (Steps 4 and 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p34.png"><img src="img/slide-p34.png" alt="Stanford slide: GraphRAG's indexing and query steps, and a graph with communities" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p34-pipeline.png"><img src="img/slide-p34-pipeline.png" alt="The steps from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p34-communities.png"><img src="img/slide-p34-communities.png" alt="The communities graph from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's GraphRAG slide, and below it the steps and the communities graph, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the GraphRAG slide</p>
+    <ol class="plain">
+      <li>
+        <p>The arrows in the left column say “domain-tailored summarization” twice. Why is extracting entities a kind of summarization, and what does “domain-tailored” mean?</p>
+        <details><summary>Show the answer</summary>
+          <p>Entities, relations and their descriptions are a short written form of the text, so the paper calls them a kind of summarization. Domain-tailored means the prompt carries examples from the same domain, such as science or law. (Step 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Why does “query-focused summarization” appear twice in the right column?</p>
+        <details><summary>Show the answer</summary>
+          <p>The first time, community summaries become community answers, the map step. The second time, community answers become the global answer, the reduce step. Both times the LLM writes with the question in mind. (Steps 5 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the picture on the right, what do the colours and the sizes of the circles show?</p>
+        <details><summary>Show the answer</summary>
+          <p>This is a figure from the paper: Leiden's top-level communities on the graph of the news dataset. Each circle is an entity, its size follows its degree, and its colour shows its community. The big pink circle is an entity with very many edges <span class="mine">from the paper</span>. (Step 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p35.png"><img src="img/slide-p35.png" alt="Stanford slide: the data of RAG and GraphRAG, and the five parts of GraphRAG" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p35-rag.png"><img src="img/slide-p35-rag.png" alt="The left part and the five middle boxes of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p35-graphs.png"><img src="img/slide-p35-graphs.png" alt="The graphs part of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's GraphRAG variants slide, and below it its two parts, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the GraphRAG variants slide</p>
+    <ol class="plain">
+      <li>
+        <p>What are the five boxes in the middle, and what would the Retriever do for the all-deadlines question?</p>
+        <details><summary>Show the answer</summary>
+          <p>Query Processor, Retriever, Data Source, Organizer and Generator. The Retriever would walk the due and released edges from the Proposal, Project milestone, Final report and Homework 1 nodes and fetch all four dates. (Step 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the tree at the bottom right, which node is node 2 proximity similar to, and which is it role similar to?</p>
+        <details><summary>Show the answer</summary>
+          <p>Proximity similar to node 4, because 2 and 4 are linked by an edge. Role similar to node 3, because both are children of 1 and both have two children, even though they are not linked. (Step 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>The left part says different sentences share common tokens. Why is nothing like this written for the graphs?</p>
+        <details><summary>Show the answer</summary>
+          <p>Graph data has no shared unit like a token. A knowledge graph comes in rows, a molecule in rings, and roads in loops, so each domain's GraphRAG is built differently. (Step 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>A thematic question's answer is not in any single chunk. Every chunk gets a low cosine, raising K is not enough, and a big chunk averages everything away.</li>
+    <li>RAPTOR uses a GMM to give each chunk a membership for every cluster, and soft clustering lets a chunk sit in more than one cluster. It builds the tree from cluster summaries and searches every level with the collapsed tree. With GPT-4 it reaches 82.6% accuracy on QuALITY, 20.3 points above the previous best.</li>
+    <li>GraphRAG has an LLM build a knowledge graph, finds levels of communities with Leiden, and writes a global answer with map-reduce. Its comprehensiveness win rate over vector RAG is 72% to 83%, and its top level needs only 2.3% to 2.6% of the tokens of the raw chunks.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-detailq">Detail question and thematic question</dt><dd>The answer is written in one place, or it is built from several passages. For example, “When is the milestone due?” and “What are all the deadlines?”.</dd>
+    <dt id="w-clustering">Clustering</dt><dd>Splitting vectors into groups so that the vectors in a group are close to each other. For example, the syllabus [0.1, 0.9] and the project page [0.2, 0.8] have cosine 0.99, so they share a group.</dd>
+    <dt id="w-cluster">Cluster and centroid</dt><dd>A cluster is a group, and its centroid is the average of its vectors. For example, the centroid of [0.1, 0.9], [0.2, 0.8] and [0.15, 0.85] is [0.15, 0.85].</dd>
+    <dt id="w-softclust">Soft clustering</dt><dd>Putting one passage into more than one cluster. For example, the FAQ page, whose cosine is high with both centroids (0.86 and 0.78).</dd>
+    <dt id="w-raptor">RAPTOR</dt><dd>Building a tree bottom up from summaries of clusters, and searching every level. For example, the all-deadlines question matches summary A.</dd>
+    <dt id="w-tree">Tree, node, leaf, root</dt><dd>A structure with levels: a node is a box, a leaf is a node at the bottom, and the root is the node at the top. For example, 2 summaries above 6 chunks (the leaves), and 1 root above them.</dd>
+    <dt id="w-entity">Entity</dt><dd>Any named thing: a person, a place, a course, a document or a date. For example, Week 6, TAs, Room 104.</dd>
+    <dt id="w-relation">Relation</dt><dd>A link between two entities. For example, (Project milestone, due, Week 6).</dd>
+    <dt id="w-kg">Knowledge graph and edge</dt><dd>A network of entities (nodes) and relations (edges). For example, an edge labelled “due” between the milestone and Week 6.</dd>
+    <dt id="w-community">Community</dt><dd>A tightly linked part of a graph. For example, Office hours, TAs, Room 104 and Zoom.</dd>
+    <dt id="w-graphrag">GraphRAG</dt><dd>Answering global questions from a knowledge graph, its communities and their summaries. For example, the all-deadlines answer, built from the Project and Homework 1 communities.</dd>
+    <dt id="w-qfs">Query-focused summarization</dt><dd>Writing a summary with the question in mind. For example, asking for “all the deadlines” makes the Project community's summary give only the dates.</dd>
+    <dt id="w-gmm">Gaussian mixture model (GMM)</dt><dd>A weighted sum of bell curves: P(x) = ∑ π<sub>k</sub> 𝒩<sub>k</sub>(x). It gives every passage a membership for every cluster. For example, [0.6, 0.4] gets 0.904 for office hours and 0.096 for deadlines.</dd>
+    <dt id="w-bic">BIC</dt><dd>ln(N) · k − 2 ln(L̂): choosing the number of clusters by weighing the fit's likelihood against its parameter count, where the smallest BIC wins. For example, on 6 passages K = 2 gives −23.64 and K = 3 gives −20.11.</dd>
+    <dt id="w-umap">UMAP</dt><dd>Turning vectors into ones with fewer numbers while keeping nearby points nearby. For example, RAPTOR's code makes every vector 10 numbers long.</dd>
+    <dt id="w-collapsed">Tree traversal and collapsed tree</dt><dd>Picking the top k on each level from the top down, or sorting all nodes in one list and taking them up to a token limit. For example, for the all-deadlines question the collapsed tree takes 5 nodes within 100 tokens, A first.</dd>
+    <dt id="w-f1">F1</dt><dd>A score that combines precision and recall, 2PR ÷ (P + R). For example, P = 0.75 and R = 0.6 give F1 = 0.667.</dd>
+    <dt id="w-leiden">Leiden and degree</dt><dd>Leiden splits a graph into communities with many edges inside. A node's degree is its number of edges. For example, Project has degree 3.</dd>
+    <dt id="w-mapreduce">Map-reduce</dt><dd>Doing the same job on each piece separately (map), then combining the results (reduce). For example, a partial answer and a score from each community, then a final answer in score order.</dd>
+    <dt id="w-winrate">Win rate</dt><dd>The percentage of judgments that favour one of two systems, where 50% means a tie. For example, about 450 of 625 judgments, or 72%.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="08-contextual-retrieval-dense-en.html">Previous: Lesson 8</a>
+    <a href="10-vector-search-dense-en.html">Next: Lesson 10, Fast vector search</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Papers: Sarthi et al., 2024, “RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval”. Edge et al., 2024, “From Local to Global: A GraphRAG Approach to Query-Focused Summarization”. Han et al., 2025, “Retrieval-Augmented Generation with Graphs (GraphRAG)”. Points marked “from the RAPTOR code” are in RAPTOR's public code, not in the paper. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var NODES = [
+    { name: "R, course overview", lvl: "2, root", v: [0.25, 0.3, 0.4, 0.9] },
+    { name: "A, deadlines summary", lvl: "1, summary", v: [0.4, 0.5, 0, 0.8] },
+    { name: "B, office hours summary", lvl: "1, summary", v: [0, 0, 0.6, 0.8] },
+    { name: "Syllabus", lvl: "0, leaf", v: [0.9, 0.3, 0, 0.1] },
+    { name: "Project page", lvl: "0, leaf", v: [0.3, 0.9, 0, 0.1] },
+    { name: "Homework 1 announcement", lvl: "0, leaf", v: [0.1, 0.9, 0, 0.1] },
+    { name: "Office hours page", lvl: "0, leaf", v: [0, 0, 0.9, 0.1] },
+    { name: "Queue log", lvl: "0, leaf", v: [0, 0.05, 0.85, 0.1] },
+    { name: "Old forum post", lvl: "0, leaf", v: [0, 0, 0.8, 0.15] }
+  ];
+  var Q = [
+    { q: "When is the milestone due?", v: [0.95, 0.2, 0, 0.05] },
+    { q: "What are all the deadlines?", v: [0.4, 0.5, 0, 0.8] },
+    { q: "Give me an overview of course logistics", v: [0.25, 0.3, 0.4, 0.9] }
+  ];
+  function dot(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+  function cos(a, b) { return dot(a, b) / Math.sqrt(dot(a, a) * dot(b, b)); }
+  var qi = 0, box = document.getElementById("tw-q"), body = document.getElementById("tw-body"), out = document.getElementById("tw-out");
+  box.innerHTML = Q.map(function (x, i) { return '<button type="button" data-i="' + i + '">' + x.q + "</button>"; }).join("");
+  box.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); }); });
+  function render() {
+    box.querySelectorAll("button").forEach(function (b, i) { b.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    var rows = NODES.map(function (n) { return { n: n, c: cos(Q[qi].v, n.v) }; }).sort(function (a, b) { return b.c - a.c; });
+    body.innerHTML = rows.map(function (r, i) {
+      return '<tr class="' + (i === 0 ? "hi" : "") + '"><td>' + r.n.name + "</td><td>" + r.n.lvl + '</td><td class="num">' + r.c.toFixed(2) + "</td></tr>";
+    }).join("");
+    out.innerHTML = "Top match: <b>" + rows[0].n.name + "</b>, level " + rows[0].n.lvl + ".";
+  }
+  render();
+})();
+</script>
+</body>
+</html>

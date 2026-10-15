@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Lesson 3's retriever compares the query with every vector in the index, and on 100 million passages each query takes about 7.7 seconds. The goal is to look at far fewer vectors and still find the nearest ones, and at the end to read Stanford's vector search slides yourself.">
+<title>Lesson 10: Fast vector search (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .plane { display: block; width: 100%; max-width: 380px; margin: 0 auto 12px; touch-action: none; cursor: crosshair; user-select: none; }
+  .plane .frame { fill: none; stroke: var(--rule); }
+  .plane .pt { fill: var(--muted); opacity: .45; }
+  .plane .pt.cand { opacity: 1; }
+  .plane .pt.best { fill: var(--accent); opacity: 1; }
+  .plane .pt.true { fill: none; stroke: var(--ink); stroke-width: 2; opacity: 1; }
+  .plane .cen { fill: var(--card); stroke: var(--ink); stroke-width: 1.5; }
+  .plane .cen.on { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.5; }
+  .plane .q { fill: var(--accent); }
+  .plane text { fill: var(--ink); font: 12px "Segoe UI", "Nirmala UI", sans-serif; }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 10 / 18 · <a href="10-vector-search-en.html">Easy</a> · <b>Dense</b> · <a href="10-vector-search-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 10 · Dense version</p>
+  <h1>Fast search over hundreds of millions of vectors</h1>
+  <p class="lede"><b>The job of vector search is to find the k vectors nearest to the query's vector. This lesson teaches methods that find those same k vectors most of the time without looking at every vector.</b> The retriever in <a href="03-vectors-dense-en.html#embedding">lesson 3</a> compared each query with every vector in the index. For the 60,000 passages of the company in <a href="02-retrieval-dense-en.html#corpus">lesson 2</a> that takes a moment, but on 100 million passages each query would take about 7.7 seconds. <span class="mine">my estimate</span></p>
+  <p class="lede">The <button class="def" data-w="w-mips">MIPS</button> search in lesson 5 finds the k passages with the largest dot products, and the way to speed it up is the same: do not look at every vector. Then the nearest passage is sometimes missed, so this lesson also teaches you how to measure that miss.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 10 steps. The first 5 are the same as in the easy version, and steps 6 to 10 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#bruteforce">Comparing with every vector: exact search</a><span class="can">Work out the cost of one query from N × d.</span></li>
+      <li><a href="#ann">ANN: give up a little recall for a lot of speed</a><span class="can">Compute a distance and an ANN recall by hand, and read the vector search slide.</span></li>
+      <li><a href="#ivf">IVF: looking only at the nearby clusters</a><span class="can">Count comparisons from nprobe, and explain why IVF misses at a cluster's edge.</span></li>
+      <li><a href="#pq">PQ: turning each vector into a short code</a><span class="can">Work out a vector's code by hand.</span></li>
+      <li><a href="#hnsw">HNSW: a greedy walk on a layered graph</a><span class="can">Run a greedy search over the layers by hand, and read the HNSW slide.</span></li>
+      <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#distmath">Distance and dot product: when the two give the same order</a><span class="can">Explain why both give one order for vectors of length 1.</span></li>
+      <li><a href="#kmeans">k-means: where IVF's centroids come from</a><span class="can">Run k-means by hand, and work out the best number of clusters.</span></li>
+      <li><a href="#pqmath">PQ codebooks, and fast scores from a code</a><span class="can">Compute a score from a lookup table, and explain the code of a residual.</span></li>
+      <li><a href="#hnswmath">HNSW: random layers, ef and the rule for choosing neighbors</a><span class="can">Work through the layer counts, an ef search and the neighbor rule by hand.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line and both pictures on the three vector search slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="03-vectors-dense-en.html#dot">Lesson 3</a> (vector, dot product, length) and <a href="09-raptor-graphrag-dense-en.html#clustering">Lesson 9</a> (cluster, centroid, graph). From step 6 on, <a href="03-vectors-dense-en.html#metrics">step 6 of lesson 3</a> (expanding the distance), <a href="04-probability-tools-dense-en.html#logrules">Lesson 4</a> (ln) and <a href="12-dpr-dense-en.html#scale">Lesson 12</a> (DPR) also help. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="bruteforce">
+  <h3><span class="cn">1</span>Comparing with every vector: exact search and its cost</h3>
+
+  <p><b>Stanford's slide states the task of vector search like this: for a query vector, return the top-k of the N vectors in the index.</b> The simplest method computes a score against every vector and returns the vectors with the k highest scores. This is called <b class="term">exact search</b>, or brute force, because it looks at everything without any shortcut.</p>
+
+  <p>Its cost is easy to count. The <button class="def" data-w="w-dot">dot product</button> of lesson 3's query [0.8, 0.2] with the office hours page [0.9, 0.1] is 0.8 × 0.9 + 0.2 × 0.1 = 0.74. That took 2 multiplications. Vectors with d numbers need d multiplications, so comparing with N vectors takes N × d multiplications.</p>
+
+  <p>Real vectors have a large d: a BERT-base vector has 768 numbers, so d = 768. For speed, take a rough estimate that a computer does 10 billion multiplications per second. <span class="mine">my speed estimate</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Corpus</th><th class="numh">Multiplications per query</th><th class="numh">Time per query</th></tr></thead>
+    <tbody>
+      <tr><td>The company in lesson 2<span class="sub">60,000 passages</span></td><td class="num">46 million<span class="sub mono">60,000 × 768</span></td><td class="num">0.005 second</td></tr>
+      <tr><td>Wikipedia in lesson 5<span class="sub">21 million passages</span></td><td class="num">16.1 billion<span class="sub mono">21 million × 768</span></td><td class="num">1.6 seconds</td></tr>
+      <tr class="hi"><td>A large corpus<span class="sub">100 million passages</span></td><td class="num">76.8 billion<span class="sub mono">100 million × 768</span></td><td class="num">7.7 seconds</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The last row takes two steps:</p>
+  <ol class="plain">
+    <li>Multiplications per query: 100 million × 768 = 76.8 billion.</li>
+    <li>Time: 76.8 billion ÷ 10 billion per second = 7.68 seconds, about 7.7 seconds.</li>
+  </ol>
+
+  <p>The slide writes this cost as O(N·d), and this notation is called <b class="term">Big-O</b>. Big-O does not give an exact count. It tells you how the cost grows as N or d grows. O(N·d) means that if N doubles, the cost doubles, and if d doubles, it also doubles. In the table N went from 60,000 to 100 million, about 1,667 times as many, and the time went from 0.005 to 7.7 seconds, the same factor.</p>
+
+  <p><b>Brute force always returns the true top-k, so on a small corpus it is the best method.</b> The trouble is only on a large corpus, where each query takes seconds.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="ann">
+  <h3><span class="cn">2</span>ANN: give up a little recall for a lot of speed</h3>
+
+  <p>Without looking at every vector you cannot be sure of the top-k, because the vector you skipped might be the nearest one. So on a large corpus you have to make a trade: look at fewer vectors, and get the right answer most of the time. The vectors nearest to a query are called its <b class="term">nearest neighbors</b>.</p>
+
+  <p><b>ANN, approximate nearest neighbor search, is the family of methods that look at only a few vectors and still return the true nearest neighbors most of the time.</b> Approximate means nearly. The slide calls it a trade: <q>trade a little recall for a lot of speed</q>.</p>
+
+  <p>Here <button class="def" data-w="w-recall">recall</button> means: of the true top-10 that brute force would return, how many did the ANN return? If the ANN returned 9 of the 10, the recall is 9 ÷ 10 = 0.9. A passage the ANN drops never reaches the reader. So this miss pushes down the <button class="def" data-w="w-ceiling">recall ceiling</button> from lesson 2.</p>
+
+  <p>Recall@k in <a href="13-metrics-dense-en.html#recallk">lesson 13</a> is a different thing. There the right answer comes from human labels, and here it comes from brute force's top-10.</p>
+
+  <h4 class="sub" id="dist">Distance: how to measure “near”</h4>
+
+  <p>To measure “near”, the methods in this lesson use <b class="term">distance</b>. To find the distance between two vectors, first subtract the numbers in the same positions, which gives a difference vector. Then take its <button class="def" data-w="w-length">length</button>, the calculation from lesson 3: square each number, add the squares, then take the square root.</p>
+
+  <p>For lesson 3's query [0.8, 0.2] and the office hours page [0.9, 0.1], this takes three steps:</p>
+  <ol class="plain">
+    <li>Difference: [0.9 − 0.8, 0.1 − 0.2] = [0.1, −0.1].</li>
+    <li>Sum of squares: 0.1 × 0.1 + (−0.1) × (−0.1) = 0.01 + 0.01 = 0.02. The square of a negative number is positive too.</li>
+    <li>Square root: √0.02 = 0.14. Check: 0.14 × 0.14 = 0.0196, which is about 0.02.</li>
+  </ol>
+  <p>The syllabus [0.1, 0.9] differs by [−0.7, 0.7], and its distance is √(0.49 + 0.49) = √0.98 = 0.99. The smaller the distance, the nearer the vector, so the office hours page is nearer to the query.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p36.png"><img src="img/slide-p36.png" alt="Stanford slide: vector search, exact search and three ANN methods" loading="lazy"></a>
+    <figcaption>Stanford's slide: vector search. You can now read the first three lines: the task, the cost of exact search O(N·d), and the ANN trade. The three ANN methods below them, IVF, PQ and HNSW, come in the next three steps. Click the image to open it at full size.</figcaption>
+  </figure>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="ivf">
+  <h3><span class="cn">3</span>IVF: looking only at the clusters near the query</h3>
+
+  <p>A query's nearest neighbors will be close to it, so looking at far-away vectors is wasted work. The difficulty is that you cannot tell a vector is far away without looking at it. Here the <button class="def" data-w="w-cluster">centroid</button> from lesson 9 helps, the average of a cluster's vectors. For example, the centroid of [0.1, 0.9], [0.2, 0.8] and [0.15, 0.85] is [0.15, 0.85]. If the query is far from a centroid, the vectors in its cluster are mostly far away too.</p>
+
+  <p><b>IVF (inverted file index) splits the vectors into clusters, and at search time looks only at the vectors in the clusters near the query.</b> Its work has two parts:</p>
+  <ol class="plain">
+    <li><button class="def" data-w="w-offline">Offline</button>: each vector goes into the cluster of its nearest centroid, and each centroid keeps a list of its vectors. These lists are called the inverted file.</li>
+    <li>Online: the query is first compared only with the centroids. IVF then picks a few of the nearest centroids and computes distances only to the vectors in their lists.</li>
+  </ol>
+
+  <p>The number of clusters to look at is called <b class="term">nprobe</b>. <span class="mine">the name nprobe is not on the slide</span> Suppose 1 million vectors are split into 1,000 clusters, about 1,000 vectors per cluster. With nprobe = 10, count the comparisons like this:</p>
+  <ol class="plain">
+    <li>With the centroids: 1,000 comparisons.</li>
+    <li>With the vectors of the 10 chosen clusters: 10 × 1,000 = 10,000 comparisons.</li>
+    <li>11,000 in total, against 1,000,000 for brute force. 1,000,000 ÷ 11,000 = 91, so about 91 times less work.</li>
+  </ol>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The query sits at the edge between two clusters, and nprobe = 1. Will IVF find the true nearest point?</p>
+    <details><summary>Show the answer</summary>
+      <p>Not always. IVF looks only at the cluster whose centroid is nearest to the query. For a query at the edge, the nearest point can be in the neighbouring cluster. Pick “Query at the edge” in the widget and see.</p>
+    </details>
+  </div>
+
+  <div class="widget" id="iw">
+    <h4>Run IVF yourself</h4>
+    <p class="hint">40 points, 4 clusters. The squares are centroids. Click the plane to place the query, and change nprobe. The dark points are the ones IVF looked at. The circled point is the true nearest one.</p>
+    <svg class="plane" id="iw-svg" viewBox="0 0 320 320" role="img" aria-label="IVF clusters"></svg>
+    <div class="btns" id="iw-p">
+      <button type="button" data-q="0.3,0.3">Query inside a cluster</button>
+      <button type="button" data-q="0.52,0.3">Query at the edge</button>
+      <button type="button" data-q="0.48,0.6">Query in the middle</button>
+    </div>
+    <div class="ctl"><label for="iw-n">nprobe, clusters to look at</label><input id="iw-n" type="range" min="1" max="4" step="1" value="1"><output id="iw-no">1</output></div>
+    <p class="out" id="iw-out"></p>
+  </div>
+
+  <p>Pick “Query at the edge”. The centroid nearest to the query is the one on the right, so with nprobe = 1 IVF looks only at that cluster. That is 4 centroids and 11 points, 15 comparisons in total, against 40 for brute force. But the true nearest point is in the cluster on the left, and it is missed. With nprobe = 2 it is found, and the comparisons rise to 25.</p>
+
+  <p><b>This is the limit of IVF: when a query is at an edge, its nearest neighbors can be in the neighbouring cluster.</b> “Query in the middle” even needs nprobe = 3. Raising nprobe raises recall and lowers speed, so the ANN trade is now set by a single number.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="pq">
+  <h3><span class="cn">4</span>PQ: turning each vector into a short code</h3>
+
+  <p>IVF cut the comparisons, but all the vectors still have to sit in memory. A common number takes 4 bytes, so a vector of 768 numbers takes 768 × 4 = 3,072 bytes. 100 million vectors need 100 million × 3,072 = 307.2 billion bytes. A GB is 1 billion bytes, so that is 307 GB, about 300 GB. <span class="mine">not on the slide</span></p>
+
+  <p><b>Product quantization (PQ) cuts each vector into pieces. It then replaces each piece with the number of the nearest vector in a fixed list.</b> That list is called a <b class="term">codebook</b>, and each vector in it a codeword. These numbers together make the vector's code, and the index stores this code instead of the real numbers. That is what quantization means: replacing a value with the nearest value from a fixed list.</p>
+
+  <p>Take the 4-number vector [0.9, 0.1, 0.2, 0.8] and cut it into two pieces: [0.9, 0.1] and [0.2, 0.8]. The codebook has 4 codewords: #0 [1, 0], #1 [0, 1], #2 [0.5, 0.5] and #3 [0.7, 0.7]. Here both pieces share one codebook, while real PQ has a separate codebook for each piece position. <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Codeword</th><th class="numh">Distance from [0.9, 0.1]</th><th class="numh">Distance from [0.2, 0.8]</th></tr></thead>
+    <tbody>
+      <tr><td>#0 [1, 0]</td><td class="num"><b>0.14</b></td><td class="num">1.13</td></tr>
+      <tr><td>#1 [0, 1]</td><td class="num">1.27</td><td class="num"><b>0.28</b></td></tr>
+      <tr><td>#2 [0.5, 0.5]</td><td class="num">0.57</td><td class="num">0.42</td></tr>
+      <tr><td>#3 [0.7, 0.7]</td><td class="num">0.63</td><td class="num">0.51</td></tr>
+    </tbody>
+  </table></div>
+  <p>The first distance works out as [1 − 0.9, 0 − 0.1] = [0.1, −0.1], and √(0.01 + 0.01) = 0.14. The nearest codeword to the first piece is #0, and to the second piece #1. So the whole vector becomes just the code (0, 1).</p>
+
+  <p>From the code you can rebuild the vector roughly: #0 and #1 side by side give [1, 0, 0, 1]. Now look at the dot product with the query [1, 0, 0, 1]. With the real vector it is 1 × 0.9 + 0 × 0.1 + 0 × 0.2 + 1 × 0.8 = 1.7, and with the rebuilt vector it is 1 + 1 = 2.0.</p>
+
+  <p>At real scale, cut the 768 numbers into 96 pieces of 8, and give each codebook 256 codewords. A byte has 8 bits, and 8 bits make 2 × 2 × 2 × 2 × 2 × 2 × 2 × 2 = 256 different numbers. So every code from 0 to 255 fits in 1 byte, and the whole vector takes 96 bytes. <span class="mine">common settings, not on the slide</span></p>
+  <p><b>The vector became 3,072 ÷ 96 = 32 times smaller, and 100 million vectors shrank from 300 GB to about 9.6 GB.</b> The arithmetic: 100 million × 96 = 9.6 billion bytes, which is 9.6 GB.</p>
+
+  <p>The limit shows in the 1.7 and 2.0 above: a score from a code is an estimate, and close scores can swap order. That is why many systems score the last few candidates again with their real vectors.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>With the codebook above, what is the code of the vector [0.65, 0.65, 0.95, 0.05]?</p>
+    <details><summary>Show the answer</summary>
+      <p>The nearest codeword to [0.65, 0.65] is #3 [0.7, 0.7], at distance 0.07. #2 [0.5, 0.5] is 0.21 away. The nearest to [0.95, 0.05] is #0 [1, 0], at distance 0.07. Code = <b>(3, 0)</b>.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="hnsw">
+  <h3><span class="cn">5</span>HNSW: a greedy walk on a layered graph</h3>
+
+  <p>IVF misses at the edges because it never looks at the vectors in the other clusters. A second idea builds no clusters at all: it connects each vector to a few of its nearby vectors. Such a graph is called a <b class="term">proximity graph</b>, and every vector in it is a node, as in the graph from lesson 9.</p>
+
+  <p><b>A search on a proximity graph starts at one node, and at every step moves to the neighbor nearest to the query.</b> When no neighbor is nearer than the current node, the search is stuck, and that node is the answer. This walk is called <b class="term">greedy search</b>.</p>
+
+  <p>On a single layer, starting far away means many small steps. So <b class="term">HNSW</b> (Hierarchical Navigable Small World) builds the graph in layers. Layer 0 holds every vector, and the layers above hold fewer nodes with longer jumps between them. The search starts at the top, and wherever it gets stuck, it drops down one layer.</p>
+
+  <p>So that you can do the arithmetic by hand, take a 1-dimensional example. The vectors are 21 numbers from 0 to 100, spaced 5 apart, and the distance is just the difference between two numbers. Each node is linked to its left and right neighbors in its layer. The query is 73, and the search starts at node 10 in layer 2. <span class="mine">my example</span></p>
+  <ul class="plain">
+    <li>Layer 2: 10, 50, 90</li>
+    <li>Layer 1: 10, 30, 50, 70, 90</li>
+    <li>Layer 0: 0, 5, 10, …, 100 (all 21)</li>
+  </ul>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Layer</th><th>At (distance)</th><th>Neighbors (distance)</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>2</td><td>10 (63)</td><td>50 (23)</td><td>Move to 50</td></tr>
+      <tr><td>2</td><td>50 (23)</td><td>10 (63), 90 (17)</td><td>Move to 90</td></tr>
+      <tr><td>2</td><td>90 (17)</td><td>50 (23)</td><td>Stuck, drop to layer 1</td></tr>
+      <tr><td>1</td><td>90 (17)</td><td>70 (3)</td><td>Move to 70</td></tr>
+      <tr><td>1</td><td>70 (3)</td><td>50 (23), 90 (17)</td><td>Stuck, drop to layer 0</td></tr>
+      <tr><td>0</td><td>70 (3)</td><td>?</td><td>?</td></tr>
+      <tr class="hi"><td>0</td><td>75 (2)</td><td>70 (3), 80 (7)</td><td>Stuck. Answer: 75</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Work out the sixth row</p>
+    <p>On layer 0 you are at node 70. Who are its neighbors, how far are they from the query 73, and what is the decision?</p>
+    <details><summary>Show the answer</summary>
+      <p>Layer 0 holds all 21 numbers, so 70's neighbors are 65 and 75. Distances: 65 (8) and 75 (2). 75 is nearer than the current node 70 (3), so <b>move to 75</b>.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">It took 4 steps in total (50, 90, 70, 75), and the answer is right, because 75 is the nearest number to 73. Along the way the search computed the distance to 7 nodes, while brute force would compute all 21.</p>
+
+  <p>As N grows, this gap grows a lot. The slide says HNSW takes about <button class="def" data-w="w-log2">log N</button> steps, roughly the number of times you multiply 2 by itself to reach N. Multiplying 2 by itself 20 times gives 1,048,576. So 1 million vectors take about 20 steps, and 100 million about 27.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p37.png"><img src="img/slide-p37.png" alt="Stanford slide: the three layers of HNSW and the greedy walk across them" loading="lazy"></a>
+    <figcaption>Stanford's slide: the layers of HNSW. The red point is the starting node at the top, the red arrows are the greedy walk, and the red dashed arrows show where the search dropped down a layer. The green point is the query. The arrow on the right says that edges get shorter in the lower layers, as in our example with jumps of 40, 20 and 5. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>The price of HNSW is memory, because every node also has to store its edges. <span class="mine">not on the slide</span> Its limit is that the greedy walk can get stuck at a node that is not the true nearest one. This happens especially when the vectors fall into separate groups. That is why HNSW also gives each new vector one edge to a different group.</p>
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The 5 steps above are the same as in the easy version. The 5 steps below take you to the level of the Stanford slides: first the maths of distance and dot product, then k-means for IVF's centroids, then PQ codebooks. After that come HNSW's layers, ef and the rule for choosing neighbors, and finally you read the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="distmath">
+  <h3><span class="cn">6</span>Distance and dot product: when the two give the same order</h3>
+
+  <p>Step 2 showed how to compute a distance. In this step you will see why that calculation is Pythagoras, and how distance is tied to the dot product. The tie matters because IVF and HNSW work with distances, while the MIPS of lesson 5 asks for the largest dot product.</p>
+
+  <h4 class="sub" id="pyth">Distance by Pythagoras, from 2 numbers to 768</h4>
+
+  <p>On the plane, the query [0.8, 0.2] is one point and the office hours page [0.9, 0.1] is another. To get from the first point to the second, move 0.1 along the x-axis, then 0.1 down along the y-axis. These two moves are at 90° to each other, so they are the two short sides of a right triangle. The straight line joining the two points is the long side, and Pythagoras gives its length as √(0.1² + 0.1²) = √0.02 = 0.141.</p>
+
+  <p>With a third number there is one more direction, at 90° to the first two, and Pythagoras is applied twice. The result is that the square of every number in the difference is added. For example, the distance between [0.8, 0.2, 0.5] and [0.9, 0.1, 0.3] is √(0.01 + 0.01 + 0.04) = √0.06 = 0.245. <span class="mine">my numbers</span> The same rule holds for 768 numbers: 768 subtractions, 768 squares and 767 additions. That costs about as much as a dot product, so brute force with distances is also O(N·d).</p>
+
+  <h4 class="sub" id="squared">Order without the square root</h4>
+
+  <p>To rank passages you do not need the square root. For the office hours page the sum of squares is 0.02, and for the syllabus 0.98. Taking square roots gives 0.14 and 0.99, and the order stays the same. This always happens, because √ is an <button class="def" data-w="w-increasing">increasing function</button>: a bigger number has a bigger square root. For the same reason the PQ paper skips square roots during search. <span class="mine">from the PQ paper</span> From here on, the steps also work with distance², the sum of squares.</p>
+
+  <h4 class="sub" id="unitvec">Distance and dot product for vectors of length 1</h4>
+
+  <p><a href="03-vectors-dense-en.html#expand">The dense version of lesson 3</a> expanded distance² into a formula. There the school rule (x − y)² = x² + y² − 2xy was applied to every number, and adding everything up gave:</p>
+  <div class="formula">|a − b|<sup>2</sup> = |a|<sup>2</sup> + |b|<sup>2</sup> − 2 a · b</div>
+  <p>Check it on the office hours page: |a|² = 0.8² + 0.2² = 0.68, |b|² = 0.9² + 0.1² = 0.82, and a · b = 0.74. So 0.68 + 0.82 − 2 × 0.74 = 0.02, which is the sum of squares from above.</p>
+
+  <p>Now <button class="def" data-w="w-normalize">normalize</button> both vectors, dividing each number by the vector's length so that the length becomes 1. Then |a|² = |b|² = 1, and the formula becomes:</p>
+  <div class="formula">|a − b|<sup>2</sup> = 2 − 2 a · b</div>
+  <p>The 2 is the same for every passage, so the larger the dot product, the smaller the distance². After normalizing, the query is [0.970, 0.243], the office hours page [0.994, 0.110] and the syllabus [0.110, 0.994]: <span class="mine">my arithmetic</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Dot product</th><th class="numh">2 − 2 × dot product</th><th class="numh">Distance² computed directly</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page</td><td class="num">0.991</td><td class="num">0.018</td><td class="num">0.018</td></tr>
+      <tr><td>Syllabus</td><td class="num">0.348</td><td class="num">1.304</td><td class="num">1.304</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>So for vectors of length 1, the nearest vectors are exactly the ones with the largest dot product.</b> That is why an IVF or HNSW index built on distances also does the job of MIPS for such vectors.</p>
+
+  <details class="more">
+    <summary>When the length is not 1: turning MIPS into a distance search with one extra number</summary>
+    <p>In lesson 3 the FAQ page [1.6, 1.4] was first by dot product (1.56) but last by distance (1.44). So when lengths are not 1, the nearest vector and the vector with the largest dot product can differ. The FAISS paper gives a way around this: add one more number to every passage vector, and a 0 to the query. <span class="mine">from the FAISS paper</span></p>
+    <p>The added number is √(α² − |y|²). Here |y|² is the passage's length squared, and α² is the |y|² of the longest passage. Among our four passages the longest is the FAQ page, with |y|² = 1.6² + 1.4² = 4.52. So take α² = 4.52.</p>
+    <ol class="plain">
+      <li>Office hours page: |y|² = 0.82, so the added number is √(4.52 − 0.82) = √3.70 = 1.924. The new vector is [0.9, 0.1, 1.924], and the query is [0.8, 0.2, 0].</li>
+      <li>Their distance²: 0.1² + 0.1² + 1.924² = 0.01 + 0.01 + 3.70 = 3.72.</li>
+      <li>FAQ page: the added number is √(4.52 − 4.52) = 0, and distance² = 0.8² + 1.2² + 0 = 0.64 + 1.44 = 2.08.</li>
+    </ol>
+    <p>Now the FAQ page (2.08) is nearer than the office hours page (3.72), exactly as in the dot product order. The reason is that every new passage vector has |y|² equal to α², because |y|² + (α² − |y|²) = α². The formula above then gives the new distance² = |x|² + α² − 2 x · y. |x|² and α² are the same for every passage, so the order depends only on the dot product. Check: 0.68 + 4.52 − 2 × 1.56 = 2.08.</p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="numh">Dot product</th><th class="numh">Old distance</th><th class="numh">New distance²</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td>FAQ page</td><td class="num">1.56</td><td class="num">1.44</td><td class="num">2.08</td></tr>
+        <tr><td>Office hours page</td><td class="num">0.74</td><td class="num">0.14</td><td class="num">3.72</td></tr>
+        <tr><td>Project page</td><td class="num">0.32</td><td class="num">0.85</td><td class="num">4.56</td></tr>
+        <tr><td>Syllabus</td><td class="num">0.26</td><td class="num">0.99</td><td class="num">4.68</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="kmeans">
+  <h3><span class="cn">7</span>k-means: where IVF's centroids come from</h3>
+
+  <p>In step 3 IVF's centroids were already there. The most common way to make them is <b class="term">k-means</b>, and the PQ paper builds its codebooks the same way. <span class="mine">from the PQ paper</span> In k-means, k is fixed in advance: how many clusters you want.</p>
+
+  <p><b>k-means splits the vectors into k clusters by repeating two steps.</b> The first step gives each vector to its nearest centroid, and the second makes each centroid the average of its vectors. The whole method has four steps:</p>
+  <ol class="plain">
+    <li>Start: pick k vectors at random and treat them as centroids.</li>
+    <li>Assign: put each vector into the cluster of its nearest centroid.</li>
+    <li>Average: make each centroid the average of the vectors in its cluster.</li>
+    <li>Repeat steps 2 and 3 until no vector changes its cluster.</li>
+  </ol>
+
+  <p>Run it on 6 of the course's passages. Each vector has two numbers: how much the passage is about office hours, and how much about deadlines, as in lesson 3. Here k = 2, and the queue log and the forum post start as the centroids. Both are office hours passages, so this is a deliberately bad start. <span class="mine">my vectors and start</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage and vector</th><th>Round 1</th><th>Round 2</th></tr></thead>
+    <tbody>
+      <tr><td>Office hours page<span class="sub mono">[0.9, 0.1]</span></td><td>A</td><td>A</td></tr>
+      <tr><td>Queue log<span class="sub mono">[0.85, 0.2]</span></td><td>A</td><td>A</td></tr>
+      <tr class="hi"><td>Forum post<span class="sub mono">[0.7, 0.3]</span></td><td>B</td><td>A</td></tr>
+      <tr><td>Syllabus<span class="sub mono">[0.1, 0.9]</span></td><td>B</td><td>B</td></tr>
+      <tr><td>Project page<span class="sub mono">[0.2, 0.8]</span></td><td>B</td><td>B</td></tr>
+      <tr><td>Homework 1 announcement<span class="sub mono">[0.3, 0.7]</span></td><td>B</td><td>B</td></tr>
+    </tbody>
+  </table></div>
+  <ol class="plain">
+    <li><b>Round 1.</b> The centroids are A = queue log [0.85, 0.2] and B = forum post [0.7, 0.3]. The syllabus [0.1, 0.9] has distance² 0.75² + 0.7² = 1.0525 to A, and 0.6² + 0.6² = 0.72 to B. So the syllabus goes to B, and so do the project page and Homework. The office hours page goes to A.</li>
+    <li><b>First average.</b> A = [(0.9 + 0.85) ÷ 2, (0.1 + 0.2) ÷ 2] = [0.875, 0.15]. B, the average of four vectors, is [(0.7 + 0.1 + 0.2 + 0.3) ÷ 4, (0.3 + 0.9 + 0.8 + 0.7) ÷ 4] = [0.325, 0.675].</li>
+    <li><b>Round 2.</b> The forum post [0.7, 0.3] has distance² 0.175² + 0.15² = 0.053 to A, and 0.375² + 0.375² = 0.281 to B. So the forum post moves to A, and the other five stay where they are.</li>
+    <li><b>Second average.</b> A = [0.817, 0.2] and B = [0.2, 0.8].</li>
+    <li><b>Round 3.</b> No vector changes cluster, so k-means stops.</li>
+  </ol>
+  <p>In round 1, B was very large because both starting centroids sat on the office hours side. The first average moved B's centroid towards deadlines, and the forum post returned to the office hours group.</p>
+
+  <p>Each step of k-means lowers one number, or at least never raises it: the sum of distance² from every vector to its centroid. In our example it starts at 1.553. After the first average it is 0.421, after round 2 it is 0.193, and after the second average 0.082. Averaging lowers it because the average is the point with the smallest sum of distance² to its vectors. For example, from 0.9 and 0.85 to 0.875 this sum is 0.025² + 0.025² = 0.00125, while to 0.85 it is 0.05² + 0 = 0.0025.</p>
+
+  <p>Neither assigning nor averaging ever raises this sum, so k-means always stops somewhere. But where it stops is not always the best place, as the PQ paper also notes.</p>
+
+  <p>The PQ paper calls the two conditions behind these steps Lloyd's conditions. First, each vector goes to its nearest centroid, and second, each centroid is the average of its vectors. <span class="mine">from the PQ paper</span> The squares in step 3's widget meet these conditions too. Each square is exactly the average of the 10, 11, 10 or 9 points in its cluster. <span class="mine">my arithmetic</span></p>
+
+  <h4 class="sub" id="ivfquery">IVF search on the k-means clusters</h4>
+
+  <p>Now run IVF for the query [0.8, 0.2] with nprobe = 1:</p>
+  <ol class="plain">
+    <li>Distance² to the centroids: 0.0003 to A [0.817, 0.2], and 0.72 to B [0.2, 0.8]. So IVF looks only at A.</li>
+    <li>Distance² to A's three passages: office hours page 0.02, queue log 0.0025, and forum post 0.02.</li>
+    <li>The nearest is the queue log, which is also the nearest of all 6 passages. That took 2 + 3 = 5 comparisons, against 6 for brute force.</li>
+  </ol>
+  <p>On 6 passages the saving is small, but on the 1 million vectors of step 3 the same method did 91 times less work.</p>
+
+  <h4 class="sub" id="howmany">How many clusters to make</h4>
+
+  <p>The FAISS paper gives a formula for IVF's comparisons. Suppose there are K clusters, N vectors spread evenly across them, and nprobe clusters to look at: <span class="mine">from the FAISS paper</span></p>
+  <div class="formula">comparisons = K + nprobe × N ÷ K</div>
+  <p>The first part is the comparisons with the centroids, and the second is the comparisons with the vectors in the chosen clusters. Raising K raises the first part, but each cluster gets smaller, so the second part falls. Look at the table for N = 1 million and nprobe = 10:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">K, the clusters</th><th class="numh">10 × N ÷ K</th><th class="numh">Total comparisons</th></tr></thead>
+    <tbody>
+      <tr><td class="num">100</td><td class="num">100,000</td><td class="num">100,100</td></tr>
+      <tr><td class="num">1,000</td><td class="num">10,000</td><td class="num">11,000</td></tr>
+      <tr class="hi"><td class="num">3,162</td><td class="num">3,162</td><td class="num">6,325</td></tr>
+      <tr><td class="num">10,000</td><td class="num">1,000</td><td class="num">11,000</td></tr>
+      <tr><td class="num">100,000</td><td class="num">100</td><td class="num">100,100</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>The total is smallest where the two parts are equal: K = nprobe × N ÷ K, so K² = nprobe × N.</b> Here K² = 10 × 1,000,000 = 10 million, and K = √(10 million) = 3,162. The 1,000 clusters of step 3 gave 11,000 comparisons, and 3,162 clusters give only 6,325.</p>
+
+  <p>The FAISS paper also says this is only a rough guide on real data. Clusters are not even, and with more clusters you also need a larger nprobe to keep the same recall. In the paper's experiments the fastest K came out at roughly 15 to 20 times √N. <span class="mine">from the FAISS paper</span></p>
+
+  <p><a href="04-probability-tools-dense-en.html#topk">The dense version of lesson 4</a> said that when the passages double, MIPS takes less than twice as long. The FAISS paper measured IVF's search time as growing like N<sup>α</sup>, with α = 0.34 at recall 0.9. <span class="mine">from the FAISS paper</span> When N doubles, the time grows by a factor of 2<sup>0.34</sup>. To see what that means, look at 2<sup>0.5</sup> first: 2<sup>0.5</sup> × 2<sup>0.5</sup> = 2<sup>1</sup> = 2, so 2<sup>0.5</sup> = √2 = 1.41. 0.34 is smaller than that, and 2<sup>0.34</sup> = 1.27, so the time rises by only 27%. At higher recall α rises: 0.29 at recall 0.5, and 0.45 at 0.99.</p>
+
+  <p>IVF takes its name from the <button class="def" data-w="w-inverted">inverted index</button> of lesson 11. There each word keeps a list of the passages that contain it. In IVF each centroid keeps a list of the vectors in its cluster. The PQ paper sends the query to its w nearest centroids and calls this multiple assignment. That w is today's nprobe. <span class="mine">from the PQ paper</span></p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="pqmath">
+  <h3><span class="cn">8</span>PQ codebooks, and fast scores from a code</h3>
+
+  <h4 class="sub" id="codebooks">A codebook comes from k-means</h4>
+
+  <p>The codebook in step 4 was given. Real PQ builds each codebook by running k-means separately for each piece position. <span class="mine">from the PQ paper</span> That is, take many training vectors, run k-means with 256 centroids on their first pieces, and those centroids are the first codebook. The second pieces give the second codebook, and so on, 96 codebooks in all.</p>
+
+  <p>Look at it on a small scale. Take 8 training pieces that sit close together in pairs. The first pair is [0.95, 0] and [1.05, 0], and the second [0, 0.95] and [0, 1.05]. The third pair is [0.45, 0.55] and [0.55, 0.45], and the fourth [0.75, 0.65] and [0.65, 0.75].</p>
+  <p>If the start takes one piece from each pair, k-means with k = 4 makes each pair a cluster in one round. Each centroid is the average of its pair, for example [(0.75 + 0.65) ÷ 2, (0.65 + 0.75) ÷ 2] = [0.7, 0.7]. The four centroids are [1, 0], [0, 1], [0.5, 0.5] and [0.7, 0.7], exactly the codebook of step 4. <span class="mine">my numbers</span></p>
+
+  <p>The codebooks themselves are tiny. 96 codebooks × 256 codewords × 8 numbers = 196,608 numbers, at 4 bytes each. That is 786,432 bytes, about 0.79 MB, while the codes for 100 million vectors take 9.6 GB.</p>
+
+  <h4 class="sub" id="product">Why the name says product</h4>
+
+  <p>In the toy, each piece can take one of 4 codewords, so a code can stand for 4 × 4 = 16 different vectors. In maths, the set of all pairs from two lists is called their Cartesian product, and that is where PQ gets its name. <span class="mine">from the PQ paper</span> At real scale the count is 256<sup>96</sup>. 256 = 2<sup>8</sup>, and a power of a power multiplies the exponents, for example (2<sup>2</sup>)<sup>3</sup> = 4<sup>3</sup> = 64 = 2<sup>6</sup>. So 256<sup>96</sup> = 2<sup>8 × 96</sup> = 2<sup>768</sup>, a number with 232 digits.</p>
+  <p>Nobody could store a list of that many vectors. PQ keeps only 96 × 256 = 24,576 codewords and can write any of those vectors by combining them.</p>
+
+  <h4 class="sub" id="adc">Lookup table: a score from a code without rebuilding the vector</h4>
+
+  <p>In step 4, to get a score from a code, we first rebuilt the vector [1, 0, 0, 1]. The PQ paper gives a faster way. The query is not turned into a code. Instead, the system computes the score of every query piece with every codeword in advance and keeps them in a table. <span class="mine">from the PQ paper</span></p>
+  <p>The paper calls this asymmetric distance computation, or <b class="term">ADC</b>, because the query stays exact while the passage is a code. Our query [1, 0, 0, 1] has two pieces, [1, 0] and [0, 1], and the table is:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Codeword</th><th class="numh">First piece [1, 0]</th><th class="numh">Second piece [0, 1]</th></tr></thead>
+    <tbody>
+      <tr><td>#0 [1, 0]</td><td class="num">1</td><td class="num">0</td></tr>
+      <tr><td>#1 [0, 1]</td><td class="num">0</td><td class="num">1</td></tr>
+      <tr><td>#2 [0.5, 0.5]</td><td class="num">0.5</td><td class="num">0.5</td></tr>
+      <tr><td>#3 [0.7, 0.7]</td><td class="num">0.7</td><td class="num">0.7</td></tr>
+    </tbody>
+  </table></div>
+  <p>Now each passage's score is just the sum of two numbers:</p>
+  <ol class="plain">
+    <li>Code (0, 1): #0 in the first column gives 1, and #1 in the second column gives 1. The score is 1 + 1 = 2.0, the same as in step 4.</li>
+    <li>Code (3, 0): 0.7 + 0 = 0.7. Its real vector [0.65, 0.65, 0.95, 0.05] has a dot product of 0.65 + 0.05 = 0.70.</li>
+  </ol>
+  <p>The table works because the dot product of a whole vector is the sum of the dot products of its pieces. Distance² is also the sum of the pieces' distance², and the PQ paper builds the same table with distance². At real scale the arithmetic is:</p>
+  <ol class="plain">
+    <li>Table: 96 pieces × 256 codewords = 24,576 numbers. Building it takes 256 × 768 = 196,608 multiplications, once per query.</li>
+    <li>Each passage: pick 96 numbers from the table and add them up. With the real vector it took 768 multiplications.</li>
+    <li>100 million passages: 100 million × 96 = 9.6 billion additions, against 76.8 billion multiplications with the real vectors. On top of that, 32 times less data has to be read from memory.</li>
+  </ol>
+  <p>The PQ paper says that each distance needs only m additions, where m is the number of pieces. The paper also has a method that turns the query into a code too, SDC. But it prefers ADC, because its distances are more precise. <span class="mine">from the PQ paper</span></p>
+
+  <h4 class="sub" id="ivfpq">IVF and PQ together: the code of a residual</h4>
+
+  <p>The PQ paper combines IVF and PQ and calls the combination IVFADC. <span class="mine">from the PQ paper</span> Here a vector's code is not made directly. First subtract the centroid of the vector's cluster, then make the code of the difference that is left. That difference is called the <b class="term">residual</b>.</p>
+  <p>The centroid of cluster A in step 7 is [0.817, 0.2]. The residual of the queue log [0.85, 0.2] is [0.033, 0], of the office hours page [0.9, 0.1] it is [0.083, −0.1], and of the forum post [0.7, 0.3] it is [−0.117, 0.1]. These numbers are much smaller than the real vectors, so 256 codewords can cover a small region densely. The paper also says that the code of a residual is more precise than the code of the vector itself.</p>
+  <p>The paper mostly uses m = 8 pieces and 256 codewords, so each code is 8 bytes, or 64 bits. Its SIFT image vectors have 128 numbers, which is 128 × 4 = 512 bytes, so the code is 64 times smaller. For IVF the paper uses 1,000 to 1 million clusters, and it also tests the method on 2 billion vectors. The paper re-ranks the last R candidates with the exact distance, and tries R = 10, 100 and 1,000. <span class="mine">from the PQ paper</span></p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="hnswmath">
+  <h3><span class="cn">9</span>HNSW: random layers, ef and the rule for choosing neighbors</h3>
+
+  <h4 class="sub" id="levels">How high each node goes</h4>
+
+  <p>The HNSW paper picks each new node's top layer at random, with a chance of 1/M of reaching each next layer. <span class="mine">from the HNSW paper</span> Take M = 16. Then each node reaches layer 1 with chance 1/16, 1/16 of those reach layer 2, and so on. For 100 million nodes the counts work out like this: <span class="mine">my arithmetic</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Reaches at least layer</th><th class="numh">Arithmetic</th><th class="numh">Nodes</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td class="num">all</td><td class="num">100,000,000</td></tr>
+      <tr><td>1</td><td class="num">100 million ÷ 16</td><td class="num">6,250,000</td></tr>
+      <tr><td>2</td><td class="num">÷ 256</td><td class="num">390,625</td></tr>
+      <tr><td>3</td><td class="num">÷ 4,096</td><td class="num">24,414</td></tr>
+      <tr><td>4</td><td class="num">÷ 65,536</td><td class="num">1,526</td></tr>
+      <tr><td>5</td><td class="num">÷ 1,048,576</td><td class="num">95</td></tr>
+      <tr class="hi"><td>6</td><td class="num">÷ 16,777,216</td><td class="num">6</td></tr>
+    </tbody>
+  </table></div>
+  <p>On average 0.37 nodes reach layer 7, so usually none do. The top layer is therefore about 6. This count is log<sub>16</sub> N, the number of times you multiply 16 by itself to reach 100 million: 6.64 times.</p>
+
+  <p>Step 5 used log<sub>2</sub>, which is 26.6 for 100 million. 16 = 2<sup>4</sup>, so each multiplication by 16 equals 4 multiplications by 2, and log<sub>16</sub> N = log<sub>2</sub> N ÷ 4 = 26.6 ÷ 4 = 6.64. The slide's ~log N gives no base, because changing the base only changes a fixed factor. It was the same with ln and log<sub>10</sub> in <a href="04-probability-tools-dense-en.html#logbase">lesson 4</a>.</p>
+
+  <p>The HNSW paper's argument has two parts. <span class="mine">from the HNSW paper</span> The average number of steps on each layer stays below a fixed number, however large N is. And the number of layers grows like log N, as the table above shows. So the total number of steps also grows like log N. The paper shows this firmly for low-dimensional data, and leaves it as an open question for high dimensions such as 128.</p>
+
+  <details class="more">
+    <summary>The paper's formula: l = ⌊−ln(U) × m<sub>L</sub>⌋</summary>
+    <p>The paper picks each new node's layer l with this formula: <span class="mine">from the HNSW paper</span></p>
+    <div class="formula">l = ⌊ −ln(U) × m<sub>L</sub> ⌋, where m<sub>L</sub> = 1 ÷ ln M</div>
+    <p>U is a random number between 0 and 1. For M = 16, <button class="def" data-w="w-ln">ln</button> 16 = 2.773, so m<sub>L</sub> = 0.361. ⌊x⌋ means dropping the decimal part of x, for example ⌊2.10⌋ = 2. Here are three random draws:</p>
+    <ol class="plain">
+      <li>U = 0.5: −ln 0.5 = 0.693, and 0.693 × 0.361 = 0.25. ⌊0.25⌋ = 0, so the node stays only in layer 0.</li>
+      <li>U = 0.05: −ln 0.05 = 2.996, and 2.996 × 0.361 = 1.08. The node goes up to layer 1.</li>
+      <li>U = 0.003: −ln 0.003 = 5.809, and 5.809 × 0.361 = 2.10. The node goes up to layer 2.</li>
+    </ol>
+    <p>A node reaches layer 1 when −ln(U) × m<sub>L</sub> is at least 1. Multiply both sides by ln 16, and the condition becomes −ln U ≥ ln 16. By lesson 4's rule ln(a ÷ b) = ln a − ln b, −ln U = ln(1 ÷ U). ln is an increasing function, so the condition means 1 ÷ U ≥ 16, that is, U ≤ 1/16 = 0.0625.</p>
+    <p>The chance that U is below 0.0625 is exactly 1/16. In the same way, layer 2 needs U ≤ 1/256 = 0.0039. The draw 0.05 meets the first condition, and 0.003 meets both. The paper calls m<sub>L</sub> = 1/ln M a simple and good choice.</p>
+  </details>
+
+  <h4 class="sub" id="ef">ef: several candidates instead of one</h4>
+
+  <p>The greedy walk of step 5 remembered only one node at a time. On layer 0, the HNSW paper's search keeps a list of the ef nearest nodes found so far. It looks at the neighbors of all of them. <span class="mine">from the HNSW paper</span> On the upper layers ef = 1, so the walk there is the same greedy walk. A larger <b class="term">ef</b> means more distances computed, but higher recall. So in HNSW, ef does the job that nprobe does in IVF.</p>
+  <p>In step 5's example, start at node 70 on layer 0 with ef = 3. The list holds at most 3 nodes. Each time, the search takes the nearest node in the list whose neighbors it has not yet looked at: <span class="mine">my example</span></p>
+  <ol class="plain">
+    <li>70 (3) has neighbors 65 (8) and 75 (2). The list is not full yet, so both come in: {75, 70, 65}.</li>
+    <li>75 has neighbors 70 and 80. 70 is already in the list, and 80 (7) is nearer than the list's farthest node 65 (8). So 80 comes in and 65 drops out: {75, 70, 80}.</li>
+    <li>80's new neighbor 85 (12) is farther than the list's farthest node 80 (7), so it does not come in.</li>
+    <li>The remaining candidate 65 (8) is also farther than the list's farthest node 80 (7), so the search stops.</li>
+  </ol>
+  <p>The result is {75, 70, 80}, which is exactly the true top-3 for the query 73: 75 (2), 70 (3) and 80 (7). With ef = 1 the search would return only 75. The paper's search algorithm returns the k nearest nodes from the list at the end, so ef must be at least k. DPR set the search depth of its FAISS HNSW index to 128, and that is ef. <span class="mine">from the DPR paper</span></p>
+
+  <h4 class="sub" id="heuristic">The rule for choosing neighbors, so the walk does not get trapped</h4>
+
+  <p>In the easy version each new node linked to its M nearest nodes. The HNSW paper uses a better rule, which it calls a heuristic. <span class="mine">from the HNSW paper</span> <b>Look at the candidates from nearest to farthest. Link a candidate only if it is nearer to the new node than to every node already linked.</b></p>
+  <p>Take an example. The new node is X = [3, 0], and M = 2. Cluster 1 has A [2, 0], B [1.6, 0.6] and C [1.5, −0.5], and cluster 2 has E2 [6, 0]. <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Candidate</th><th class="numh">Distance to X</th><th class="numh">Distance to A, already linked</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>A</td><td class="num">1.00</td><td class="num">–</td><td>Link</td></tr>
+      <tr><td>B</td><td class="num">1.52</td><td class="num">0.72</td><td>Skip</td></tr>
+      <tr><td>C</td><td class="num">1.58</td><td class="num">0.71</td><td>Skip</td></tr>
+      <tr class="hi"><td>E2</td><td class="num">3.00</td><td class="num">4.00</td><td>Link</td></tr>
+    </tbody>
+  </table></div>
+  <p>Choosing only the nearest would link X to A and B, both in cluster 1. The rule skips B and C, because both are nearer to A than to X, so they are within reach through A. E2 is far away, but even farther from A, so it lies in a new direction and gets linked. This is the “extra link” to e<sub>2</sub> on Stanford's backup slide.</p>
+  <p>Now put two more nodes in cluster 2, F [7, 1] and G [6.4, 0.6], linked to E2 and to each other. A, B and C in cluster 1 are also linked to each other. The query is [6.5, 0.5], and the search starts at B:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>At (distance)</th><th>Neighbors (distance)</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>B (4.90)</td><td>A (4.53), C (5.10)</td><td>Move to A</td></tr>
+      <tr><td>A (4.53)</td><td>B (4.90), C (5.10), X (3.54)</td><td>Move to X</td></tr>
+      <tr><td>X (3.54)</td><td>A (4.53), E2 (0.71)</td><td>Move to E2</td></tr>
+      <tr><td>E2 (0.71)</td><td>X (3.54), F (0.71), G (0.14)</td><td>Move to G</td></tr>
+      <tr class="hi"><td>G (0.14)</td><td>E2 (0.71), F (0.71)</td><td>Stuck. Answer: G</td></tr>
+    </tbody>
+  </table></div>
+  <p>Without the rule, X's neighbors would be A and B. The search would then go from B straight to X and get stuck there, because A and B are both farther from the query than X. The answer would be X, at distance 3.54, while the true nearest node G is at 0.14. The HNSW paper also says that with only the nearest neighbors, a search on clustered data gets stuck at cluster boundaries. Then high recall is out of reach. <span class="mine">from the HNSW paper</span></p>
+
+  <h4 class="sub" id="memory">Memory and scale</h4>
+
+  <p>Most of HNSW's memory goes to edges. <span class="mine">from the HNSW paper</span> On layer 0 each node has at most M<sub>max0</sub> edges, and the paper suggests M<sub>max0</sub> = 2M. Each upper layer has M<sub>max</sub> edges per node, and a node sits in m<sub>L</sub> upper layers on average. Each edge is a 4-byte number, so the paper's formula is:</p>
+  <div class="formula">memory per vector = (M<sub>max0</sub> + m<sub>L</sub> × M<sub>max</sub>) × 4 bytes</div>
+  <p>Take M = 16 and M<sub>max</sub> = M: <span class="mine">M<sub>max</sub> = M is my assumption</span></p>
+  <ol class="plain">
+    <li>M<sub>max0</sub> = 2 × 16 = 32, and m<sub>L</sub> × M<sub>max</sub> = 0.361 × 16 = 5.77.</li>
+    <li>(32 + 5.77) × 4 = 151 bytes per vector.</li>
+    <li>For 100 million vectors that is 15.1 GB, on top of the 300 GB for the vectors themselves.</li>
+  </ol>
+  <p>The paper considers M between 5 and 48 reasonable, and puts the memory for edges at 60 to 450 bytes per vector. Check: for M = 6, (12 + 0.558 × 6) × 4 = 61 bytes, and for M = 48, (96 + 0.258 × 48) × 4 = 434 bytes. According to the paper, a small M is better for low recall and low dimensions, and a large M for high recall and high dimensions.</p>
+  <p>Building the graph uses ef too, under the name efConstruction. When HNSW adds a new node, it finds the node's candidates with a list of this size. In the paper, an index of 10 million SIFT vectors with efConstruction = 100 took about 3 minutes on a 40-core server. For the 21 million vectors of <a href="12-dpr-dense-en.html#scale">lesson 12</a>, DPR used 512 neighbors per node and efConstruction 200. Its index took 8.5 hours to build. <span class="mine">from the DPR paper</span></p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are Stanford's three vector search slides, unchanged. Under each slide are a few questions. Think of the answer first, then open it. If something stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image to open it at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p36.png"><img src="img/slide-p36.png" alt="Stanford slide: vector search, exact search and three ANN methods" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p36-text.png"><img src="img/slide-p36-text.png" alt="The text of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's vector search slide, and below it the text, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the vector search slide</p>
+    <ol class="plain">
+      <li>
+        <p>In O(N·d) per query, what are N and d? What does it mean for 100 million passages and d = 768?</p>
+        <details><summary>Show the answer</summary>
+          <p>N is the number of vectors in the index, and d is the number of numbers in each vector. 100 million × 768 = 76.8 billion multiplications, which at 10 billion per second is about 7.7 seconds per query. Distances cost the same. (Steps 1 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>In “trade a little recall for a lot of speed”, recall of what? How does it differ from Recall@k in lesson 13?</p>
+        <details><summary>Show the answer</summary>
+          <p>Here recall says how many of brute force's true top-k the ANN returned, for example 0.9 for 9 out of 10. Recall@k in lesson 13 uses human labels to measure whether the correct passages made it into the top k. (Step 2)</p>
+        </details>
+      </li>
+      <li>
+        <p>Of IVF, PQ and HNSW, which cut the number of comparisons, and which cuts memory? Where do the centroids in the IVF line come from?</p>
+        <details><summary>Show the answer</summary>
+          <p>IVF and HNSW look at fewer vectors, so they cut comparisons. PQ cuts memory, from 3,072 to 96 bytes per vector, and with a lookup table it also makes each comparison cheaper. The centroids of “cluster the index” come from k-means, and in “probe only the nearest centroids”, nprobe decides how many centroids to look at. (Steps 3, 4, 7 and 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p37.png"><img src="img/slide-p37.png" alt="Stanford slide: the three layers of HNSW and the greedy walk across them" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p37-layers.png"><img src="img/slide-p37-layers.png" alt="The layers picture from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's HNSW slide, and below it the picture, enlarged. The picture comes from the HNSW paper.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the HNSW slide</p>
+    <ol class="plain">
+      <li>
+        <p>In the picture, what are the red point, the red arrows, the red dashed arrows and the green point? How many steps are there from the red point to the green one?</p>
+        <details><summary>Show the answer</summary>
+          <p>The red point is the starting node on the top layer. The red arrows are greedy steps, and the red dashed arrows show where the search got stuck and dropped down a layer. According to the HNSW paper's caption, the green point is the query. There is one step on each layer, so 3 steps in all. The black dashed lines show that every node of an upper layer is also in every layer below it. (Step 5)</p>
+        </details>
+      </li>
+      <li>
+        <p>What does the arrow on the right, “Decreasing characteristic radius”, say?</p>
+        <details><summary>Show the answer</summary>
+          <p>Edges get shorter in the lower layers. The upper layers have few nodes, so the edges between them are long, and one step covers a lot of ground. In our example the jump was 40 on layer 2, 20 on layer 1 and 5 on layer 0. (Step 5)</p>
+        </details>
+      </li>
+      <li>
+        <p>In “~log N hops, high recall”, what is the base of the log? How much is it for 100 million vectors, and where does the high recall come from?</p>
+        <details><summary>Show the answer</summary>
+          <p>The slide gives no base, because changing the base only changes a fixed factor. With log<sub>2</sub>, 100 million gives about 27, and the number of layers for M = 16 is log<sub>16</sub>, about 6.64. The steps on each layer stay below a fixed number, and the layers grow like log N. For high recall, layer 0 runs the ef search. (Steps 5 and 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p38.png"><img src="img/slide-p38.png" alt="Stanford slide: how the HNSW graph is built" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p38-heuristic.png"><img src="img/slide-p38-heuristic.png" alt="The picture from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's second HNSW slide: how the graph is built. The word “backup” in the title means it is an extra slide in the lecture. Below it is the picture, enlarged, which also comes from the HNSW paper.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the graph-building slide</p>
+    <ol class="plain">
+      <li>
+        <p>The slide says: “Pick its top layer at random: most nodes stay in layer 0, few reach the top”. With M = 16, how many of 100 million nodes reach layer 1, and how many reach the top?</p>
+        <details><summary>Show the answer</summary>
+          <p>The chance of reaching each next layer is 1/16. So 100 million ÷ 16 = 6,250,000 nodes reach layer 1, and about 6 reach layer 6. The other 15/16, about 94 million nodes, stay only in layer 0. (Step 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the picture, the new green node sits at the edge of cluster 1. Which rule picks the “extra link” to e<sub>2</sub>, and what would happen without it?</p>
+        <details><summary>Show the answer</summary>
+          <p>The rule for choosing neighbors: a candidate is linked only if it is nearer to the new node than to every node already linked. The other candidates in cluster 1 are nearer to nodes already linked, so they are skipped, while e<sub>2</sub> lies in a new direction and gets linked. Without it the greedy walk would get stuck at the edge of cluster 1, as it did at X in our example. (Step 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>How does the M in “M nearest neighbors” affect memory and recall?</p>
+        <details><summary>Show the answer</summary>
+          <p>On layer 0 each node has up to 2M edges, at 4 bytes each. For M = 16 that is about 151 bytes per vector, or 15.1 GB for 100 million vectors. According to the HNSW paper, a larger M is better for high recall, but memory grows with it. (Step 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>Brute force costs O(N·d), with distances too. For vectors of length 1, distance² = 2 − 2 × dot product, so a distance index also does the job of MIPS.</li>
+    <li>IVF's centroids come from k-means, and its comparisons are K + nprobe × N ÷ K, smallest at K = √(nprobe × N). PQ's codebooks also come from k-means, and with a lookup table each vector's score takes 96 additions.</li>
+    <li>In HNSW, 1/M of the nodes reach each higher layer, so there are about log N layers. ef sets the recall, and the rule for choosing neighbors keeps edges between clusters so the greedy walk does not get trapped.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-exact">Exact search (brute force)</dt><dd>Comparing with every vector to get the guaranteed top-k. For example, with 21 vectors, computing 21 distances.</dd>
+    <dt id="w-bigo">Big-O, O(N·d)</dt><dd>How the cost grows as N or d grows. For example, in O(N·d), if N doubles, the cost doubles too.</dd>
+    <dt id="w-nn">Nearest neighbors</dt><dd>The vectors nearest to the query. For example, among the neighbors of the query 73, 75 comes first.</dd>
+    <dt id="w-ann">ANN</dt><dd>Approximate nearest neighbor search: looking at fewer vectors and finding the right neighbors most of the time. For example, finding 9 of the true top-10 gives recall 0.9.</dd>
+    <dt id="w-distance">Distance</dt><dd>The length of the difference between two vectors. For example, [0.8, 0.2] and [0.9, 0.1] differ by [0.1, −0.1], so the distance is √(0.01 + 0.01) = 0.14.</dd>
+    <dt id="w-ivf">IVF</dt><dd>Inverted file index: splitting the vectors into clusters and looking only at the clusters near the query. For example, 11,000 comparisons for 1 million vectors.</dd>
+    <dt id="w-nprobe">nprobe</dt><dd>How many clusters IVF looks at. For example, with 1,000 clusters and nprobe = 10, only the vectors of 10 clusters are checked.</dd>
+    <dt id="w-pq">Product quantization (PQ)</dt><dd>Cutting a vector into pieces and storing, for each piece, the number of its nearest codeword. For example, [0.9, 0.1, 0.2, 0.8] becomes the code (0, 1).</dd>
+    <dt id="w-codebook">Codebook</dt><dd>The list of sample vectors (codewords) for a piece. For example, #0 [1, 0], #1 [0, 1], #2 [0.5, 0.5], #3 [0.7, 0.7].</dd>
+    <dt id="w-proxgraph">Proximity graph</dt><dd>A graph in which every vector is linked to its nearby vectors. For example, 70 is linked to its neighbors 65 and 75.</dd>
+    <dt id="w-greedy">Greedy search</dt><dd>Moving at every step to the neighbor nearest to the query, until stuck. For example, moving from 70 to 75 for the query 73.</dd>
+    <dt id="w-hnsw">HNSW</dt><dd>A layered proximity graph: a greedy walk from the top, dropping one layer when stuck. For example, 4 steps for the query 73.</dd>
+      <dt id="w-kmeans">k-means</dt><dd>A way to split vectors into k clusters: give each vector to its nearest centroid, then make each centroid the average, and repeat. For example, on 6 passages it ends after 3 rounds with A = [0.817, 0.2] and B = [0.2, 0.8].</dd>
+    <dt id="w-adc">Lookup table (ADC)</dt><dd>Computing the score of every query piece with every codeword in advance and keeping them in a table. Each passage's score is then just a sum of table entries. For example, the score of code (0, 1) is 1 + 1 = 2.0.</dd>
+    <dt id="w-residual">Residual</dt><dd>What is left after subtracting a vector's cluster centroid from it. IVFADC stores the code of this difference. For example, queue log [0.85, 0.2] − [0.817, 0.2] = [0.033, 0].</dd>
+    <dt id="w-ef">ef</dt><dd>The size of the list of nearest nodes found so far in an HNSW search. A larger ef means more distances and higher recall. For example, starting at node 70 with ef = 3 gives {75, 70, 80}.</dd>
+    <dt id="w-heuristic">Rule for choosing neighbors (heuristic)</dt><dd>A candidate is linked only if it is nearer to the new node than to every node already linked. For example, X links to A and E2, and B and C are skipped.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="09-raptor-graphrag-dense-en.html">Previous: Lesson 9</a>
+    <a href="11-bm25-dense-en.html">Next: Lesson 11, BM25</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. The pictures on the HNSW slides come from the HNSW paper.<br>
+  Papers: Malkov and Yashunin, “Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs” (HNSW paper). Jégou, Douze and Schmid, 2011, “Product quantization for nearest neighbor search” (PQ paper). Douze et al., 2024, “The Faiss library” (FAISS paper). Karpukhin et al., 2020, “Dense Passage Retrieval for Open-Domain Question Answering” (DPR paper).<br>
+  Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the … paper” are in that paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var PTS = [[0.22,0.31],[0.23,0.22],[0.15,0.23],[0.37,0.3],[0.36,0.28],[0.29,0.27],[0.07,0.34],[0.31,0.3],[0.06,0.06],[0.15,0.2],[0.78,0.24],[0.81,0.18],[0.78,0.29],[0.68,0.44],[0.81,0.38],[0.68,0.17],[0.71,0.24],[0.82,0.28],[0.7,0.14],[0.69,0.38],[0.16,0.78],[0.3,0.59],[0.26,0.89],[0.03,0.71],[0.24,0.66],[0.3,0.74],[0.09,0.84],[0.32,0.85],[0.41,0.79],[0.26,0.61],[0.82,0.68],[0.7,0.61],[0.64,0.69],[0.89,0.53],[0.59,0.78],[0.91,0.81],[0.54,0.47],[0.79,0.67],[0.63,0.86],[0.87,0.77]];
+  var CEN = [[0.221,0.251],[0.727,0.292],[0.237,0.746],[0.76,0.711]];
+  var NS = "http://www.w3.org/2000/svg", svg = document.getElementById("iw-svg");
+  var nIn = document.getElementById("iw-n"), nOut = document.getElementById("iw-no"), out = document.getElementById("iw-out");
+  var q = [0.52, 0.3];
+  function d(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+  function nearestC(p) { var best = 0; for (var j = 1; j < CEN.length; j++) if (d(p, CEN[j]) < d(p, CEN[best])) best = j; return best; }
+  var ASSIGN = PTS.map(nearestC);
+  function X(v) { return 10 + v * 300; }
+  function Y(v) { return 310 - v * 300; }
+  function el(tag, a, t) { var e = document.createElementNS(NS, tag); for (var k in a) e.setAttribute(k, a[k]); if (t != null) e.textContent = t; return e; }
+  function render() {
+    var np = Number(nIn.value); nOut.textContent = np;
+    var order = CEN.map(function (c, j) { return j; }).sort(function (a, b) { return d(q, CEN[a]) - d(q, CEN[b]); }).slice(0, np);
+    var cand = [], trueI = 0;
+    PTS.forEach(function (p, i) { if (order.indexOf(ASSIGN[i]) >= 0) cand.push(i); if (d(q, p) < d(q, PTS[trueI])) trueI = i; });
+    var bestI = cand.reduce(function (b, i) { return b < 0 || d(q, PTS[i]) < d(q, PTS[b]) ? i : b; }, -1);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    svg.appendChild(el("rect", { x: 10, y: 10, width: 300, height: 300, "class": "frame" }));
+    PTS.forEach(function (p, i) {
+      var cls = "pt" + (cand.indexOf(i) >= 0 ? " cand" : "") + (i === bestI ? " best" : "");
+      svg.appendChild(el("circle", { cx: X(p[0]), cy: Y(p[1]), r: 5, "class": cls }));
+    });
+    svg.appendChild(el("circle", { cx: X(PTS[trueI][0]), cy: Y(PTS[trueI][1]), r: 9, "class": "pt true" }));
+    CEN.forEach(function (c, j) {
+      svg.appendChild(el("rect", { x: X(c[0]) - 7, y: Y(c[1]) - 7, width: 14, height: 14, "class": "cen" + (order.indexOf(j) >= 0 ? " on" : "") }));
+    });
+    svg.appendChild(el("circle", { cx: X(q[0]), cy: Y(q[1]), r: 7, "class": "q" }));
+    svg.appendChild(el("text", { x: X(q[0]) + 10, y: Y(q[1]) - 8 }, "query"));
+    var found = bestI === trueI;
+    out.innerHTML = "Comparisons: " + CEN.length + " centroids + " + cand.length + " points = <b>" + (CEN.length + cand.length) + "</b> (brute force: " + PTS.length + "). " +
+      (found ? "The true nearest point was <b>found</b>." : "The true nearest point was <b>missed</b>. It is in another cluster.");
+    document.querySelectorAll("#iw-p button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.q === q.join(",") ? "true" : "false"); });
+  }
+  function setFrom(ev) {
+    var pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+    var p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    q = [Math.round(Math.min(1, Math.max(0, (p.x - 10) / 300)) * 100) / 100, Math.round(Math.min(1, Math.max(0, (310 - p.y) / 300)) * 100) / 100];
+    render();
+  }
+  svg.addEventListener("pointerdown", setFrom);
+  nIn.addEventListener("input", render);
+  document.querySelectorAll("#iw-p button").forEach(function (b) { b.addEventListener("click", function () { q = b.dataset.q.split(",").map(Number); render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

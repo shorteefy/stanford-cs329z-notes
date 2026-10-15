@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="BM25 ranked the old forum post above the queue log, and the pipeline sent it to the prompt without checking it. Retrieval has to become a decision at every step, someone has to check what came back, and at the end you read Stanford&#39;s Self-RAG and CRAG slides yourself.">
+<title>Lesson 16: Agentic RAG (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 16 / 18 · <a href="16-agentic-rag-en.html">Easy</a> · <b>Dense</b> · <a href="16-agentic-rag-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 16 · Dense version</p>
+  <h1>Agentic RAG: retrieval as a decision</h1>
+  <p class="lede"><b>In agentic RAG, retrieval is no longer a fixed step in a pipeline. At every step an LLM decides whether to retrieve, what to retrieve, and whether what came back is good enough.</b> An LLM working this way is called an agent, and this lesson shows two ways of making these decisions: Self-RAG and CRAG.</p>
+  <p class="lede">The need for it showed up in <a href="11-bm25-dense-en.html#bm25">lesson 11</a>. For the question <q>which office hour is least crowded</q>, BM25 gave the old forum post 2.749 and the queue log 2.473. At K = 1 only the forum post reaches the prompt, and the LLM writes <q>midweek afternoons [P4]</q>, where [P4] is that post's ID. This is the wrong answer from lesson 1, now with a citation. The opposite mistake happens too: even for <q>what is 17 × 3?</q> the pipeline searches 60,000 passages.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 9 steps. The first 5 are the same as in the easy version, and steps 6 to 9 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#agent">Agents: action, observation and the loop</a><span class="can">Follow an agent loop step by step, and count its scores by hand.</span></li>
+      <li><a href="#decisions">Three decisions, and where a pipeline falls short</a><span class="can">Explain each decision with one question, and read the agentic RAG slide.</span></li>
+      <li><a href="#selfrag">Self-RAG: decisions as tokens</a><span class="can">Rank segments from their reflection tokens, and read the Self-RAG slide.</span></li>
+      <li><a href="#crag">CRAG: a separate evaluator and two thresholds</a><span class="can">Name CRAG's action from a confidence, and read the CRAG slide.</span></li>
+      <li><a href="#compare">Self-RAG and CRAG side by side, and their limits</a><span class="can">Say who makes which decision, and why lesson 17 is needed.</span></li>
+    <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#srscore">The maths of Self-RAG: a segment's score</a><span class="can">Turn a token's probability into a share, decide retrieval from δ, and work out each segment's score by hand.</span></li>
+      <li><a href="#srtrain">Self-RAG's training, and the paper's results</a><span class="can">Say where the reflection tokens in the training data came from, and read the paper's tables in points.</span></li>
+      <li><a href="#cragpaper">CRAG's real evaluator and thresholds</a><span class="can">Work out the verdict on a set of documents on the paper's scale, and read the results in points and percent.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line and every box of the three agentic RAG slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="01-how-llms-answer-dense-en.html#next-token">Lesson 1</a> (next-token prediction, vocabulary), <a href="06-rag-pipeline-dense-en.html#pre">Lesson 6</a> (pipeline, query rewriting, ITER-RETGEN) and <a href="14-hybrid-rerank-dense-en.html#rerank">Lesson 14</a> (reranker). From step 6 on, <a href="04-probability-tools-dense-en.html#softmax">Lesson 4</a> (probability, softmax, ln, loss) and <a href="13-metrics-dense-en.html">Lesson 13</a> (points) also help. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="agent">
+  <h3><span class="cn">1</span>Agents: action, observation and the loop</h3>
+
+  <p><b>An agent is an LLM that works in a loop. It chooses the next thing to do, that thing gets done, and then it reads the result and chooses again.</b> What the agent chooses to do is called an <b class="term">action</b>, such as searching or writing the answer. A program actually carries out the action, a search engine for example, and that program is called a <b class="term">tool</b>. What the tool returns, and what the agent reads before its next step, is called the <b class="term">observation</b>.</p>
+
+  <p>The need for a loop showed up in <a href="06-rag-pipeline-dense-en.html#modular">lesson 6</a>. There, <button class="def" data-w="w-iterretgen">ITER-RETGEN</button> searched twice, and a person had fixed that count in advance. But on the Jed Hoyer <button class="def" data-w="w-multihop">multi-hop</button> question the model made three searches, and 17 × 3 needs none. No fixed count suits both, so the count should come from whoever is reading the result of each search.</p>
+
+  <p>Here is a small loop. The user asks in shorthand, <q>OH timings?</q> The retriever is the word overlap from lesson 6, which counts how many query words also appear in a passage. <span class="mine">my example loop</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Step</th><th>The agent's action</th><th>Observation</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Search: <q>OH timings</q></td><td>Every passage scores 0</td></tr>
+      <tr><td>2</td><td>Search: <q>CS 329Z office hours schedule</q></td><td>Office hours page 2, queue log 1</td></tr>
+      <tr class="hi"><td>3</td><td>Answer: <q>Tuesday 4pm, Room 104, or Thursday 9am, Zoom [P2]</q></td><td>Loop ends</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The first query's words, oh and timings, appear in no passage. In the second query, office and hours both appear in the office hours page, so it scores 2. The queue log has office, but it says hour instead of hours, so it scores 1. The [P2] in the answer is the office hours page's ID.</p>
+
+  <p>The second step came from the first step's observation: nothing came back, so the agent rewrote the query. This is the <button class="def" data-w="w-rewriting">query rewriting</button> from lesson 6. Lesson 6's Advanced RAG pipeline rewrites every query, which costs an extra LLM call on every query. Each step of the agent also costs an LLM call, but here the rewriting step happened only because the search came back empty.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Suppose the user had typed <q>office hour timings</q> in the first place. What would each passage score, and would the agent need to rewrite the query?</p>
+    <details><summary>Show the answer</summary>
+      <p>The queue log has both office and hour, so it scores 2. The office hours page has only office, so it scores 1. The search did not come back empty, so there is no reason to change the query. But the queue log has the times and not the place, so the agent now has to decide whether what it found is enough. That is the third decision in the next step.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="decisions">
+  <h3><span class="cn">2</span>Three decisions, and where a pipeline falls short</h3>
+
+  <p><b>At every step, an agent that retrieves faces three decisions.</b> First, retrieve or answer directly. Second, which query to send. Third, whether what came back is good enough. All three appeared in the loop of step 1: the agent chose to search, then wrote a new query, then judged the result good enough and answered.</p>
+
+  <p>A pipeline makes none of these decisions. It runs the same steps on every question. Below is one question per decision where the pipeline falls short:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Decision</th><th>Question</th><th>What the pipeline does</th><th>What an agent can do</th></tr></thead>
+    <tbody>
+      <tr><td>1. Retrieve?</td><td><q>What is 17 × 3?</q></td><td>Searches 60,000 passages<span class="sub">and puts about 2,500 tokens into the prompt</span></td><td>0 searches, answers 51 directly</td></tr>
+      <tr><td>2. Which query?</td><td><q>OH timings?</q></td><td>Sends that query as is, gets 0 passages</td><td>Changes the query when the search comes back empty</td></tr>
+      <tr class="hi"><td>3. Good enough?</td><td>Least crowded, K = 1</td><td>Sends the forum post alone</td><td>The post is a 2024 opinion, so it searches again</td></tr>
+    </tbody>
+  </table></div>
+
+  <p><b>When retrieval becomes an action of the agent, and these three decisions are made at every step, the result is called <span class="term">agentic RAG</span>.</b> Stanford's slide says exactly this:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p56.png"><img src="img/slide-p56.png" alt="Stanford slide: agentic RAG, retrieval inside the loop, and three decisions" loading="lazy"></a>
+    <figcaption>Stanford's slide: retrieval inside the loop. The top line says that nothing so far decides whether to retrieve, what to ask, or when to stop. Below are the same three decisions. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>The <q>when to stop</q> at the top and the third decision at the bottom are the same thing. If the result is good enough, the agent stops and answers, and if it is not, the agent searches again.</p>
+
+  <p>The question now is who makes these decisions. This lesson gives two answers. In Self-RAG the model that writes the answer makes them itself, and in CRAG a separate, small model checks the result.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="selfrag">
+  <h3><span class="cn">3</span>Self-RAG: decisions as tokens</h3>
+
+  <p>The most direct option is to let the LLM that writes the answer make the decisions, because it is reading both the question and the passages. The difficulty is that an LLM only writes the <button class="def" data-w="w-ntp">next token</button>. It does not announce decisions separately.</p>
+
+  <p><b>Self-RAG solves this by turning the decisions into tokens as well.</b> It adds some special tokens to the model's <button class="def" data-w="w-vocabulary">vocabulary</button>, called <b class="term">reflection tokens</b>. The model gets special training, and then it writes these tokens just like any other text. Self-RAG is a 2024 method by Asai and colleagues, and its main tokens are these:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th>Meaning</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td>Search now</td><td>Decision 1</td></tr>
+      <tr><td>Relevant / Irrelevant</td><td>Whether the retrieved passage is useful for the question</td><td>Decision 3</td></tr>
+      <tr><td>Supported / Partially</td><td>Whether the passage fully or only partly backs up what the model wrote</td><td>A second check for decision 3</td></tr>
+    </tbody>
+  </table></div>
+  <p>The paper has a few more tokens, such as No support. A fourth kind gives the whole answer a score from 1 to 5, and it is covered in the dense version.</p>
+
+  <p>Now take our question: <q>Which office hour this week is least crowded?</q> Suppose the model wrote Retrieve, and the retriever brought the queue log, the old forum post and the Homework 1 announcement. The model writes the next segment separately with each passage, and adds reflection tokens to each segment. <span class="mine">my example and tokens</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>Reflection tokens</th><th>Segment the model wrote</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td>Relevant, Supported</td><td><q>Thursday 9am, about 3 waiting.</q></td></tr>
+      <tr><td>Old forum post</td><td>Relevant, Partially</td><td><q>Wednesday afternoon is quietest.</q></td></tr>
+      <tr class="hi"><td>Homework 1 announcement</td><td>?</td><td><q>Homework 1 will be released on Oct 5.</q></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The forum post segment is Partially, because the post says midweek, not Wednesday, and it also says usually. So the Wednesday claim is only half in the passage. The queue log claim is written out in full in the queue log, so that segment is Supported.</p>
+
+  <div class="recall">
+    <p class="rl">Work out the third row</p>
+    <p>Which token goes on the Homework segment? What is the order of the three segments, and which one joins the answer?</p>
+    <details><summary>Show the answer</summary>
+      <p><b>Irrelevant</b>. The Homework date is true, and the announcement even backs it up, but the question is about crowding at office hours. The order is the queue log, then the forum post, then Homework. The queue log segment is Relevant and Supported, so that is the one that joins the answer: Thursday 9am.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>So Self-RAG checks each segment on two counts: whether it is useful for the question, and whether the passage backs it up.</b> Stanford's slide shows the paper's own example, and you can now read it:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p57.png"><img src="img/slide-p57.png" alt="Stanford slide: the three steps of Self-RAG on the US states example" loading="lazy"></a>
+    <figcaption>Stanford's slide: the three steps of Self-RAG. Green boxes are the good tokens, the orange box is Partially, and the red box is Irrelevant.</figcaption>
+  </figure>
+
+  <p>In step 1 the model writes a first sentence, then Retrieve, and three passages arrive. In step 2 it writes one segment with each passage, and in step 3 the tokens give the order 1 &gt; 3 &gt; 2. The Texas claim is true, but its passage is Irrelevant, so it comes last. Then the model writes Retrieve again and repeats the process.</p>
+
+  <p>Self-RAG has a cost. The generator needs special training, so a <button class="def" data-w="w-frozen">frozen LLM</button> from an API does not work here. It has to write a separate segment with each passage, which means K generations, like the <button class="def" data-w="w-ragseq">RAG-Sequence</button> model of lesson 5. And Supported only says that the claim is in the passage. It does not say that the passage is still true.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="crag">
+  <h3><span class="cn">4</span>CRAG: a separate evaluator and two thresholds</h3>
+
+  <p>Most systems are built on a frozen LLM, so decision 3 has to be made by something outside the generator. A first idea is the <button class="def" data-w="w-rerank">reranker</button> from <a href="14-hybrid-rerank-dense-en.html#rerank">lesson 14</a>. But a reranker only changes the order. Suppose the retriever brought only the Homework 1 announcement and the project page, both useless for the crowding question. The reranker still puts one of them on top, and that one goes into the prompt. <span class="mine">my example</span></p>
+
+  <p><b>In CRAG, a small model gives every document a confidence: how right this document is for this question.</b> This model is called the <b class="term">retrieval evaluator</b>. CRAG stands for Corrective RAG, a 2024 method by Yan and colleagues. The confidence has a meaning of its own, so you can set a limit on it in advance, and such a limit is called a <b class="term">threshold</b>.</p>
+
+  <p>CRAG keeps two thresholds, an upper one and a lower one. Here the confidence runs from 0 to 1, and the thresholds are 0.6 and 0.2. <span class="mine">my scale and numbers</span> The paper's own numbers are in the dense version. Start with the case where the retriever brought a single document, K = 1:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Single document</th><th class="numh">Confidence</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.85</td><td>Correct<span class="sub">above 0.6</span></td></tr>
+      <tr class="hi"><td>Old forum post</td><td class="num">0.4</td><td>Ambiguous<span class="sub">between 0.2 and 0.6</span></td></tr>
+      <tr><td>Homework 1 announcement</td><td class="num">0.05</td><td>Incorrect<span class="sub">below 0.2</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>With several documents, one document above 0.6 is enough for Correct, while Incorrect needs every document below 0.2. In the reranker example Homework is at 0.05 and the project page at 0.1, so the verdict is Incorrect. <span class="mine">my 0.1 for the project page</span> Each verdict triggers a different action:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Verdict</th><th>Action</th><th>What the generator gets</th></tr></thead>
+    <tbody>
+      <tr><td><b>Correct</b></td><td>Knowledge refinement: split the documents into strips, drop the useless strips, join the rest</td><td>Question + cleaned documents</td></tr>
+      <tr><td><b>Incorrect</b></td><td>Drop the documents, rewrite the query, search the web</td><td>Question + web results</td></tr>
+      <tr><td><b>Ambiguous</b></td><td>Both</td><td>Question + cleaned documents + web results</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="widget" id="cw">
+    <h4>CRAG's verdict at K = 1</h4>
+    <p class="hint">The retriever brought one document. Change the evaluator's confidence and see what CRAG does. The thresholds are 0.6 and 0.2. <span class="mine">my thresholds and confidences</span></p>
+    <div class="btns">
+      <button type="button" data-v="0.85">Queue log</button>
+      <button type="button" data-v="0.4">Old forum post</button>
+      <button type="button" data-v="0.05">Homework 1 announcement</button>
+    </div>
+    <div class="ctl"><label for="cw-s">Evaluator's confidence</label><input id="cw-s" type="range" min="0" max="1" step="0.05" value="0.85"><output id="cw-so">0.85</output></div>
+    <div class="tscroll"><table class="t"><tbody id="cw-body"></tbody></table></div>
+  </div>
+
+  <p>Even on the Correct path the document does not go in whole. CRAG splits it into small pieces called strips. It then checks each strip with the evaluator, drops the useless strips, and joins the rest in order. This is called <b class="term">knowledge refinement</b>. For the question <q>When is the milestone due?</q>, the syllabus's three sentences become three strips: <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Syllabus strip</th><th>Keep?</th></tr></thead>
+    <tbody>
+      <tr><td><q>The project milestone is due Week 6, Thursday 11:59pm.</q></td><td>Yes, this is the answer</td></tr>
+      <tr><td><q>Late days may not be applied to the milestone.</q></td><td>Yes, it is about the milestone deadline</td></tr>
+      <tr class="hi"><td><q>The final report is due Week 10.</q></td><td>No, this is about the final report</td></tr>
+    </tbody>
+  </table></div>
+  <p>The generator gets 2 of the 3 strips. The Week 10 line never reaches the prompt, so the generator cannot mistake it for the milestone date.</p>
+
+  <p>On the Incorrect path CRAG drops its documents. An LLM rewrites the question as keywords suited to a search engine, and CRAG searches the web. On the slide the question is <q>Who was the screenwriter for Death of a Batman?</q>, and the new query has three parts: Death of a Batman, screenwriter and Wikipedia.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p58.png"><img src="img/slide-p58.png" alt="Stanford slide: CRAG, the evaluator's three verdicts and their actions" loading="lazy"></a>
+    <figcaption>Stanford's slide: CRAG. Correct runs Knowledge Refinement, Incorrect runs Knowledge Searching, and Ambiguous runs both. The bottom row shows what the generator gets for each verdict.</figcaption>
+  </figure>
+
+  <p class="callout"><b>Watch out:</b> Not every text from the web can be trusted. It can contain false claims, or even instructions that steer the agent off course, which come up in <a href="18-failure-modes-dense-en.html">lesson 18</a>. That is why the slide has a Select step after the web search too.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>At K = 1 the forum post arrives alone, and the evaluator gives it 0.4. What does CRAG do, and what does the generator get?</p>
+    <details><summary>Show the answer</summary>
+      <p>0.4 is between 0.2 and 0.6, so the verdict is <b>Ambiguous</b>. CRAG refines the forum post and keeps it, and it also rewrites the query and searches the web. The generator gets the question, the cleaned part of the forum post and the web results.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="compare">
+  <h3><span class="cn">5</span>Self-RAG and CRAG side by side, and their limits</h3>
+
+  <p>Now go back to the two questions from the start. On 17 × 3, a well-trained Self-RAG does not write Retrieve, and writes 51 directly. In the paper's own example, too, the model does not search for a prompt that asks for an essay. <span class="mine">from the paper</span> CRAG would search here as well, because it searches on every question and only checks the result.</p>
+
+  <p>If the forum post arrives alone at K = 1, Self-RAG's Wednesday segment is Partially, and the model can write Retrieve again. CRAG's evaluator gives the forum post 0.4, so CRAG also searches the web. <b>Neither of them passes the forum post on unchecked any more.</b></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>Self-RAG</th><th>CRAG</th></tr></thead>
+    <tbody>
+      <tr><td><b>Who decides</b></td><td>The generator itself, with reflection tokens</td><td>A separate evaluator, with two thresholds</td></tr>
+      <tr><td><b>Does the generator change?</b></td><td>Yes, special training</td><td>No, any LLM</td></tr>
+      <tr><td><b>Decision 1: retrieve?</b></td><td>With the Retrieve token</td><td>Always retrieves</td></tr>
+      <tr><td><b>Decision 2: which query?</b></td><td>Does not write a separate query<span class="sub">from the paper</span></td><td>Rewrites the query for the web</td></tr>
+      <tr><td><b>Decision 3: good enough?</b></td><td>With the Relevant and Supported tokens</td><td>With the evaluator's confidence</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Both have limits. A person sets CRAG's thresholds, and the evaluator can make mistakes too. Self-RAG's reflection tokens are also written by the model, so they can be wrong as well. And neither of them learned these decisions by trying things out.</p>
+
+  <p>In <a href="17-search-r1-dense-en.html">lesson 17</a> the model learns these decisions by trying and seeing the result: when to search, which query to write, and when to stop. In a loop, one wrong decision also affects the later steps, which is the subject of <a href="18-failure-modes-dense-en.html">lesson 18</a>.</p>
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The 5 steps above are the same as in the easy version. The 4 steps below take you to the level of the Stanford slides: first the maths of Self-RAG's tokens, then its training and results, then CRAG's real evaluator and its results. Finally you read the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="srscore">
+  <h3><span class="cn">6</span>The maths of Self-RAG: from token probabilities to a segment score</h3>
+
+  <p>Step 3 had three kinds of tokens, and I gave the order of the segments by looking at the tokens. The paper has four kinds of tokens, and the order comes from a number. Each kind has a few values of its own: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Kind</th><th>Values</th><th>What it checks</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td>yes, no, continue</td><td>Search now, do not search, or keep using the passage retrieved earlier</td></tr>
+      <tr><td>IsRel</td><td><b>relevant</b>, irrelevant</td><td>Whether the passage is useful for the question</td></tr>
+      <tr><td>IsSup</td><td><b>fully supported</b>, partially supported, no support</td><td>How far the passage backs up the segment</td></tr>
+      <tr><td>IsUse</td><td><b>5</b>, 4, 3, 2, 1</td><td>How useful the answer is for the question</td></tr>
+    </tbody>
+  </table></div>
+  <p>The paper calls the last three kinds critique tokens, because they judge what was written. In each kind one value is the best, shown in bold in the table. The Supported of step 3 is fully supported here, and Partially is partially supported.</p>
+
+  <h4 class="sub" id="share">From a token's probability to a share</h4>
+
+  <p>At every step the model gives each token in the whole vocabulary a <button class="def" data-w="w-probability">probability</button>, and together they add up to 1. Self-RAG picks out the tokens of one kind and shares their probabilities among themselves. Suppose that after the queue log segment, relevant has probability 0.54, irrelevant 0.06, and all other tokens together 0.40. <span class="mine">my numbers</span></p>
+  <ol class="plain">
+    <li>Add the two IsRel tokens: 0.54 + 0.06 = 0.60.</li>
+    <li>Divide relevant by that sum: 0.54 ÷ 0.60 = 0.9.</li>
+  </ol>
+  <p>This 0.9 is relevant's share among the IsRel tokens only. The other 0.40 plays no part, so the share always stays between 0 and 1. The paper writes it like this:</p>
+  <div class="formula">s<sub>IsRel</sub> = p(relevant) ÷ ( p(relevant) + p(irrelevant) )</div>
+  <p>Here p(relevant) is the probability of the relevant token, 0.54, and the bottom is the sum of both, 0.60. In lesson 4's <button class="def" data-w="w-softmax">softmax</button> the share was found the same way: divide one number by the sum of its group.</p>
+
+  <h4 class="sub" id="delta">The retrieval decision: the threshold δ</h4>
+
+  <p>Decision 1 uses the same kind of share. Self-RAG retrieves when yes's share, between yes and no, is above a threshold. The paper writes this threshold as δ, read "delta":</p>
+  <div class="formula">retrieve if p(yes) ÷ ( p(yes) + p(no) ) &gt; δ</div>
+  <p>Look at two questions, where p(yes) and p(no) are the probabilities of the Retrieve tokens: <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Question</th><th class="numh">p(yes), p(no)</th><th class="numh">yes's share</th></tr></thead>
+    <tbody>
+      <tr><td><q>What is 17 × 3?</q></td><td class="num">0.03, 0.87</td><td class="num">0.03 ÷ 0.90 = 0.033</td></tr>
+      <tr><td>The least-crowded question</td><td class="num">0.56, 0.24</td><td class="num">0.56 ÷ 0.80 = 0.70</td></tr>
+    </tbody>
+  </table></div>
+  <p>Now change δ and see which question retrieves:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">δ</th><th>17 × 3 (0.033)</th><th>Least crowded (0.70)</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0</td><td>Retrieves</td><td>Retrieves</td></tr>
+      <tr class="hi"><td class="num">0.2</td><td>Does not retrieve</td><td>Retrieves</td></tr>
+      <tr><td class="num">0.5</td><td>Does not retrieve</td><td>Retrieves</td></tr>
+      <tr><td class="num">0.8</td><td>Does not retrieve</td><td>Does not retrieve</td></tr>
+    </tbody>
+  </table></div>
+  <p>So the larger δ is, the less the model retrieves. The paper sets δ = 0.2 for most tasks, to make the model retrieve often. On a task called ALCE, where every claim needs a citation, it sets δ = 0. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="segment">Each segment's score: a weighted sum</h4>
+
+  <p>Now the shares of the three critique kinds combine into one number. First each kind's share, by the paper's rules: <span class="mine">from the paper</span></p>
+  <ul class="plain">
+    <li><b>IsRel</b>: relevant's share, as computed above.</li>
+    <li><b>IsSup</b>: fully's share, plus half of partially's share. So partially supported gets half weight.</li>
+    <li><b>IsUse</b>: the five values get weights. 5 gets 1, 4 gets 0.5, 3 gets 0, 2 gets −0.5, and 1 gets −1. Each value's share is multiplied by its weight, and the products are added.</li>
+  </ul>
+  <p>The IsUse sum is a kind of average. Suppose 5 has share 0.6, 4 has 0.3 and 3 has 0.1. Then s<sub>IsUse</sub> = 1 × 0.6 + 0.5 × 0.3 + 0 × 0.1 = 0.75. If all the share were on 5 it would be 1, and if all of it were on 1 it would be −1. So s<sub>IsUse</sub> stays between −1 and 1.</p>
+
+  <p>For our three segments, the model gave these shares. Within each group the shares add up to 1: <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Segment from</th><th class="numh">relevant</th><th class="numh">fully, partially, no</th><th class="numh">5, 4, 3, 2, 1</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.9</td><td class="num">0.8, 0.15, 0.05</td><td class="num">0.6, 0.3, 0.1, 0, 0</td></tr>
+      <tr><td>Old forum post</td><td class="num">0.7</td><td class="num">0.2, 0.7, 0.1</td><td class="num">0.2, 0.5, 0.3, 0, 0</td></tr>
+      <tr><td>Homework 1 announcement</td><td class="num">0.05</td><td class="num">0.6, 0.3, 0.1</td><td class="num">0, 0, 0.1, 0.3, 0.6</td></tr>
+    </tbody>
+  </table></div>
+  <p>The queue log segment's score takes four steps:</p>
+  <ol class="plain">
+    <li>s<sub>IsRel</sub> = 0.9.</li>
+    <li>s<sub>IsSup</sub> = 0.8 + 0.5 × 0.15 = 0.875.</li>
+    <li>s<sub>IsUse</sub> = 1 × 0.6 + 0.5 × 0.3 + 0 × 0.1 = 0.75.</li>
+    <li>S = 1.0 × 0.9 + 1.0 × 0.875 + 0.5 × 0.75 = 0.9 + 0.875 + 0.375 = 2.15.</li>
+  </ol>
+  <p>In step 4 the three shares were added with weights. The paper's default weights are 1.0 for IsRel and IsSup, and 0.5 for IsUse. <span class="mine">from the paper</span> The formula is exactly these four steps:</p>
+  <div class="formula">S = w<sub>IsRel</sub> s<sub>IsRel</sub> + w<sub>IsSup</sub> s<sub>IsSup</sub> + w<sub>IsUse</sub> s<sub>IsUse</sub></div>
+  <p>Here each w is a weight (1.0, 1.0 and 0.5), and each s is that kind's share (0.9, 0.875 and 0.75). The same arithmetic on all three segments:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Segment</th><th class="numh">s<sub>IsRel</sub>, s<sub>IsSup</sub>, s<sub>IsUse</sub></th><th class="numh">S</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log</td><td class="num">0.9, 0.875, 0.75</td><td class="num">2.15</td></tr>
+      <tr><td>Old forum post</td><td class="num">0.7, 0.55, 0.45</td><td class="num">1.475</td></tr>
+      <tr><td>Homework 1 announcement</td><td class="num">0.05, 0.75, −0.75</td><td class="num">0.425</td></tr>
+    </tbody>
+  </table></div>
+  <p>The order is the same as in step 3: the queue log, then the forum post, then Homework. Homework's s<sub>IsSup</sub> is 0.75, so its claim is well backed by the announcement. But s<sub>IsRel</sub> of 0.05 and s<sub>IsUse</sub> of −0.75 push it to the bottom.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Suppose only IsSup counted, so w<sub>IsRel</sub> = 0, w<sub>IsUse</sub> = 0 and w<sub>IsSup</sub> = 1. What would the order of the three segments be?</p>
+    <details><summary>Show the answer</summary>
+      <p>Then S is just s<sub>IsSup</sub>: queue log 0.875, Homework 0.75 and forum post 0.55. Homework moves above the forum post, because its claim is backed by its own passage, even though it has nothing to do with the question. That is why IsRel is needed: Supported only says that the claim is in the passage.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">The paper's full score also adds the segment's own probability to S:</p>
+  <div class="formula">f(y<sub>t</sub>, d) = p(y<sub>t</sub> | x, d, y<sub>&lt;t</sub>) + S</div>
+  <p>Here x is the question, d the passage, y<sub>t</sub> the t-th segment, and y<sub>&lt;t</sub> all the segments written before it. The paper treats each segment as one sentence. p(y<sub>t</sub> | x, d, y<sub>&lt;t</sub>) says how likely the model finds this sentence, given the question, the passage and the earlier segments. <span class="mine">from the paper</span></p>
+
+  <p>Changing the weights changes the model's behaviour without any new training. Suppose w<sub>IsSup</sub> = 2. Then the scores are 3.025, 2.025 and 1.175, so the order stays the same, but being backed up counts for more. In the paper, raising the IsSup weight on the ASQA task raised citation precision, meaning more citations really backed up their claims. At the same time a fluency score called MAUVE went down. <span class="mine">from the paper, trend read from a graph</span></p>
+
+  <h4 class="sub" id="beam">Beam search: two unfinished answers at once</h4>
+
+  <p>The paper does not move forward with just the single best segment at each step. It keeps the B unfinished answers with the highest scores, and extends each of them to the next step. This is called <b class="term">beam search</b>, and B is the width of the beam. In the paper B = 2. <span class="mine">from the paper</span></p>
+
+  <p>On our three segments, B = 2 means that the unfinished answers with the queue log segment (2.15) and the forum post segment (1.475) both go on to the next step. The Homework one (0.425) is dropped there. At the end the best complete answer is returned. With B = 1 this would be like the <button class="def" data-w="w-decoding">greedy decoding</button> of lesson 1, only with a whole sentence instead of a token.</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="srtrain">
+  <h3><span class="cn">7</span>Self-RAG's training, and the paper's results</h3>
+
+  <p>A model can write reflection tokens only if the training data has these tokens in the right places. Adding tokens to every sentence by hand is expensive, so the paper has another model do it. <b>A model that grades what something else wrote is called a <span class="term">critic</span>.</b> Self-RAG's training takes three steps: <span class="mine">from the paper</span></p>
+  <ol class="plain">
+    <li>GPT-4 was given an instruction and a few examples for each kind, and asked to write the tokens. This gave 4,000 to 20,000 examples per kind, such as 19,317 for IsRel, 11,181 for IsSup and 3,831 for IsUse.</li>
+    <li>A critic was trained from Llama 2 7B on these examples, so that from then on the critic writes tokens instead of GPT-4.</li>
+    <li>The critic added reflection tokens and retrieved passages to 145,619 training examples. Then the generator, Llama 2 7B or 13B, was trained on these examples.</li>
+  </ol>
+  <p>The critic exists only to build training data. Once trained, the generator writes the tokens itself, so no critic is needed when answering.</p>
+
+  <p>The generator's training uses the same <button class="def" data-w="w-loss">loss</button> as lesson 4: −ln of the probability of each next token, with reflection tokens included. For example, if a correct token's probability goes from 0.5 to 0.9, its −ln falls from 0.693 to 0.105. The passage text gets no loss, because the model did not write it. The retriever supplied it. The paper writes the same thing like this:</p>
+  <div class="formula">max<sub>M</sub> 𝔼 [ log p<sub>M</sub>(y, r | x) ]</div>
+  <p>Here M is the generator, x the question, y the answer, and r its reflection tokens. 𝔼 means the average over all training examples. Making log as large as possible and making −log, the loss, as small as possible are the same thing.</p>
+
+  <p>The paper measured how trustworthy the critic is by comparing it with GPT-4's tokens: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Kind</th><th class="numh">Agreement of critic with GPT-4 (%)</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td class="num">93.8</td></tr>
+      <tr><td>IsSup</td><td class="num">93.5</td></tr>
+      <tr><td>IsRel</td><td class="num">80.2</td></tr>
+      <tr class="hi"><td>IsUse</td><td class="num">73.5</td></tr>
+    </tbody>
+  </table></div>
+  <p>IsUse is the weakest, because the critic often confuses 5 and 4, and people disagree on these two as well. Human annotators also checked 50 PopQA answers. The model's IsRel tokens matched their judgement 95.0% of the time, and its IsSup tokens 90.0% of the time.</p>
+
+  <p>When answering, the paper took the top 5 passages from a dense retriever called Contriever. The weights were 1.0, 1.0 and 0.5, δ = 0.2, and the beam width 2. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="srresults">The results, read in points</h4>
+
+  <p>Lesson 13 introduced <button class="def" data-w="w-points">points</button>: the plain difference between two percentages. For example, 50.8% to 54.9% is 4.1 points. The paper's four tasks are these. PopQA has 1,399 questions about rare people and things, PubHealth has health claims to judge true or false, ARC-Challenge has multiple-choice science questions, and Bio asks for biographies. <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Task</th><th class="numh">Self-RAG 7B</th><th class="numh">ChatGPT + retrieval</th><th class="numh">ChatGPT</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>PopQA<span class="sub">accuracy</span></td><td class="num">54.9</td><td class="num">50.8</td><td class="num">29.3</td></tr>
+      <tr><td>PubHealth<span class="sub">accuracy</span></td><td class="num">72.4</td><td class="num">54.7</td><td class="num">70.1</td></tr>
+      <tr><td>ARC-Challenge<span class="sub">accuracy</span></td><td class="num">67.3</td><td class="num">75.3</td><td class="num">75.3</td></tr>
+      <tr><td>Bio<span class="sub">FactScore, the % of small claims that are true</span></td><td class="num">81.2</td><td class="num">–</td><td class="num">71.8</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>On PopQA, Self-RAG 7B is 54.9 − 50.8 = 4.1 points ahead of ChatGPT with retrieval.</li>
+    <li>On ARC, ChatGPT is 75.3 − 67.3 = 8.0 points ahead of Self-RAG 7B. The paper's 13B model also stays at 73.1, so Self-RAG does not win on every task.</li>
+  </ul>
+
+  <p>The paper also measured what happens when one part is removed, which is called an <button class="def" data-w="w-ablation">ablation</button>. This was done on a 7B model trained on 50,000 examples, which is why the first row is lower than in the table above: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>What changed</th><th class="numh">PopQA</th><th class="numh">PubHealth</th></tr></thead>
+    <tbody>
+      <tr><td>Full Self-RAG</td><td class="num">45.5</td><td class="num">73.5</td></tr>
+      <tr class="hi"><td>Never retrieves when answering</td><td class="num">24.7</td><td class="num">73.0</td></tr>
+      <tr><td>Always uses only the top 1 passage</td><td class="num">41.8</td><td class="num">73.1</td></tr>
+      <tr><td>Instead of δ, retrieves only when the model itself writes Retrieve = yes</td><td class="num">28.3</td><td class="num">72.6</td></tr>
+      <tr><td>No critic tokens in the training data</td><td class="num">42.6</td><td class="num">72.0</td></tr>
+    </tbody>
+  </table></div>
+  <p>On PopQA, never retrieving drops accuracy from 45.5 to 24.7, a fall of 20.8 points. On PubHealth the same fall is only 0.5 points. <b>So retrieval is not equally useful on every task, and that is the reason for decision 1.</b> On PopQA the δ = 0.2 rule is 45.5 − 28.3 = 17.2 points better than retrieving only on Retrieve = yes, because it retrieves more often.</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="cragpaper">
+  <h3><span class="cn">8</span>CRAG's real evaluator, thresholds and results</h3>
+
+  <p>The first figure of the CRAG paper shows the problem clearly. The question is <q>Who was the screenwriter for Death of a Batman?</q>, and the retriever brings a document about Batman (1989 film). The name Hamm appears in it, and the generator answers <q>Hamm</q>, which is wrong. <span class="mine">from the paper</span></p>
+
+  <p>CRAG's evaluator is a model called T5-large, with 0.77 billion parameters. Self-RAG's critic is Llama 2 7B, about 9 times larger. The evaluator reads the question and one document together and returns a score between −1 and 1. In training, a correct document had the label 1, and a wrong one −1. <span class="mine">from the paper</span></p>
+
+  <p>PopQA has about 14,000 questions, and the paper trained the evaluator on all of them except the 1,399 test questions. The same evaluator was then used on the other three tasks as well. Each question usually brings 10 documents, and the evaluator scores each one separately. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="scale">The −1 to 1 scale</h4>
+
+  <p>In the easy version I put the confidence on a 0 to 1 scale. The paper's scale runs from −1 to 1, and one simple rule links the two: c = (s + 1) ÷ 2. Here s is the paper's score and c the 0 to 1 confidence. For example, s = −1 gives c = 0, s = 0 gives c = 0.5, and s = 1 gives c = 1. The rule adds 1 to every score and divides by 2, so the order is the same on both scales.</p>
+
+  <p>The paper set the thresholds by trying values on each dataset, so they are <button class="def" data-w="w-hyperparam">hyperparameters</button>: <span class="mine">from the paper, last column my arithmetic</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Dataset</th><th class="numh">Upper</th><th class="numh">Lower</th><th class="numh">On 0 to 1</th></tr></thead>
+    <tbody>
+      <tr><td>PopQA</td><td class="num">0.59</td><td class="num">−0.99</td><td class="num">0.795, 0.005</td></tr>
+      <tr><td>PubHealth, ARC</td><td class="num">0.5</td><td class="num">−0.91</td><td class="num">0.75, 0.045</td></tr>
+      <tr><td>Biography</td><td class="num">0.95</td><td class="num">−0.91</td><td class="num">0.975, 0.045</td></tr>
+    </tbody>
+  </table></div>
+  <p>The last column comes from c = (s + 1) ÷ 2. For PubHealth's lower threshold: (−0.91 + 1) ÷ 2 = 0.09 ÷ 2 = 0.045. The lower thresholds sit almost at −1, so Incorrect happens only when every document is almost completely useless.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>In the easy version, the Homework 1 announcement alone at 0.05 was Incorrect. With PubHealth's thresholds, on the 0 to 1 scale, what is its verdict?</p>
+    <details><summary>Show the answer</summary>
+      <p>PubHealth's thresholds on the 0 to 1 scale are 0.75 and 0.045. 0.05 is neither above 0.75 nor below 0.045, so the verdict is <b>Ambiguous</b>. With the paper's thresholds, CRAG rarely throws documents away. It keeps them and also searches the web.</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="setrule">Verdicts on a set of documents</h4>
+
+  <p>The paper's rule applies to the whole set: <span class="mine">from the paper</span></p>
+  <ul class="plain">
+    <li><b>Correct</b>: at least one document scores above the upper threshold.</li>
+    <li><b>Incorrect</b>: every document scores below the lower threshold.</li>
+    <li><b>Ambiguous</b>: every other case.</li>
+  </ul>
+  <p>Now take my scores on the paper's scale: queue log 0.70, forum post −0.20, Homework −0.95 and project page −0.97. <span class="mine">my scores</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>What the retriever brought</th><th>PopQA<span class="sub">0.59, −0.99</span></th><th>PubHealth<span class="sub">0.5, −0.91</span></th><th>Biography<span class="sub">0.95, −0.91</span></th></tr></thead>
+    <tbody>
+      <tr><td>Queue log, forum post, Homework</td><td>Correct</td><td>Correct</td><td>Ambiguous</td></tr>
+      <tr><td>Forum post alone</td><td>Ambiguous</td><td>Ambiguous</td><td>Ambiguous</td></tr>
+      <tr class="hi"><td>Homework, project page</td><td>Ambiguous</td><td>Incorrect</td><td>Incorrect</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>In the first row the queue log's 0.70 is above PopQA's 0.59, so the whole set is Correct, even though Homework sits at −0.95 in the same set. For Biography the upper threshold is 0.95, which the queue log does not reach.</li>
+    <li>In the third row PopQA's lower threshold is −0.99. Homework's −0.95 is above it, so the verdict is Ambiguous. For PubHealth, −0.95 and −0.97 are both below −0.91, so the verdict is Incorrect.</li>
+  </ul>
+  <p>Why Ambiguous exists came out of an early experiment in the paper. With only Correct and Incorrect, CRAG took a completely wrong path on every mistake of the evaluator. Ambiguous is the middle path, where the documents stay and web results come in too. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="stripsweb">The numbers for strips and web search</h4>
+
+  <p>Refinement uses the same evaluator. A long document is split into strips of a few sentences, the evaluator scores each strip, and of the strips above −0.5 the top 5 stay. <span class="mine">from the paper</span> For the milestone question, suppose the syllabus strips got 0.8, 0.1 and −0.7. <span class="mine">my scores</span> The first two are above −0.5 and stay, and the Week 10 strip at −0.7 is dropped.</p>
+
+  <p>For the web, GPT-3.5 Turbo gets a prompt asking for at most three keywords from the question, separated by commas. The paper's example turns <q>What is Henry Feilden's occupation?</q> into the query <q>Henry Feilden, occupation</q>. The Google Search API returns the top 5 pages, and CRAG puts Wikipedia pages first. The same evaluator then runs on the paragraphs of these pages. <span class="mine">from the paper</span></p>
+
+  <p>For our question, such a query would look something like <q>office hour, least crowded, this week</q>. <span class="mine">my example</span> But this course's queue log is not on the web, so a web search brings back nothing useful here. CRAG still searches, because it acts only on the evaluator's verdict.</p>
+
+  <h4 class="sub" id="cragresults">The results: points and percent</h4>
+
+  <p>The paper added CRAG on top of plain RAG, with SelfRAG-LLaMA2-7b as the generator, the same model that Self-RAG trained: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Task</th><th class="numh">RAG</th><th class="numh">CRAG</th><th class="numh">Difference</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>PopQA<span class="sub">accuracy</span></td><td class="num">52.8</td><td class="num">59.8</td><td class="num">+7.0</td></tr>
+      <tr><td>Biography<span class="sub">FactScore</span></td><td class="num">59.2</td><td class="num">74.1</td><td class="num">+14.9</td></tr>
+      <tr><td>PubHealth<span class="sub">accuracy</span></td><td class="num">39.0</td><td class="num">75.6</td><td class="num">+36.6</td></tr>
+      <tr><td>ARC-Challenge<span class="sub">accuracy</span></td><td class="num">53.2</td><td class="num">68.6</td><td class="num">+15.4</td></tr>
+    </tbody>
+  </table></div>
+  <p>The paper writes these differences as <q>7.0% accuracy</q> and so on. They are points, and the percentage gain is a different number:</p>
+  <ol class="plain">
+    <li>Points: 59.8 − 52.8 = 7.0.</li>
+    <li>Percentage gain: 7.0 ÷ 52.8 = 0.133, that is 13.3%.</li>
+  </ol>
+  <p>On PubHealth, the 36.6-point gain is 93.8% relative to 39.0, so the accuracy almost doubles. Check: 75.6 ÷ 39.0 = 1.94.</p>
+
+  <p>The paper also added CRAG on top of Self-RAG, and calls this Self-CRAG. On PopQA it went from Self-RAG's 54.9 to 61.8, 6.9 points ahead. On ARC it went from 67.3 to 67.2, 0.1 point lower. <span class="mine">from the paper</span></p>
+
+  <p>When the generator was plain LLaMA2-hf-7b, with no training for reflection tokens, the Self-RAG method fell to 29.0 on PopQA. With the same generator, plain RAG scored 50.5 and CRAG 54.9. <b>This is the point from step 5: Self-RAG needs its own trained generator, and CRAG works with any generator.</b></p>
+
+  <p>How well the evaluator judges was measured on PopQA. The T5 evaluator was right 84.3% of the time. ChatGPT doing the same job reached 58.0%, 62.4% with a step-by-step prompt, and 64.7% with examples. <span class="mine">from the paper</span></p>
+
+  <p>In the ablation, removing refinement brought PopQA from 59.8 to 54.2, removing query rewriting to 56.2, and removing the selection among web results to 58.6. Adding web results every time to plain RAG raised accuracy only from 52.8 to 53.8. So the web alone gives 1.0 point, and CRAG's checking adds 6.0 points on top. <span class="mine">from the paper</span></p>
+
+  <p>This checking is not free. In the generation phase, RAG took about 0.363 seconds per question and CRAG 0.512, about 1.41 times as long. The paper says this is a rough estimate that leaves out the time for retrieval and web search. <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">9</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are Stanford's three agentic RAG slides, unchanged, together with enlarged parts. Under each slide are a few questions. Think of the answer first, then open it. If something stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image to open it at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p56.png"><img src="img/slide-p56.png" alt="Stanford slide: agentic RAG, retrieval inside the loop" loading="lazy"></a>
+    <figcaption>Stanford's slide: agentic RAG, retrieval inside the loop.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the agentic RAG slide</p>
+    <ol class="plain">
+      <li>
+        <p>The first line says <q>Everything so far answers one question well</q>. Which parts of this lecture does that cover, and what do they lack?</p>
+        <details><summary>Show the answer</summary>
+          <p>Chunking, BM25, DPR, hybrid search and reranking. All of them improve a single retrieval for a single question. None of them decides whether to retrieve, what to ask, or when to stop. (Step 2)</p>
+        </details>
+      </li>
+      <li>
+        <p>In <q>Retrieval should be an action the agent takes</q>, what is the action, what is the tool, and what would the observation be?</p>
+        <details><summary>Show the answer</summary>
+          <p>Searching is the action, the retriever or search engine is the tool, and the passages that come back are the observation. The agent reads them and chooses the next action. (Step 1)</p>
+        </details>
+      </li>
+      <li>
+        <p>The top line mentions <q>when to stop</q>, but the word stop is missing from the three decisions below. Which decision holds it?</p>
+        <details><summary>Show the answer</summary>
+          <p>The third one, <q>whether the result is good enough</q>. If the result is good enough, the agent stops and answers. (Step 2)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p57.png"><img src="img/slide-p57.png" alt="Stanford slide: the three steps of Self-RAG" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p57-step12.png"><img src="img/slide-p57-step12.png" alt="Steps 1 and 2 of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p57-step3.png"><img src="img/slide-p57-step3.png" alt="Step 3 of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's Self-RAG slide, and below it steps 1 and 2, then step 3, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the Self-RAG slide</p>
+    <ol class="plain">
+      <li>
+        <p>Step 1 is called <q>Retrieve on demand</q>. Which decision does <q>on demand</q> refer to, and when does the model retrieve in the paper?</p>
+        <details><summary>Show the answer</summary>
+          <p>Decision 1. The model writes the Retrieve token, and in the paper the system retrieves when yes's share, between yes and no, is above δ = 0.2. (Steps 3 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>In step 3, segment 1 has two green boxes, segment 3 has a green and an orange one, and segment 2 has a red one. Which tokens are these, and how does the score give 1 &gt; 3 &gt; 2?</p>
+        <details><summary>Show the answer</summary>
+          <p>Segment 1 has Relevant and Supported, segment 3 has Relevant and Partially, and segment 2 has Irrelevant. In IsSup, partially gets half weight, so segment 3 scores below segment 1. Segment 2 has a small IsRel share, so it comes last. In our example the same order came from 2.15, 1.475 and 0.425. (Step 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>The final answer cites passages 1 and 4, although only three passages arrived in step 1. Where did 4 come from? And what do retrieve, critique and generate on the right correspond to?</p>
+        <details><summary>Show the answer</summary>
+          <p>The model wrote Retrieve again, the Repeat part, and the Utah claim came from passage 4 of the next round. The Retrieve token is the retrieval decision, IsRel, IsSup and IsUse are the critique tokens, and generate is the writing of each segment. (Steps 3 and 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p58.png"><img src="img/slide-p58.png" alt="Stanford slide: the full CRAG diagram" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p58-evaluator.png"><img src="img/slide-p58-evaluator.png" alt="The evaluator and its three verdicts from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p58-boxes.png"><img src="img/slide-p58-boxes.png" alt="The Knowledge Refinement and Knowledge Searching boxes from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p58-generation.png"><img src="img/slide-p58-generation.png" alt="The generation row of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's CRAG slide, and below it the evaluator, both boxes and the generation row, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the CRAG slide</p>
+    <ol class="plain">
+      <li>
+        <p>The evaluator's thought bubble says <q>If retrieved documents are correct to x?</q> What is x here, and in what form does the evaluator answer?</p>
+        <details><summary>Show the answer</summary>
+          <p>x is the question. The evaluator gives each question-document pair a score from −1 to 1, and two thresholds turn the scores into Correct, Ambiguous or Incorrect. The blue box on the left says the same: judge relevance, and pick an action from the confidence. (Steps 4 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the Knowledge Refinement box, what are d<sub>1</sub>, d<sub>2</sub>, the strips and k<sub>in</sub>? Why is strip<sub>2</sub> a different colour?</p>
+        <details><summary>Show the answer</summary>
+          <p>d<sub>1</sub> and d<sub>2</sub> are the documents the retriever brought. Decompose splits them into strips, Filter carries the evaluator's icon, and Recompose joins the remaining strips into k<sub>in</sub>, the internal knowledge. strip<sub>2</sub> no longer appears after Filter, so it is the strip that was dropped, like the Week 10 strip of our syllabus. (Steps 4 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>How does the query q in the Knowledge Searching box differ from the question x, and what is k<sub>ex</sub>? Then read the generation row at the bottom.</p>
+        <details><summary>Show the answer</summary>
+          <p>q holds only keywords: Death of a Batman, screenwriter and Wikipedia. The paper's prompt asks for at most three keywords, and CRAG puts Wikipedia pages first. The web search returns k<sub>1</sub> to k<sub>n</sub>, and after Select they become k<sub>ex</sub>, the external knowledge.</p>
+          <p>In the generation row, Correct gives the generator x + k<sub>in</sub>, Ambiguous gives x + k<sub>in</sub> + k<sub>ex</sub>, and Incorrect gives x + k<sub>ex</sub>. (Steps 4 and 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>An agent takes an action in a loop, reads the observation, and decides the next action. Every step has three decisions: retrieve or not, which query to send, and whether the result is good enough.</li>
+    <li>Self-RAG turns the probabilities of each critique kind into shares within that kind, and the weighted sum of the shares is each segment's score. The retrieval decision comes from yes's share and δ = 0.2.</li>
+    <li>CRAG's T5 evaluator scores from −1 to 1. One document above the upper threshold gives Correct, and all documents below the lower one give Incorrect. On PopQA it lifts RAG from 52.8 to 59.8, which is 7.0 points.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-agent">Agent</dt><dd>An LLM that works in a loop: it chooses an action, reads the observation, and decides the next action. For example, when the search for <q>OH timings</q> came back empty, the agent wrote a new query.</dd>
+    <dt id="w-action">Action and tool</dt><dd>What the agent chooses to do, such as searching for <q>OH timings</q>. A tool is the program that does it, such as a search engine.</dd>
+    <dt id="w-observation">Observation</dt><dd>The result of an action, which the agent reads before its next step. For example, the result of the first search: every passage scored 0.</dd>
+    <dt id="w-agentic">Agentic RAG</dt><dd>RAG in which retrieval is an action of the agent, not a fixed step of a pipeline. For example, 0 searches for 17 × 3 and 3 for the Jed Hoyer question.</dd>
+    <dt id="w-selfrag">Self-RAG</dt><dd>The generator itself writes reflection tokens to decide when to retrieve and which segment to keep. For example, Relevant and Partially on the forum post segment.</dd>
+    <dt id="w-reflection">Reflection tokens</dt><dd>Special tokens added to the vocabulary, which the model writes like any other text. For example, Retrieve, Relevant or Irrelevant, and Supported or Partially.</dd>
+    <dt id="w-crag">CRAG</dt><dd>Corrective RAG: an evaluator calls the retrieval Correct, Incorrect or Ambiguous, and refinement, web search or both follow. For example, the forum post at 0.4 is Ambiguous.</dd>
+    <dt id="w-evaluator">Retrieval evaluator</dt><dd>A small model that reads the question and one document and returns a confidence. For example, 0.4 for the forum post at K = 1.</dd>
+    <dt id="w-refine">Knowledge refinement</dt><dd>Splitting documents into strips, dropping the useless strips, and joining the rest in order. For example, 2 of the syllabus's 3 strips stay for the milestone question.</dd>
+    <dt id="w-threshold">Threshold</dt><dd>A limit set in advance, where being above or below it triggers a different action. For example, in CRAG above 0.6 means Correct, and below 0.2 means Incorrect.</dd>
+    <dt id="w-critic">Critic</dt><dd>A model that grades what something else wrote or retrieved. For example, in Self-RAG a critic built from Llama 2 7B adds reflection tokens to the training data, and the CRAG slide calls its evaluator a critic.</dd>
+    <dt id="w-segscore">Segment score (Self-RAG)</dt><dd>The weighted sum of a segment's critique shares: S = 1.0 × s<sub>IsRel</sub> + 1.0 × s<sub>IsSup</sub> + 0.5 × s<sub>IsUse</sub>. For example, the queue log segment's S = 0.9 + 0.875 + 0.5 × 0.75 = 2.15.</dd>
+    <dt id="w-beam">Beam search</dt><dd>Moving forward while keeping the B unfinished answers with the highest scores at each step. For example, with B = 2 the queue log (2.15) and forum post (1.475) answers go on, and Homework (0.425) is dropped.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="15-colbert-dense-en.html">Previous: Lesson 15</a>
+    <a href="17-search-r1-dense-en.html">Next: Lesson 17, Search-R1</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Papers: Asai et al., 2024, “Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection”, and Yan et al., 2024, “Corrective Retrieval Augmented Generation”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var s = document.getElementById("cw-s"), so = document.getElementById("cw-so"), body = document.getElementById("cw-body");
+  var btns = document.querySelectorAll("#cw .btns button");
+  function render() {
+    var v = Number(s.value);
+    so.textContent = v.toFixed(2);
+    var verdict, why, action, gets;
+    if (v > 0.6) { verdict = "Correct"; why = "above 0.6"; action = "Knowledge refinement: split into strips, drop the useless strips"; gets = "Question + cleaned document"; }
+    else if (v < 0.2) { verdict = "Incorrect"; why = "below 0.2"; action = "Drop the document, rewrite the query, search the web"; gets = "Question + web results"; }
+    else { verdict = "Ambiguous"; why = "between 0.2 and 0.6"; action = "Both: refinement and web search"; gets = "Question + cleaned document + web results"; }
+    body.innerHTML = "<tr><td><b>Verdict</b></td><td><b>" + verdict + "</b>, because " + v.toFixed(2) + " is " + why + "</td></tr><tr><td><b>Action</b></td><td>" + action + "</td></tr><tr><td><b>Generator gets</b></td><td>" + gets + "</td></tr>";
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", Number(b.dataset.v) === v ? "true" : "false"); });
+  }
+  s.addEventListener("input", render);
+  btns.forEach(function (b) { b.addEventListener("click", function () { s.value = b.dataset.v; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

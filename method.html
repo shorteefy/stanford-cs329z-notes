@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ये lessons कैसे लिखे गए</title>
+<meta name="description" content="CS 329Z lessons के पीछे के सिखाने और लिखने के नियम, उनके sources, और हर lesson की जाँच।">
+<link rel="stylesheet" href="lecture03/study.css">
+<style>
+  .topbar .switch b { color: var(--ink); }
+  section { margin: 0 0 44px; }
+  section > h2 { font-size: 24px; margin: 0 0 12px; }
+  ol.rules > li { margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<main>
+
+<nav class="topbar">
+  <a href="index.html">AI Agents, पहली नींव से</a>
+  <span class="switch"><b>हिन्दी</b> · <a href="method-en.html">English</a></span>
+</nav>
+
+<header style="margin-bottom:40px">
+  <p class="kicker">तरीका</p>
+  <h1>ये lessons कैसे लिखे गए</h1>
+  <p class="lede">ये page बताता है कि lessons किन नियमों पर लिखे गए, वो नियम कहाँ से आए, और हर lesson की जाँच कैसे हुई। आख़िर में ये भी लिखा है कि इन lessons की हद क्या है।</p>
+</header>
+
+<section>
+  <h2>पढ़ने वाला कौन है</h2>
+  <p>Lessons एक working software engineer के लिए हैं, जो code पढ़ लेता है और school का गणित जानता है। ML और statistics के शब्द उसके लिए नए हैं। उसे course technically समझना है, सिर्फ़ ऊपर-ऊपर नहीं, और आख़िर में वो Stanford की slides खुद पढ़ पाना चाहता है।</p>
+</section>
+
+<section>
+  <h2>सिखाने के नियम</h2>
+  <ol class="plain rules">
+    <li><b>पहली नींव से।</b> हर नया शब्द वहीं समझाया है, जहाँ वो पहली बार आता है। पिछले lesson का शब्द हो, तो उस पर click करने से उसका मतलब खुलता है।</li>
+    <li><b>पहले concept, फिर गड़बड़।</b> हर पड़ाव पहले बताता है कि नई चीज़ क्या है और क्या करती है। फिर उसे एक असली गड़बड़ पर लगाता है, जैसे BM25 का पुराने forum post को queue log से ऊपर रखना।</li>
+    <li><b>Analogy नहीं, असली system का छोटा version।</b> सारे lessons एक ही छोटे corpus पर चलते हैं। उसमें एक course का office hours page, queue log, syllabus, 2024 का एक पुराना forum post और Homework 1 की announcement है। इसलिए numbers एक lesson से दूसरे तक एक जैसे रहते हैं।</li>
+    <li><b>Numbers पहले, formula बाद में।</b> हर formula पहले छोटे numbers पर हाथ से हल होता है। उसके बाद formula का हर symbol उन्हीं numbers से जुड़ता है।</li>
+    <li><b>गणित वहीं सिखाया, जहाँ लगा।</b> ln, matrix का गुणा या बदलाव की दर, हर चीज़ school level से numbers के साथ आती है। जहाँ हो सके, वहाँ एक जाँच भी है।</li>
+    <li><b>सीढ़ी।</b> हर lesson के ऊपर पड़ावों की list है। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे, ताकि आप जानी हुई चीज़ छोड़ सकें।</li>
+    <li><b>जुड़े हुए sentences।</b> हर sentence पिछली बात से शुरू होता है, और नई बात आख़िर में आती है। ऐसी कोई line नहीं है, जो सिर्फ़ बात को ज़ोर से ख़त्म करने के लिए हो, और heading चीज़ का नाम बताती है।</li>
+    <li><b>हर बात का सही रूप।</b> समझाना paragraph में है, steps numbered list में, और तुलना table में। हर हिस्से का सबसे ज़रूरी sentence bold में है।</li>
+    <li><b>पहले सोचिए।</b> कई जगह जवाब छिपा है, ताकि आप पहले खुद हल करें।</li>
+  </ol>
+  <p>Hindi pages Spoken Hindi के नियमों पर लिखे हैं। उनमें Hindi शब्द Devanagari में हैं, technical शब्द English letters में, और sentences ज़्यादा से ज़्यादा 25 शब्द के, active voice में। English pages सादी English में हैं, और दोनों भाषाओं में numbers और sections एक जैसे हैं।</p>
+</section>
+
+<section>
+  <h2>आसान और गहरा</h2>
+  <p>आसान version में सिर्फ़ मुख्य बात है: हर idea का एक हल किया हुआ हिसाब, और उस हिसाब में लगा गणित। गहरे version में पूरा आसान lesson शब्दशः है। उसके बाद “यहाँ से Stanford वाला level” का निशान आता है। फिर वो पड़ाव आते हैं, जो slides के हर symbol को numbers से जोड़ते हैं और paper का असली setup और experiments पढ़ते हैं। आख़िर में आप slides की images खुद पढ़ते हैं, सवालों के साथ।</p>
+</section>
+
+<section>
+  <h2>ये नियम कहाँ से आए</h2>
+  <p>हर नियम के पीछे सिखाने या लिखने पर हुई कोई research या जानी-मानी किताब है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>बात</th><th>Source</th><th>Lessons में</th></tr></thead>
+    <tbody>
+      <tr><td>Sentence उस बात से शुरू हो, जो पढ़ने वाला जानता है। नई बात आख़िर में आए।</td><td>Gopen और Swan (1990), “The Science of Scientific Writing”। Joseph Williams, “Style”।</td><td>जुड़े हुए sentences</td></tr>
+      <tr><td>Topic नया हो, तो पढ़ने वाले को जुड़ा हुआ text चाहिए। जोड़ने वाले शब्द कटें, तो वो अटकता है।</td><td>McNamara और साथी (1996), “Are Good Texts Always Better?”</td><td>क्योंकि, इसलिए, मतलब जैसे शब्द नहीं कटे</td></tr>
+      <tr><td>Label और उसका मतलब याद रखना दिमाग पर बोझ है। हल किए examples से नया सीखने वाला जल्दी सीखता है।</td><td>Sweller की cognitive load theory</td><td>Passages के नाम, P3 जैसे labels नहीं, और हर idea का हल किया हिसाब</td></tr>
+      <tr><td>पहले एक ढाँचा मिले, तो नई बातें उसमें बैठती हैं।</td><td>Ausubel का advance organizer</td><td>ऊपर की सीढ़ी, और पहले concept</td></tr>
+      <tr><td>बातचीत वाले text से लोग बेहतर सीखते हैं।</td><td>Mayer का personalization principle</td><td>पढ़ने वाले से “आप” कहकर बात</td></tr>
+      <tr><td>जवाब देखने से पहले खुद कोशिश करने से बात ज़्यादा याद रहती है।</td><td>Generation effect (Slamecka और Graf, 1978) और pretesting effect (Richland, Kornell और Kao, 2009)</td><td>पहले सोचिए वाले सवाल</td></tr>
+      <tr><td>समझाने की मेहनत लिखने वाला नहीं करेगा, तो हर पढ़ने वाले को करनी पड़ेगी।</td><td>Olah और Carter (2017), “Research Debt”</td><td>गहरे version में slides तक का पूरा रास्ता</td></tr>
+      <tr><td>Simple का मतलब है आम शब्द और सीधे sentences।</td><td>Paul Graham, “Write Simply”</td><td>Spoken Hindi और सादी English</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>लिखने का तरीका</h2>
+  <ul class="plain">
+    <li><b>8 Oct 2026:</b> पहला version, slides के हिसाब से एक कहानी की तरह।</li>
+    <li><b>13 Oct:</b> पहले version का text कटा-कटा और punchline वाला लगा। ऊपर वाली research के बाद नियम बने, और फिर नमूने के लिए lesson 12 के चारों versions बने।</li>
+    <li><b>13 से 15 Oct:</b> बाकी 17 lessons इसी नमूने और एक लिखे हुए brief के हिसाब से बने, और हर lesson की जाँच एक ही तरीके से हुई। Feedback के बाद brief तीन बार बदला: गणित ज़्यादा साफ़, PDF का कोई ज़िक्र नहीं, और गहरा = आसान + Stanford level।</li>
+  </ul>
+</section>
+
+<section>
+  <h2>हर lesson की जाँच</h2>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>जाँच</th><th>क्या पकड़ती है</th></tr></thead>
+    <tbody>
+      <tr><td>Number script</td><td>हर lesson की अपनी script उसका हर number दोबारा निकालती है, और page के text से मिलाती है।</td></tr>
+      <tr><td>Spoken Hindi checker</td><td>Hindi pages में 25 शब्द से लंबे sentences, passive voice, शुद्ध शब्द और Roman Hindi।</td></tr>
+      <tr><td>Lesson checker</td><td>टूटे links और anchors, glossary के शब्द, switch, और Hindi और English pages में एक जैसे sections।</td></tr>
+      <tr><td>Phone check</td><td>360px चौड़ी screen पर page, tables, formulas और images।</td></tr>
+      <tr><td>Sources के निशान</td><td>Paper की बात पर “paper से”, और lesson के अपने example पर “मेरे बनाए”।</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>इन lessons की हद</h2>
+  <ul class="plain">
+    <li>Checks ने numbers, links और भाषा जाँची, लेकिन वो हर गलती नहीं पकड़ते। कहीं गलती दिखे, तो slides और paper को सही मानिए।</li>
+    <li>कुछ बातें लेखक का अपना अंदाज़ा हैं। Page पर वो “मेरा अंदाज़ा” या “मेरे बनाए” लिखकर अलग दिखती हैं।</li>
+    <li>Slides और papers उनके लेखकों के हैं। ये lessons उनकी जगह नहीं लेते, उन्हें पढ़ने की तैयारी कराते हैं।</li>
+  </ul>
+</section>
+
+<footer>
+  Course: CS 329Z “Engineering AI Agents”, Stanford University, Diyi Yang। Notes: October 2026। <a href="index.html">Course का पहला page</a>
+</footer>
+</main>
+</body>
+</html>

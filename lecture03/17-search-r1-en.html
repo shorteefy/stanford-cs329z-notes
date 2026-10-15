@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="The training data held only the right answer, not the search steps. The model has to learn when and what to search from the reward on its final answer alone.">
+<title>Lesson 17: Search-R1</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .trace { font-family: var(--mono); font-size: 14px; line-height: 1.6; background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; margin: 0 0 14px; overflow-wrap: anywhere; }
+  .trace .tg { color: var(--accent); font-weight: 700; }
+  .trace div + div { margin-top: 8px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 17 / 18 · <b>Easy</b> · <a href="17-search-r1-dense-en.html">Dense</a> · <a href="17-search-r1.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 17 · Easy version</p>
+  <h1>Search-R1: learning when and what to search</h1>
+  <p class="lede"><b>Search-R1 trains an LLM with reinforcement learning. After training, the LLM decides for itself when to search, what to search for, and when to stop.</b> This training needs only the right answer to each question, not the search steps.</p>
+  <p class="lede">Take the <button class="def" data-w="w-multihop">multi-hop</button> question from <a href="06-rag-pipeline-en.html#modular">lesson 6</a> again: <q>Who is older, Jed Hoyer or John William Henry II?</q> In the lecture's trace the model ran 3 searches and gave the right answer. But the training data holds only the answer for this question: John William Henry II. It says nowhere what the first query should be, how many searches to run, or when to stop.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 5 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#rl">Learning from the final answer alone</a><span class="can">Explain how training works without labels for the search steps.</span></li>
+      <li><a href="#format">Search is text too: four tags and the lecture's trace</a><span class="can">Read Stanford's trace, and spot the step in it that has no evidence.</span></li>
+      <li><a href="#ppo-grpo">GRPO: comparing each reward with its question's group</a><span class="can">Compute the mean, the standard deviation and the advantage by hand.</span></li>
+      <li><a href="#ppo">PPO's value model, and the KL penalty</a><span class="can">Read Stanford's PPO and GRPO slide.</span></li>
+      <li><a href="#results">How far ahead of single-search RAG Search-R1 is</a><span class="can">Read the paper's main result, and say why lesson 18 is needed.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="01-how-llms-answer-en.html#next-token">Lesson 1</a> (probability, next-token prediction), <a href="04-probability-tools-en.html#loss">Lesson 4</a> (loss, gradient), <a href="05-rag-model-en.html">Lesson 5</a> (Exact Match), <a href="06-rag-pipeline-en.html#modular">Lesson 6</a> (multi-hop) and <a href="16-agentic-rag-en.html#agent">Lesson 16</a> (agent, action). If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="rl">
+  <h3><span class="cn">1</span>Learning from the final answer alone: rollout, reward and policy</h3>
+
+  <p><b>In reinforcement learning (RL), the model makes several attempts at a question, and each attempt ends with a number. Training then raises the probability of the tokens in the attempts whose number was good.</b> In lesson 4, <button class="def" data-w="w-training">training</button> instead raised the <button class="def" data-w="w-probability">probability</button> of a correct output written in the data. Search decisions have no single correct output, because the Hoyer question can be answered with 2 searches or with 3.</p>
+
+  <p>The final answer, though, can always be checked, and RL rests on that. Three RL terms come up throughout:</p>
+  <dl class="words">
+    <dt>Rollout</dt><dd>One complete attempt at a question, from the start to the final answer: thinking, searches, returned passages and the answer. It is also called a trajectory.</dd>
+    <dt>Reward</dt><dd>The number at the end of a rollout. In Search-R1 it is 1 if the answer matches the right answer exactly, and 0 otherwise. This is the <button class="def" data-w="w-em">Exact Match</button> from lesson 5. <span class="mine">from the paper</span></dd>
+    <dt>Policy</dt><dd>Whatever makes the decision at each step. Here it is the LLM, which picks every next token: think, search or answer.</dd>
+  </dl>
+
+  <p>Different rollouts for one question appear only if the model does not take the same path every time. So the model picks each token <button class="def" data-w="w-ntp">at random according to its probability</button>. Say that after the first &lt;think&gt; the model gives &lt;search&gt; a probability of 0.6 and a direct &lt;answer&gt; 0.4. Then out of 100 rollouts, about 60 start with a search and about 40 answer straight away. <span class="mine">my probabilities</span></p>
+
+  <p>Now look at 4 rollouts for the Hoyer question. <span class="mine">these four rollouts are my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Rollout</th><th>What it did</th><th>Final answer</th><th class="numh">Reward</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>o<sub>1</sub></td><td>Searched both birth dates</td><td>John William Henry II</td><td class="num">1</td></tr>
+      <tr><td>o<sub>2</sub></td><td>No search, a guess</td><td>Jed Hoyer</td><td class="num">0</td></tr>
+      <tr><td>o<sub>3</sub></td><td>One search, then a guess</td><td>Jed Hoyer</td><td class="num">0</td></tr>
+      <tr class="hi"><td>o<sub>4</sub></td><td>Searched both birth dates</td><td>John William Henry II</td><td class="num">1</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Training raises the probability of the tokens in o<sub>1</sub> and o<sub>4</sub>, and those tokens include the decisions to search for both dates. It lowers the probability of the tokens in o<sub>2</sub> and o<sub>3</sub>, which include guessing without a search. Step 3 shows exactly how this raising and lowering works. After thousands of questions, the model learns to look up both dates on questions like this one. <b>Nobody labelled the search steps. Only the final answer was checked.</b></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Suppose the model always takes the token with the highest probability. How different will the 4 rollouts be, and what will training get from them?</p>
+    <details><summary>Show the answer</summary>
+      <p>All four will be identical, because the same token wins at every step, like the 0.6 &lt;search&gt; first. Then all four get the same reward, and there is nothing left to compare. RL needs different attempts, and they come from picking at random.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="format">
+  <h3><span class="cn">2</span>Search is text too: four tags and the lecture's trace</h3>
+
+  <p><b>In Search-R1 the model writes a search as text, and the system recognises that text and runs a real search engine.</b> <b class="term">Search-R1</b> uses 4 tags for this. A tag is a marker placed on both sides of a piece of text, such as &lt;search&gt; and &lt;/search&gt;.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Tag</th><th>Who writes it</th><th>What is inside</th></tr></thead>
+    <tbody>
+      <tr><td>&lt;think&gt;</td><td>Model</td><td>Thinking: what is known so far, and what is missing</td></tr>
+      <tr><td>&lt;search&gt;</td><td>Model</td><td>The query</td></tr>
+      <tr><td>&lt;information&gt;</td><td>System</td><td>The search engine's top results. The model does not write these.</td></tr>
+      <tr class="hi"><td>&lt;answer&gt;</td><td>Model</td><td>The final answer. The reward is computed on this.</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>When the model writes &lt;/search&gt;, the system runs the query and fetches the top 3 passages. <span class="mine">3 is from the paper</span> It appends them inside &lt;information&gt; tags, and the model writes on from there until it writes &lt;answer&gt;. A short instruction explaining the four tags comes with every question, and the slide in step 4 prints it at the bottom.</p>
+
+  <p>In this way, all three decisions of an <button class="def" data-w="w-agent">agent</button> have become tokens. Writing &lt;search&gt; is the decision to look something up, the query inside it is the second decision, and writing &lt;answer&gt; is the decision to stop. The search engine here is a <button class="def" data-w="w-action">tool</button>, and &lt;information&gt; is its <button class="def" data-w="w-observation">observation</button>.</p>
+
+  <p>Below is the lecture's trace, one rollout of a model trained with Search-R1, slightly shortened.</p>
+
+  <p class="callout"><b>Guess first:</b> The model searches 3 times, and the answer is right. Did every date written in its &lt;think&gt; come from an &lt;information&gt; block?</p>
+
+  <div class="trace">
+    <div><span class="tg">&lt;think&gt;</span> I need to determine if Jed Hoyer or John William Henry II is older. I'll search for their ages. <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;search&gt;</span> Jed Hoyer or John William Henry II <span class="tg">&lt;/search&gt;</span></div>
+    <div><span class="tg">&lt;information&gt;</span> Doc 1 (Title: "Jed Hoyer") … Wesleyan University … Red Sox at 28 … married Merrill Muckerman in June 2010 … <span class="tg">&lt;/information&gt;</span></div>
+    <div><span class="tg">&lt;think&gt;</span> I found out that Jed Hoyer is a person. Now I need to find his age … <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;search&gt;</span> John William Henry II <span class="tg">&lt;/search&gt;</span></div>
+    <div><span class="tg">&lt;information&gt;</span> Doc 1 (Title: "John W. Henry") … John William Henry II was born on September 13, 1949 in Quincy, Illinois … <span class="tg">&lt;/information&gt;</span></div>
+    <div><span class="tg">&lt;think&gt;</span> I found out that John William Henry II was born on September 13, 1949. Now I need to find Jed Hoyer's birth year to compare. <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;search&gt;</span> Jed Hoyer birth year <span class="tg">&lt;/search&gt;</span></div>
+    <div><span class="tg">&lt;information&gt;</span> Doc 1 (Title: "Jed Hoyer") … Wesleyan University … Red Sox at 28 … married Merrill Muckerman in June 2010 … <span class="tg">&lt;/information&gt;</span></div>
+    <div><span class="tg">&lt;think&gt;</span> I found out that Jed Hoyer was born on December 7, 1973. Now I can compare his birth year to John William Henry II's birth year. <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;answer&gt;</span> John William Henry II <span class="tg">&lt;/answer&gt;</span></div>
+  </div>
+
+  <figure class="slide">
+    <a href="img/slide-p59.png"><img src="img/slide-p59.png" alt="Stanford slide: Search-R1's trace for the Jed Hoyer question" loading="lazy"></a>
+    <figcaption>Stanford's slide: the same trace in full. Ground Truth is the right answer. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <h4 class="sub" id="unsupported">A right answer, but one date without evidence</h4>
+
+  <p>The answer is right, so this rollout's reward is 1. Now look at the third search. It returns the same document as the first search, and that document does not contain Jed Hoyer's date of birth. Even so, in the next &lt;think&gt; the model writes: <q>I found out that Jed Hoyer was born on December 7, 1973.</q></p>
+
+  <p>The retrieved text does not contain this date, so the model wrote it from its <button class="def" data-w="w-parametric">parametric knowledge</button>, the information stored in its parameters. The date may well be correct. The problem is that the trace writes <q>I found out</q> and so presents it as a search result. <b>The reward looks only at the final answer, so a step without evidence like this one also earns 1, and training strengthens it too.</b></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The text inside &lt;information&gt; was written by the search engine, not by the model. o<sub>4</sub> has a reward of 1. Should training raise the probability of that text's tokens as well?</p>
+    <details><summary>Show the answer</summary>
+      <p>No. That text is not a decision the model made. Raising its probability would teach the model to write search results itself, that is, to make them up. So the paper leaves these tokens out of the training calculation. <span class="mine">from the paper</span></p>
+    </details>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="ppo-grpo">
+  <h3><span class="cn">3</span>GRPO: comparing each reward with its question's group</h3>
+
+  <p><b>GRPO compares each rollout's reward with the average reward of the rollouts for the same question. Training then changes probabilities according to that difference.</b> The simplest approach shows why: give each rollout a push equal to its reward. A push here means how much training raises the probability of that rollout's tokens. <span class="mine">my example</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Question</th><th class="numh">Rewards of 4 rollouts</th><th>Push equal to the reward</th></tr></thead>
+    <tbody>
+      <tr><td>Easy</td><td class="num">1, 1, 1, 1</td><td>1 for each of the four, 4 in total</td></tr>
+      <tr class="hi"><td>Hard</td><td class="num">0, 0, 0, 1</td><td>1 for o<sub>4</sub> only, 1 in total</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>On the easy question the model is already right every time, yet it got a total push of 4. On the hard question the single correct rollout is the real lesson, and it got only 1. The probability of the three wrong rollouts did not even go down, because a push of 0 changes nothing.</p>
+
+  <p>So GRPO subtracts the question's average from each reward. All the rollouts for one question form a <b class="term">group</b>, and their count is G, here 4. On the hard question the average is (0 + 0 + 0 + 1) ÷ 4 = 0.25. So o<sub>4</sub>'s difference is 1 − 0.25 = +0.75, and the other three get 0 − 0.25 = −0.25. On the easy question the average is 1, so all four differences are 0, and nothing changes.</p>
+
+  <p>The size of the differences varies from question to question, so GRPO divides them by the group's spread. The measure of spread is the <b class="term">standard deviation</b>, and it takes 4 steps:</p>
+  <ol class="plain">
+    <li>Take each reward's difference from the average: +0.75, −0.25, −0.25, −0.25. These always add up to 0, so their plain average cannot measure the spread.</li>
+    <li>Square each difference, that is, multiply it by itself: 0.5625, 0.0625, 0.0625, 0.0625. Squaring removes the minus sign, so differences above and below the average no longer cancel.</li>
+    <li>Average the squares: (0.5625 + 0.0625 + 0.0625 + 0.0625) ÷ 4 = 0.75 ÷ 4 = 0.1875.</li>
+    <li>Take the square root, which undoes the squaring from step 2: √0.1875 = 0.433. Check: 0.433 × 0.433 = 0.1875.</li>
+  </ol>
+  <p>Now divide each difference by 0.433. The <b class="term">advantage</b> of o<sub>4</sub> is 0.75 ÷ 0.433 = +1.73, and that of the other three is −0.25 ÷ 0.433 = −0.58. The advantage says how much better or worse than expected a rollout did. A positive advantage makes training raise the probability of that rollout's tokens, and a negative one makes it lower them.</p>
+
+  <p>In symbols, the same calculation reads:</p>
+  <div class="formula">A<sub><i>i</i></sub> = (r<sub><i>i</i></sub> − mean(r<sub>1</sub>, …, r<sub>G</sub>)) ÷ std(r<sub>1</sub>, …, r<sub>G</sub>)</div>
+  <p>Here r<sub><i>i</i></sub> is the reward of rollout i, for example 1 for o<sub>4</sub>. mean is the group's average (0.25), std is the standard deviation (0.433), and A<sub><i>i</i></sub> is the advantage (+1.73). GRPO stands for group relative policy optimization. If all the rewards are equal, std is 0, and GRPO sets every advantage to 0, because there is nothing to learn from that question.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">Rewards</th><th class="numh">Mean</th><th class="numh">Std</th><th class="numh">Advantages</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0, 0, 0, 1</td><td class="num">0.25</td><td class="num">0.433</td><td class="num">−0.58, −0.58, −0.58, +1.73</td></tr>
+      <tr><td class="num">1, 1, 1, 0</td><td class="num">0.75</td><td class="num">0.433</td><td class="num">+0.58, +0.58, +0.58, −1.73</td></tr>
+      <tr><td class="num">1, 1, 1, 1</td><td class="num">1</td><td class="num">0</td><td class="num">0, 0, 0, 0</td></tr>
+      <tr class="hi"><td class="num">1, 0, 0, 1</td><td class="num">?</td><td class="num">?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Work out the last row</p>
+    <p>This is the group from step 1. Find the mean, the standard deviation and all four advantages. Then check them in the widget below by clicking o<sub>1</sub>.</p>
+    <details><summary>Show the answer</summary>
+      <p>The mean is 0.5. The differences are +0.5, −0.5, −0.5, +0.5, and all four squares are 0.25. Their average is 0.25, and the square root is 0.5.</p>
+      <p>Advantages: +0.5 ÷ 0.5 = +1, then −1, −1, +1. The correct rollouts are pushed up exactly as hard as the wrong ones are pushed down.</p>
+    </details>
+  </div>
+
+  <div class="widget" id="gw">
+    <h4>Compute the GRPO advantage yourself</h4>
+    <p class="hint">Click a rollout to switch its reward between 0 and 1. It starts with the hard question's group: 0, 0, 0, 1.</p>
+    <div class="btns" id="gw-r"></div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Rollout</th><th class="numh">Reward</th><th class="numh">Advantage</th><th>Training</th></tr></thead>
+      <tbody id="gw-body"></tbody>
+    </table></div>
+    <p class="out" id="gw-out"></p>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="ppo">
+  <h3><span class="cn">4</span>PPO's value model, and the KL penalty</h3>
+
+  <p><b>PPO also trains with an advantage, and its expectation comes from a separate model called the value model.</b> The value model reads the text so far and estimates how much reward will come at the end. <b class="term">PPO</b> is the common method from before GRPO, and the Search-R1 paper tries both.</p>
+
+  <p>Suppose that on the hard Hoyer question the value model estimates 0.25. o<sub>4</sub>'s reward is 1, so its advantage is 1 − 0.25 = +0.75. GRPO got the same 0.25 from the average of four rollouts. <span class="mine">my numbers</span> The difference is in the cost. The value model is itself an LLM, and it has to be trained too. GRPO does not need this model, but it needs G rollouts per question, and several searches in every rollout.</p>
+
+  <p>Both methods have one more safeguard. Training pushes the model towards reward, and the model can drift far from its old habits. So training keeps a frozen copy of the model from before training, called the <b class="term">reference LLM</b>. At every token, training checks how different the new model's probabilities are from the reference's, and it puts a <b class="term">KL penalty</b> on that distance.</p>
+
+  <p>For example, at some point the reference model gave &lt;search&gt; a probability of 0.2, and the new model now gives it 0.9. That is 0.9 ÷ 0.2 = 4.5 times as much, so the penalty is large. The model will change this much only if the gain in reward outweighs the penalty. <span class="mine">my numbers</span></p>
+
+  <figure class="slide">
+    <a href="img/slide-p60.png"><img src="img/slide-p60.png" alt="Stanford slide: PPO and GRPO, both with a search engine, and the model's instruction" loading="lazy"></a>
+    <figcaption>Stanford's slide: PPO at the top, GRPO in the middle, and at the bottom the instruction the model gets with every question. In GRPO, the G rollouts o<sub>1</sub> to o<sub>G</sub> have rewards r<sub>1</sub> to r<sub>G</sub>, and Group Computation turns them into the advantages A<sub>1</sub> to A<sub>G</sub>. The Reward Model is not a trained model, just the Exact Match rule. <span class="mine">from the paper</span> Yellow boxes are trained models, and green ones are frozen.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The GRPO diagram has no Value LLM box. Why?</p>
+    <details><summary>Show the answer</summary>
+      <p>GRPO takes the expectation from the average of the G rollouts for the same question, such as the 0.25 in step 3, so it needs no separate model. The Group Computation box does this.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="results">
+  <h3><span class="cn">5</span>How far ahead of single-search RAG Search-R1 is</h3>
+
+  <p><b>On multi-hop questions Search-R1 is clearly ahead of RAG that searches once.</b> The paper measured this on an LLM called Qwen2.5-7B, which has about 7 billion parameters. The score is Exact Match, a fraction between 0 and 1. For example, 0.433 means that 433 answers out of 1,000 came out exactly right.</p>
+
+  <p>Direct inference answers without searching, and RAG searches once. Search-R1-base started from a model with only <button class="def" data-w="w-pretraining">pretraining</button>, and Search-R1-instruct from one <button class="def" data-w="w-finetuning">fine-tuned</button> to follow instructions. These are Search-R1 runs trained with PPO, the paper's default. <span class="mine">from the paper</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Method</th><th class="numh">HotpotQA</th><th class="numh">2wiki</th><th class="numh">Musique</th></tr></thead>
+    <tbody>
+      <tr><td>Direct inference<span class="sub">no search</span></td><td class="num">0.183</td><td class="num">0.250</td><td class="num">0.031</td></tr>
+      <tr><td>RAG<span class="sub">one search</span></td><td class="num">0.299</td><td class="num">0.235</td><td class="num">0.058</td></tr>
+      <tr class="hi"><td>Search-R1-base</td><td class="num">0.433</td><td class="num">0.382</td><td class="num">0.196</td></tr>
+      <tr><td>Search-R1-instruct</td><td class="num">0.370</td><td class="num">0.414</td><td class="num">0.146</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>On HotpotQA, RAG is at 0.299 and Search-R1-base at 0.433, which is 134 more right answers per 1,000 questions. On Musique it goes from 0.058 to 0.196, more than three times as much. On 2wiki a single search actually hurts: RAG is at 0.235, below the 0.250 with no search at all. <b>The gain is largest exactly where one search is not enough.</b></p>
+
+  <p>The slide's two graphs show what the model learns: as training goes on, the train reward rises, and so does the number of valid searches per rollout. A valid search is one whose tags were correct and on which the system actually ran a search. <span class="mine">this meaning is my reading of the paper's algorithm</span> So the model learned to search more, and nobody wrote that rule for it.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p61.png"><img src="img/slide-p61.png" alt="Stanford slide: Search-R1's results table and two training graphs" loading="lazy"></a>
+    <figcaption>Stanford's slide: the full results table on the left, and two training graphs on the right.</figcaption>
+  </figure>
+
+  <p>Yet even with the best numbers, more than half of the multi-hop questions are wrong: 567 out of 1,000 on HotpotQA. And the <a href="#unsupported">step without evidence</a> earns a reward too, because the reward does not look at the steps in between. <a href="18-failure-modes-en.html">Lesson 18</a> lists where mistakes like these come from.</p>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 6 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 6: the paper's goal, average reward − β × KL, with an expected value and a KL divergence worked by hand.</li>
+      <li>Step 7: the probability ratio and clipping, with numbers for a positive and a negative advantage.</li>
+      <li>Step 8: the mask on retrieved tokens, counted on the slide's trace, and the paper's experiment without it.</li>
+      <li>Step 9: PPO's value model and GAE, the paper's GRPO group of 5 rollouts, and the PPO against GRPO results.</li>
+      <li>Step 10: the paper's full setup, and every row of the slide's table.</li>
+      <li>Step 11: Stanford's three Search-R1 slides, which you read yourself.</li>
+    </ul>
+    <p><a href="17-search-r1-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>The search steps need no labels. The policy, that is the LLM, makes several rollouts for a question, and only the reward on the final answer teaches it.</li>
+    <li>GRPO subtracts the group's average from each reward and divides by the standard deviation, and that is the advantage. PPO takes the expectation from a value model instead.</li>
+    <li>Search-R1 is far ahead of RAG on multi-hop questions. But the reward does not look at the steps in between, so a step without evidence can be rewarded too.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-rl">Reinforcement learning (RL)</dt><dd>Learning by making attempts and using each attempt's reward. For example, if 2 of 4 rollouts have reward 1, the probability of the tokens in those two goes up.</dd>
+    <dt id="w-policy">Policy</dt><dd>Whatever makes the decision at each step. Here the LLM, which picks the next token every time: think, &lt;search&gt; or &lt;answer&gt;.</dd>
+    <dt id="w-rollout">Rollout (trajectory)</dt><dd>One complete attempt at a question, from the start to the final answer. For example, o<sub>1</sub> on the Hoyer question: it searched both dates, then answered.</dd>
+    <dt id="w-reward">Reward</dt><dd>The number at the end of a rollout. For example, 1 if the answer matches exactly, 0 otherwise.</dd>
+    <dt id="w-searchr1">Search-R1</dt><dd>A method that teaches an LLM search decisions with RL, using think, search, information and answer tags. The reward is given only on the final answer.</dd>
+    <dt id="w-advantage">Advantage</dt><dd>How much better or worse than expected a rollout did. For example, with rewards 0, 0, 0, 1, o<sub>4</sub> gets +1.73 and the other three −0.58.</dd>
+    <dt id="w-ppo">PPO and value model</dt><dd>A common RL method that trains a separate model (the value model) to estimate the coming reward. For example, an estimate of 0.25 and a reward of 1 give an advantage of +0.75.</dd>
+    <dt id="w-grpo">GRPO</dt><dd>An advantage from the mean and standard deviation of a group's rewards. No value model is needed. For example, for 0, 0, 0, 1 the mean is 0.25 and the standard deviation 0.433.</dd>
+    <dt id="w-std">Standard deviation</dt><dd>A measure of how spread out numbers are: the average of the squared differences from the mean, then the square root. For example, for 0, 0, 0, 1 the mean is 0.25, the squares are 0.5625, 0.0625, 0.0625, 0.0625, their average is 0.1875, and the square root is 0.433.</dd>
+    <dt id="w-kl">Reference LLM and KL penalty</dt><dd>A frozen copy of the model from before training, and a penalty that stops the new model from moving far from it. For example, if &lt;search&gt; goes from probability 0.2 to 0.9, the penalty is large.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="16-agentic-rag-en.html">Previous: Lesson 16</a>
+    <a href="18-failure-modes-en.html">Next: Lesson 18, Where RAG breaks</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Paper: Jin et al., 2025, “Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var r = [0, 0, 0, 1];
+  var box = document.getElementById("gw-r");
+  function render() {
+    box.innerHTML = r.map(function (v, i) { return '<button type="button" data-i="' + i + '" aria-pressed="' + (v ? "true" : "false") + '">o' + (i + 1) + ": reward " + v + "</button>"; }).join("");
+    box.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { var i = Number(b.dataset.i); r[i] = 1 - r[i]; render(); }); });
+    var m = r.reduce(function (a, b) { return a + b; }, 0) / r.length;
+    var sd = Math.sqrt(r.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / r.length);
+    document.getElementById("gw-body").innerHTML = r.map(function (v, i) {
+      var a = sd ? (v - m) / sd : 0;
+      var dir = Math.abs(a) < 1e-9 ? "no change" : (a > 0 ? "raise probability" : "lower probability");
+      return "<tr><td>o" + (i + 1) + '</td><td class="num">' + v + '</td><td class="num">' + (a > 1e-9 ? "+" : "") + (Math.abs(a) < 1e-9 ? "0.00" : a.toFixed(2)) + "</td><td>" + dir + "</td></tr>";
+    }).join("");
+    document.getElementById("gw-out").innerHTML = "Mean = " + m.toFixed(2) + ", standard deviation = " + sd.toFixed(3) + (sd ? "" : ". All rewards are equal, so there is nothing to learn from this question.");
+  }
+  render();
+})();
+</script>
+</body>
+</html>

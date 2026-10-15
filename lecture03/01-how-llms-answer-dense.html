@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Office hours वाले सवाल पर अकेले LLM ने queue log देखे बिना भरोसे से Wednesday लिखा। ये lesson दिखाता है कि LLM जवाब token by token कैसे बनाता है, और फिर papers के numbers से नापता है कि सिर्फ़ parameters कितना जानते हैं, और hallucination कितना होता है।">
+<title>Lesson 1: LLM जवाब कैसे लिखता है (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 1 / 18 · <a href="01-how-llms-answer.html">आसान</a> · <b>गहरा</b> · <a href="01-how-llms-answer-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 1 · गहरा version</p>
+  <h1>LLM जवाब कैसे लिखता है, और कहाँ फँसता है</h1>
+  <p class="lede"><b>LLM एक model है, जो text पढ़कर उसके आगे का text लिखता है, एक बार में एक token। हर अगला token वो probabilities देखकर चुनता है, और ये probabilities उसके parameters और आपके दिए text से बनती हैं।</b></p>
+  <p class="lede">Lecture एक सवाल से शुरू होता है: <q>Which office hour this week is least crowded?</q> इस course के TAs, यानी पढ़ाने में मदद करने वाले senior students, हफ़्ते में दो बार office hours रखते हैं: Tuesday 4pm और Thursday 9am। Office hours वो तय घंटे हैं, जिनमें कोई भी student आकर सवाल पूछ सकता है। अकेले LLM से ये सवाल पूछिए, तो वो भरोसे से कहता है: <q>Try the Wednesday afternoon session - midweek hours are usually quietest.</q></p>
+  <p class="lede">Course एक queue log रखता है, यानी हर office hour पर line में कितने students थे, उसका record। पिछले 3 हफ़्तों में Tuesday 4pm पर औसतन 14 students थे, और Thursday 9am पर सिर्फ़ 3। तो सही जवाब Thursday 9am है, और Wednesday को office hour होता ही नहीं। LLM ने ये log कभी नहीं देखा, फिर भी वो एक पल नहीं अटका। ये lesson बताता है कि ऐसा क्यों होता है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 9 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 9 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#token">Tokens: model text के टुकड़े पढ़ता है</a><span class="can">बता पाएँगे कि 6 शब्द 7 tokens कैसे बनते हैं।</span></li>
+      <li><a href="#next-token">Next-token prediction: हर step पर एक token</a><span class="can">Widget में जवाब token by token बना पाएँगे।</span></li>
+      <li><a href="#parameters">Parameters और training</a><span class="can">बता पाएँगे कि queue log model के अंदर क्यों नहीं है।</span></li>
+      <li><a href="#prompt">Prompt और context window</a><span class="can">हिसाब लगा पाएँगे कि prompt में कितने passages समाते हैं।</span></li>
+      <li><a href="#hallucination">Hallucination: data के बिना भरोसे वाला जवाब</a><span class="can">Wednesday वाले जवाब की वजह बता पाएँगे, और Stanford की पहली slide पढ़ पाएँगे।</span></li>
+      <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#notation">Slide की notation, और पूरे जवाब की probability</a><span class="can">p(y | x, z) और θ पढ़ पाएँगे, और पूरे जवाब की probability निकाल पाएँगे।</span></li>
+      <li><a href="#closedbook">Closed-book QA: सिर्फ़ parameters से जवाब</a><span class="can">T5 और RAG के numbers पढ़ पाएँगे।</span></li>
+      <li><a href="#evidence">Papers के experiments</a><span class="can">बता पाएँगे कि papers ने hallucination और cutoff को कैसे नापा।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">चारों slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: कुछ नहीं, school का गणित काफ़ी है। पड़ाव 6 से आगे की कुछ बातें lessons 2 से 5 में पूरी आती हैं, और वहाँ उनके links हैं। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="token">
+  <h3><span class="cn">1</span>Tokens: model text के टुकड़े पढ़ता है</h3>
+
+  <p><b>Token text का एक छोटा टुकड़ा है: कभी पूरा शब्द, कभी शब्द का हिस्सा, कभी एक punctuation mark। LLM text को tokens में तोड़कर पढ़ता है, और जवाब भी tokens में लिखता है।</b></p>
+
+  <p>Tokens की ज़रूरत इसलिए है, क्योंकि computer सिर्फ़ numbers पर हिसाब करता है। Model के पास tokens की एक तय list होती है, जिसमें हर token का एक ID number है। इस list को <b class="term">vocabulary</b> कहते हैं, और text को इसके tokens में तोड़ने वाले program को <b class="term">tokenizer</b>।</p>
+
+  <p>आम शब्द अक्सर एक token होता है, और कम दिखने वाला शब्द कुछ टुकड़ों में टूटता है। जैसे <q>Office hours are crowded on Tuesday</q> में 6 शब्द हैं, लेकिन 7 tokens: <span class="mine">split मेरा बनाया है</span></p>
+  <div class="tokens"><span class="tok">Office</span><span class="tok"> hours</span><span class="tok"> are</span><span class="tok"> crowd</span><span class="tok">ed</span><span class="tok"> on</span><span class="tok"> Tuesday</span></div>
+
+  <p>यहाँ crowded दो tokens में टूटा: crowd और ed। इसी तरह vocabulary में Wednesdayy जैसी गलत spelling न हो, तब भी tokenizer उसे Wednesday और y में तोड़ देता है। असली split हर model के अपने tokenizer पर depend करता है।</p>
+
+  <p>Model tokens ही पढ़ता और लिखता है, इसलिए ये lecture हर length tokens में नापता है, शब्दों में नहीं।</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="next-token">
+  <h3><span class="cn">2</span>Next-token prediction: हर step पर एक token</h3>
+
+  <p><b>जवाब लिखते वक्त LLM हर step पर हर token को एक probability देता है, फिर एक token चुनकर text में जोड़ता है।</b> फिर वो नए text पर यही दोहराता है। इस loop को <b class="term">next-token prediction</b> कहते हैं, और पूरा जवाब इसी loop से बनता है।</p>
+
+  <p><b class="term">Probability</b> 0 से 1 के बीच का number है, जो किसी बात का chance बताता है: 0 यानी कभी नहीं, और 1 यानी पक्का। जैसे पिछले 20 lectures में से 5 में quiz हुआ, तो अगले में quiz की probability 5 ÷ 20 = 0.25 है। Quiz न होने की probability 15 ÷ 20 = 0.75 है, और सारे options का जोड़ हमेशा 1 होता है।</p>
+
+  <p>अब model को ये text मिला: <q>The least crowded office hour this week is</q>। अगले token की probabilities कुछ ऐसी हो सकती हैं: <span class="mine">numbers मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>अगला token</th><th class="numh">Probability</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">" Wednesday"</td><td class="num">0.34</td></tr>
+      <tr><td class="mono">" Thursday"</td><td class="num">0.21</td></tr>
+      <tr><td class="mono">" Tuesday"</td><td class="num">0.18</td></tr>
+      <tr><td class="mono">" Friday"</td><td class="num">0.15</td></tr>
+      <tr class="hi"><td class="mono">" Monday"</td><td class="num">?</td></tr>
+      <tr class="total"><td>जोड़</td><td class="num">1.00</td></tr>
+    </tbody>
+  </table></div>
+  <p>असल में बाकी हज़ारों tokens को भी बहुत छोटी probabilities मिलती हैं। यहाँ हिसाब छोटा रखने के लिए मान लीजिए कि सिर्फ़ ये 5 tokens हैं।</p>
+
+  <div class="recall">
+    <p class="rl">Monday वाली row आप निकालिए</p>
+    <p>पाँचों probabilities का जोड़ 1 होना चाहिए। Monday की probability कितनी है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>बाकी चार का जोड़ 0.34 + 0.21 + 0.18 + 0.15 = 0.88 है। तो Monday = 1 − 0.88 = <b>0.12</b>।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">अब मान लीजिए model हर step पर सबसे ऊँची probability वाला token लेता है। पहले step पर वो Wednesday लेगा, और फिर उसके बाद के token की probabilities देखेगा। नीचे के widget में “सबसे ज़्यादा वाला चुनिए” तीन बार दबाइए। <span class="mine">आगे के steps के numbers भी मेरे बनाए हैं</span></p>
+
+  <div class="widget" id="ntp">
+    <h4>खुद जवाब बनवाइए</h4>
+    <p class="hint">किसी token पर click कीजिए, या “सबसे ज़्यादा वाला चुनिए” तीन बार दबाइए।</p>
+    <div class="sentence" id="ntp-text"></div>
+    <div class="bars" id="ntp-bars"></div>
+    <div class="btns" style="margin-top:12px">
+      <button type="button" id="ntp-greedy">सबसे ज़्यादा वाला चुनिए</button>
+      <button type="button" id="ntp-reset">शुरू से</button>
+    </div>
+    <p class="out" id="ntp-out"></p>
+  </div>
+
+  <p>तीन steps के बाद model वही लिखता है, जो lesson की शुरुआत में था: Wednesday afternoon। किसी भी step पर उसने queue log नहीं देखा। Wednesday को 0.34 इसलिए मिला, क्योंकि “midweek is quiet” जैसी बातें लोग अक्सर लिखते हैं। <b>मतलब probability बताती है कि इस text के बाद कौन सा token आम है, ये नहीं कि कौन सा सच है।</b></p>
+
+  <p class="note">असली models अक्सर probability के हिसाब से random चुनते हैं। तब 0.34 वाला token करीब 34% बार आता है, और एक ही सवाल पर अलग-अलग जवाब आ सकते हैं।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Widget में आपने Thursday, morning और full stop चुने, यानी 0.21, 0.31 और 0.71 वाले tokens। Queue log के हिसाब से Thursday 9am सच में सबसे खाली है। तो क्या इस बार model को जवाब पता था?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p><b>नहीं।</b> जवाब किस्मत से सही निकला। Model ने log देखा ही नहीं, और उसने Thursday को Wednesday से कम probability दी थी।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="parameters">
+  <h3><span class="cn">3</span>Parameters और training: model की जानकारी कहाँ रहती है</h3>
+
+  <p><b>Parameters model के अंदर के numbers हैं। Input के tokens इन numbers के साथ एक तय हिसाब से मिलते हैं, और उसी हिसाब से हर अगले token की probability निकलती है।</b> Parameters का दूसरा नाम weights है, और ये बहुत सारे होते हैं। जैसे Stanford की slides वाले T5-11B model में करीब 11 billion parameters हैं। <span class="mine">paper से</span></p>
+
+  <p>इन parameters की values <b class="term">training</b> तय करती है। शुरू में parameters random होते हैं। फिर model बहुत सारा text पढ़ता है, और training हर जगह देखती है कि असली अगले token को model ने कितनी probability दी। फिर वो parameters को थोड़ा बदलती है, ताकि वो probability बढ़े।</p>
+
+  <p>एक step करके देखिए। Training के text में ये line है: <q>Office hours are on Thursday.</q> Model <q>Office hours are on</q> पढ़कर अगले token Thursday को 0.10 देता है। Training parameters को थोड़ा बदलती है, और अब वही text पढ़ने पर Thursday को 0.12 मिलता है। <span class="mine">मेरा example</span> जोड़ 1 ही रहता है, इसलिए बाकी tokens का कुल हिस्सा 0.90 से घटकर 0.88 हो गया।</p>
+
+  <p>इस तरह model जो कुछ “जानता” है, वो parameters की values में बँटा हुआ है, किसी अलग file या database में नहीं। ऐसी जानकारी को <b class="term">parametric knowledge</b> कहते हैं। Training किसी एक तारीख पर रुकती है, और उसके बाद parameters नहीं बदलते। उस तारीख को <b class="term">knowledge cutoff</b> कहते हैं।</p>
+
+  <p>Queue log इस course का अपना data है, इसलिए वो किसी model की training में कभी गया ही नहीं। उसके 14 और 3 किसी parameter में नहीं हैं। इसी से parametric knowledge की दो दिक्कतें दिखती हैं:</p>
+  <ul class="plain">
+    <li>नई बात अंदर नहीं जाती। Knowledge cutoff के बाद की बात, या आपका private data, डालने के लिए model को फिर से train करना पड़ेगा।</li>
+    <li>Model source नहीं बता सकता। जानकारी अरबों numbers में घुली है, इसलिए model नहीं बता सकता कि कोई बात किस document से आई।</li>
+  </ul>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="prompt">
+  <h3><span class="cn">4</span>Prompt और context window</h3>
+
+  <p><b>Prompt वो text है, जो आप model को अभी देते हैं: सवाल, instructions, और साथ में कोई document।</b> Next-token prediction हर step पर अब तक का पूरा text देखता है, और उसमें prompt भी है। इसलिए prompt का text हर probability बदल सकता है, जबकि parameters वही रहते हैं।</p>
+
+  <p>अब सवाल से पहले prompt में queue log की वो line रखिए, जिसमें Tuesday 4pm पर 14 और Thursday 9am पर 3 लिखा है।</p>
+
+  <p class="callout"><b>पहले सोचिए:</b> Parameters वही हैं, सिर्फ़ prompt बदला है। Thursday की 0.21 और Wednesday की 0.34 ऊपर जाएँगी या नीचे? अंदाज़ा लगाकर नीचे का box on कीजिए।</p>
+
+  <div class="widget" id="ctx">
+    <h4>Prompt बदलिए, probabilities देखिए</h4>
+    <p class="hint">Parameters वही हैं, सिर्फ़ prompt बदल रहा है। <span class="mine">numbers मेरे बनाए हैं</span></p>
+    <label class="switch"><input type="checkbox" id="ctx-on"> Prompt में queue log की line जोड़िए</label>
+    <div class="sentence" id="ctx-text"></div>
+    <div class="bars" id="ctx-bars"></div>
+  </div>
+
+  <p>Log जोड़ते ही Thursday की probability 0.21 से 0.81 हो गई, और Wednesday की 0.34 से 0.05, जबकि parameters वही रहे। <b>जो जानकारी parameters में नहीं है, उसे prompt में रखिए, तो model उसका इस्तेमाल करता है।</b> पूरा lecture इसी बात पर बना है।</p>
+
+  <p>Prompt की भी एक हद है। Model एक बार में गिने हुए tokens ही पढ़ सकता है, और इस limit को <b class="term">context window</b> कहते हैं। इसमें prompt और model का लिखा जवाब, दोनों आते हैं। जैसे window 8,000 tokens की हो, और prompt 7,500 का, तो जवाब के लिए सिर्फ़ 500 tokens बचते हैं।</p>
+
+  <p>Course के सारे documents मिलाकर इस window से कहीं बड़े हो सकते हैं। इसलिए हर सवाल पर चुनना पड़ता है कि कौन से टुकड़े prompt में जाएँ, और lesson 2 इसी चुनाव से शुरू होता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Context window 8,000 tokens का है। सवाल और instructions 300 tokens के हैं, और जवाब के लिए 700 चाहिए। हर passage, यानी document का एक टुकड़ा, 500 tokens का है। Prompt में ज़्यादा से ज़्यादा कितने passages आएँगे?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Passages के लिए 8,000 − 300 − 700 = 7,000 tokens बचते हैं, और 7,000 ÷ 500 = <b>14 passages</b>।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="hallucination">
+  <h3><span class="cn">5</span>Hallucination: data के बिना भरोसे वाला जवाब</h3>
+
+  <p><b>Hallucination ऐसा जवाब है, जो पढ़ने में ठीक और भरोसे वाला लगे, लेकिन गलत हो, या किसी source पर टिका न हो।</b> Wednesday afternoon वाला जवाब ऐसा ही है, और उसकी वजह पिछले तीन पड़ावों को जोड़ने से मिलती है।</p>
+
+  <p>Queue log parameters में नहीं था, क्योंकि वो कभी training में गया ही नहीं (पड़ाव 3)। वो prompt में भी नहीं था (पड़ाव 4)। फिर भी next-token prediction हर step पर कोई न कोई token चुनता है, और सबसे आम token Wednesday था (पड़ाव 2)।</p>
+
+  <p>Next-token prediction में ऐसा कोई step नहीं है, जो data न होने पर रुक जाए। इसलिए गलत जवाब भी उतने ही भरोसे से लिखा होता है, जितना सही जवाब, और पढ़ने वाला फ़र्क नहीं पकड़ पाता।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval? अकेले LLM का जवाब और retrieval वाले LLM का जवाब" loading="lazy"></a>
+    <figcaption>Stanford की Why Retrieval वाली slide। बाईं तरफ़ अकेला LLM है, जिसने Wednesday लिखा। दाईं तरफ़ prompt में queue log की line है, और जवाब Thursday 9am है। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>Slide के दाएँ हिस्से में retrieval है, यानी सवाल के वक्त सही text ढूँढकर prompt में रखना। वहाँ जवाब का 3 सीधे log की line से आया है, इसलिए पढ़ने वाला उसे check कर सकता है। <a href="02-retrieval-dense.html#retrieval">Lesson 2</a> यहीं से शुरू होता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>किस prompt में hallucination का chance सबसे कम है? (a) सिर्फ़ सवाल। (b) सवाल और queue log। (c) सवाल और 2024 का एक पुराना forum post, जिसमें लिखा है <q>midweek afternoons are usually quiet</q>।</p>
+    <details><summary>जवाब देखिए</summary>
+      <p><b>(b)</b>। (c) में model पुराने post के भरोसे फिर Wednesday लिख सकता है, यानी prompt में गलत text भी नुकसान करता है। ये बात lesson 2 में फिर आएगी।</p>
+    </details>
+  </div>
+
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 4 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। इनमें पहले slide की notation और पूरे जवाब की probability है, फिर सिर्फ़ parameters वाले models के numbers, और फिर papers के experiments। आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="notation">
+  <h3><span class="cn">6</span>Slide की notation: p(y | x, z), θ, और पूरे जवाब की probability</h3>
+
+  <p>Stanford की slides LLM को generator कहती हैं, और उसका काम एक line में लिखती हैं:</p>
+  <div class="sentence">A generator p(y|x, z) that writes the answer one token at a time, given the query x and a retrieved passage z.</div>
+  <p>ये line पड़ाव 2 वाला next-token prediction ही है, बस symbols में। इस पड़ाव में आप इसका हर symbol अपने numbers से पढ़ेंगे।</p>
+
+  <h4 class="sub" id="given">“|” के बाद का text: p(y | x) और p(y | x, z)</h4>
+
+  <p>Symbols से पहले पड़ाव 4 के दो numbers लीजिए। Text <q>The least crowded office hour this week is</q> के बाद Thursday को 0.21 मिला था। उस text से पहले queue log की line रखने पर 0.81 मिला। Token वही था, सिर्फ़ उससे पहले का text बदला। Notation यही फ़र्क लिखता है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>मतलब</th><th>हमारे example में</th></tr></thead>
+    <tbody>
+      <tr><td>x</td><td>Query, यानी model को मिला text</td><td>The least crowded office hour this week is</td></tr>
+      <tr><td>z</td><td>Retrieved passage, यानी prompt में रखा document का टुकड़ा</td><td>Queue log की line</td></tr>
+      <tr><td>y</td><td>जवाब, या उसका कोई token</td><td>Thursday</td></tr>
+      <tr><td>p(y | x)</td><td>सिर्फ़ x हो, तो y की probability</td><td>0.21</td></tr>
+      <tr class="hi"><td>p(y | x, z)</td><td>x और z दोनों हों, तो y की probability</td><td>0.81</td></tr>
+    </tbody>
+  </table></div>
+  <p>खड़ी line “|” को “given” पढ़ते हैं। उसके बाद वो text आता है, जो model के पास पहले से है, और comma का मतलब “और” है। <a href="04-probability-tools-dense.html#conditional">Lesson 4</a> इसे <button class="def" data-w="w-conditional">conditional probability</button> के नाम से पूरा समझाता है। यहाँ इतना काफ़ी है कि “|” के बाद का text बदलने से उसी token की probability बदलती है।</p>
+
+  <h4 class="sub" id="theta">θ: generator के parameters</h4>
+
+  <p>Slide पर generator का पूरा नाम p<sub>θ</sub> है। θ (theta) generator के parameters का नाम है, यानी पड़ाव 3 वाले वो सारे numbers। नीचे θ लिखने का मतलब है कि ये probabilities इन्हीं parameters से निकलती हैं। Retriever के parameters का नाम η (eta) है, और वो <a href="05-rag-model-dense.html#parts">lesson 5</a> में आता है।</p>
+
+  <p>पड़ाव 3 का training step इस notation में ऐसा दिखता है। p<sub>θ</sub>(Thursday | Office hours are on) पहले 0.10 था, और θ थोड़ा बदलने के बाद 0.12 हुआ। वहाँ text वही रहा, और θ बदला। पड़ाव 4 में उल्टा हुआ था: θ वही रहा, और “|” के बाद का text बदला।</p>
+
+  <h4 class="sub" id="product">One token at a time: पूरे जवाब की probability</h4>
+
+  <p>Generator जवाब एक बार में एक token लिखता है, इसलिए पूरे जवाब की probability हर token की probability से बनती है। ये बात गिनती से सबसे साफ़ दिखती है। मान लीजिए model random चुनाव से वही जवाब 1,000 बार लिखता है, और हर step पर widget वाली probabilities लेता है: <span class="mine">numbers मेरे बनाए हैं</span></p>
+  <ol class="plain">
+    <li>पहले step पर करीब 1,000 × 0.34 = 340 बार Wednesday आता है।</li>
+    <li>उन 340 में से 46% बार अगला token afternoon है: 340 × 0.46 = 156.4, यानी करीब 156 बार।</li>
+    <li>उनमें से 71% बार full stop आता है: 156.4 × 0.71 = 111.0, यानी करीब 111 बार।</li>
+  </ol>
+  <p>1,000 में से 111 बार का मतलब है कि पूरे जवाब <q>Wednesday afternoon.</q> की probability 0.111 है। यही तीनों probabilities का गुणा है: 0.34 × 0.46 × 0.71 = 0.111। हर step पिछले step के cases में से एक हिस्सा लेता है, इसलिए probabilities गुणा होती हैं। Formula यही गुणा ऐसे लिखता है:</p>
+  <div class="formula">p(y | x) = p(y<sub>1</sub> | x) × p(y<sub>2</sub> | x, y<sub>1</sub>) × p(y<sub>3</sub> | x, y<sub>1</sub>, y<sub>2</sub>)</div>
+  <p>यहाँ y<sub>1</sub> = Wednesday (0.34), y<sub>2</sub> = afternoon (0.46) और y<sub>3</sub> = full stop (0.71)। हर token के “|” के बाद सवाल और उससे पहले के सारे tokens हैं। वजह ये है कि next-token prediction हर step पर अब तक का पूरा text देखता है। RAG paper हर token की probability p<sub>θ</sub>(y<sub>i</sub> | x, z, y<sub>1:i−1</sub>) लिखता है, जहाँ y<sub>1:i−1</sub> का मतलब है token 1 से token i − 1 तक। <span class="mine">paper से</span></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Widget का दूसरा जवाब <q>Thursday morning.</q> लीजिए, जिसके tokens की probabilities 0.21, 0.31 और 0.71 हैं। इस पूरे जवाब की probability कितनी है, और <q>Wednesday afternoon.</q> इससे कितने गुना ज़्यादा बार आता है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>0.21 × 0.31 = 0.0651, और 0.0651 × 0.71 = <b>0.046</b>, यानी 1,000 बार में करीब 46 बार। Wednesday afternoon 0.111 ÷ 0.046 = 2.4 गुना ज़्यादा बार आता है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">इसी गुणा से एक और बात निकलती है। हर probability 1 से छोटी है, इसलिए हर नया token पूरे जवाब की probability घटाता है। इस widget का सबसे आम जवाब भी सिर्फ़ 0.111 पर है, यानी 1,000 में से करीब 889 बार model कुछ और लिखता है।</p>
+
+  <h4 class="sub" id="decoding">Greedy decoding और sampling</h4>
+
+  <p>Token चुनने के दो आम तरीके हैं, और पड़ाव 2 में दोनों आ चुके हैं। हर step पर सबसे ऊँची probability वाला token लेने को <b class="term">greedy decoding</b> कहते हैं। Widget का “सबसे ज़्यादा वाला चुनिए” यही करता है, और उसका जवाब हर बार Wednesday afternoon होता है। Probability के हिसाब से random चुनने को <b class="term">sampling</b> कहते हैं, और ऊपर की 1,000 बार वाली गिनती sampling की थी।</p>
+
+  <p>Sampling में पहला token हर बार बदल सकता है। 100 बार चलाइए, तो करीब 34 बार Wednesday आएगा, 21 बार Thursday, 18 बार Tuesday, 15 बार Friday और 12 बार Monday। यानी sampling कभी-कभी सही Thursday भी लिखता है, लेकिन पड़ाव 2 के सवाल की तरह सिर्फ़ किस्मत से।</p>
+
+  <p>Papers सवाल-जवाब के लिए अक्सर greedy decoding लेते हैं। पड़ाव 7 वाला T5 paper हर step पर सबसे ऊँचा token चुनता है, और RAG paper भी सवाल-जवाब के लिए greedy decoding लेता है। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="closedbook">
+  <h3><span class="cn">7</span>Closed-book QA: सिर्फ़ parameters से कितने जवाब सही</h3>
+
+  <p><b>Closed-book question answering में model को सिर्फ़ सवाल मिलता है, कोई document नहीं, इसलिए वो जवाब सिर्फ़ parameters से लिखता है।</b> Lesson की शुरुआत वाला अकेला LLM यही कर रहा था। Open book में system पहले documents में ढूँढता है, और फिर जवाब लिखता है। Stanford की RAG Performance वाली slide <button class="def" data-w="w-closed">closed book और open book</button>, दोनों तरह के models की तुलना करती है।</p>
+
+  <p>Slide की closed-book rows Roberts और साथियों के 2020 वाले paper से आती हैं। उन्होंने Google के T5 model को, जो text पढ़कर text लिखता है, सिर्फ़ सवाल देकर जवाब लिखना सिखाया, और कोई document नहीं दिया। <span class="mine">paper से</span> इस paper को आगे T5 paper कहेंगे।</p>
+
+  <h4 class="sub" id="em">Exact Match: जवाब हूबहू मिला या नहीं</h4>
+
+  <p>इन tables के numbers <button class="def" data-w="w-em">Exact Match</button> हैं: कितने % सवालों में model का जवाब सही जवाब से हूबहू मिला। मिलाने से पहले दोनों को lowercase करते हैं, और a, an, the, punctuation और फ़ालतू spaces हटाते हैं। <span class="mine">paper से</span> जैसे सही जवाब Thursday 9am हो, तो <q>thursday 9am.</q> मिल जाता है। लेकिन <q>Thursday 9 am</q> नहीं मिलता, क्योंकि उसमें 9 और am के बीच space है।</p>
+
+  <p>Slide की table के चार columns चार datasets हैं। NQ यानी Natural Questions, जिसमें Google search के असली सवाल हैं। TQA यानी TriviaQA, जिसमें quiz websites के सवाल हैं। WQ यानी WebQuestions, और CT यानी CuratedTrec, दो छोटे सवाल-जवाब datasets हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="size">Parameters बढ़ाने पर क्या बदलता है</h4>
+
+  <p>T5 चार sizes में आता है, और paper ने चारों को एक ही तरीके से सवाल-जवाब सिखाया। नीचे TriviaQA के Wikipedia वाले test set के numbers हैं: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Model</th><th class="numh">Parameters</th><th class="numh">TriviaQA (%)</th></tr></thead>
+    <tbody>
+      <tr><td>T5-Base</td><td class="num">220 million</td><td class="num">29.1</td></tr>
+      <tr><td>T5-Large</td><td class="num">770 million</td><td class="num">35.9</td></tr>
+      <tr><td>T5-3B</td><td class="num">3 billion</td><td class="num">43.4</td></tr>
+      <tr><td>T5-11B</td><td class="num">11 billion</td><td class="num">50.1</td></tr>
+      <tr class="hi"><td>T5-11B + SSM</td><td class="num">11 billion</td><td class="num">60.5</td></tr>
+    </tbody>
+  </table></div>
+  <p>Base से 11B तक parameters 11,000 ÷ 220 = 50 गुना होते हैं, और score 29.1 से 50.1, यानी 21.0 points बढ़ता है। <b>हर बड़ा size ज़्यादा सवालों के हूबहू सही जवाब देता है, यानी बड़ा model parameters में ज़्यादा जानकारी रखता है।</b> TriviaQA का ये column इसलिए लिया है, क्योंकि उसके 50.1 और 60.5 Stanford की slide पर भी यही हैं। NQ पर इस paper के आज वाले version में T5-11B का 32.6 है, जबकि slide पर 34.5। इसलिए NQ के लिए slide का number लीजिए।</p>
+
+  <p>आख़िरी row का SSM, यानी <b class="term">salient span masking</b>, training का एक extra दौर है। इसमें model Wikipedia के ऐसे sentences पढ़ता है, जिनमें नाम और तारीखों की जगह खाली है, और उसे वो खाली जगह भरनी होती है। T5 ने ये दौर 100,000 extra steps चलाया, और TriviaQA का score 50.1 से 60.5 हो गया। <span class="mine">paper से</span> ये दौर <button class="def" data-w="w-pretraining">pretraining</button> का हिस्सा है, यानी आम text पर वो बड़ी training, जो सवाल-जवाब सिखाने से पहले होती है।</p>
+
+  <h4 class="sub" id="fewer">कम parameters, साथ में documents</h4>
+
+  <p>अब slide की table में NQ वाला column देखिए। Closed book में T5-11B 34.5 पर है, और SSM के साथ 36.6 पर। Open book में RAG-Seq. 44.5 पर है। 1,000 सवालों में ये 345 और 445 हूबहू सही जवाब हैं, यानी documents वाला system 100 सवाल ज़्यादा सही करता है।</p>
+
+  <p>RAG का generator <button class="def" data-w="w-bart">BART</button> नाम का model है, जिसमें करीब 400 million parameters हैं, और पूरे RAG में करीब 626 million। T5-11B में 11 billion हैं, यानी 11,000 ÷ 626 = 17.6 गुना ज़्यादा। RAG paper ये भी बताता है कि 770 million parameters वाला T5-Large, NQ पर 28.9 पर है। <span class="mine">paper से</span></p>
+
+  <p><b>मतलब documents साथ हों, तो 17.6 गुना कम parameters वाला system भी NQ पर 10 points आगे है।</b> RAG paper का नतीजा भी यही है, कि parameters और documents वाले system को अच्छे सवाल-जवाब के लिए बहुत कम parameters चाहिए। ये फ़ायदा पड़ाव 4 से आता है, क्योंकि जवाब वाला text prompt में मिल जाता है।</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="evidence">
+  <h3><span class="cn">8</span>Papers के experiments: hallucination और knowledge cutoff को नापना</h3>
+
+  <p>पड़ाव 3 और 5 में parametric knowledge की तीन कमियाँ आईं। नई बात अंदर नहीं जाती, source नहीं मिलता, और data न हो, तब भी जवाब आता है। RAG paper की शुरुआत यही तीन कमियाँ लिखती है। ऐसे models अपनी memory आसानी से बढ़ा या बदल नहीं सकते, अपने जवाब की वजह नहीं दिखा सकते, और hallucination कर सकते हैं। <span class="mine">paper से</span> इस पड़ाव के तीन experiments इन्हें numbers में नापते हैं।</p>
+
+  <h4 class="sub" id="audit">Exact Match के गलत माने 150 जवाब, हाथ से जाँचे</h4>
+
+  <p>T5 paper ने NQ के ऐसे 150 जवाब हाथ से जाँचे, जिन्हें Exact Match ने गलत माना था। नतीजा चार हिस्सों में बँटा: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किस्म</th><th class="numh">जवाब</th><th class="numh">हिस्सा</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>सच में गलत<span class="sub">Ghost of Christmas Present अपनी torch से क्या छिड़कता है? सही: warmth। T5: confetti।</span></td><td class="num">93</td><td class="num">62.0%</td></tr>
+      <tr><td>Wording अलग<span class="sub">जैसे April 15 और April 15th।</span></td><td class="num">20</td><td class="num">13.3%</td></tr>
+      <tr><td>सही जवाबों की list अधूरी<span class="sub">Space shuttles कहाँ से launch होते हैं? List में सिर्फ़ florida। T5: kennedy lc39b।</span></td><td class="num">20</td><td class="num">13.3%</td></tr>
+      <tr><td>जवाब पूछने के वक्त पर depend करता है<span class="sub">Northern Ireland का secretary of state कौन है?</span></td><td class="num">17</td><td class="num">11.3%</td></tr>
+    </tbody>
+  </table></div>
+  <p>हिसाब: 93 + 20 + 20 + 17 = 150, और 93 ÷ 150 = 0.620, 20 ÷ 150 = 0.133, 17 ÷ 150 = 0.113। मतलब Exact Match closed-book model को कम आँकता है, लेकिन 62% जवाब फिर भी सच में गलत थे। Confetti वाला जवाब पढ़ने में सही जवाब जितना ही ठीक लगता है, और यही hallucination है। आख़िरी row knowledge cutoff से जुड़ी है, क्योंकि उसका जवाब समय के साथ बदलता है, और parameters training के वक्त पर रुके हुए हैं।</p>
+
+  <p>Paper के आख़िर में लेखक खुद तीन बातें लिखते हैं। Model जानकारी parameters में ऐसे बाँटता है, कि कोई उसे समझा नहीं सकता। जब model पक्का नहीं होता, तब वो असली दिखने वाले जवाब बना देता है। और training के बाद किसी खास जानकारी को जोड़ना या हटाना मुमकिन नहीं है। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="jeopardy">Jeopardy वाले सवाल: लोगों ने factuality जाँची</h4>
+
+  <p>RAG paper में लोगों ने hallucination को सीधे जाँचा। Jeopardy एक quiz format है, जिसमें जवाब पहले मिलता है, और ऐसा सवाल लिखना होता है जिसका वो जवाब हो। जैसे जवाब The World Cup के लिए सवाल: <q>In 1986 Mexico scored as the first country to host this international sports competition twice.</q> <span class="mine">paper से</span></p>
+
+  <p>दो models ने ऐसे सवाल लिखे। BART अकेला generator है, जो सिर्फ़ अपने parameters से लिखता है। RAG में वही BART है, लेकिन उसके prompt में Wikipedia के passages भी हैं। लोगों ने 452 जोड़े पढ़े, और हर जोड़े में चुना कि किसका सवाल ज़्यादा factual है। Factual का मतलब है कि बात किसी भरोसेमंद source से साबित हो सके।</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>लोगों का फ़ैसला</th><th class="numh">Factuality</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>RAG बेहतर</td><td class="num">42.7%</td></tr>
+      <tr><td>BART बेहतर</td><td class="num">7.1%</td></tr>
+      <tr><td>दोनों अच्छे</td><td class="num">11.7%</td></tr>
+      <tr><td>दोनों खराब</td><td class="num">17.7%</td></tr>
+      <tr><td>बहुमत नहीं बना</td><td class="num">20.8%</td></tr>
+      <tr class="total"><td>जोड़</td><td class="num">100.0%</td></tr>
+    </tbody>
+  </table></div>
+  <p>452 जोड़ों में 42.7% करीब 193 जोड़े हैं, और 7.1% करीब 32 जोड़े। <span class="mine">हिसाब मेरा</span> <b>यानी RAG का सवाल 42.7 ÷ 7.1 = 6.0 गुना ज़्यादा बार ज़्यादा factual निकला।</b></p>
+
+  <p>Paper की examples वाली table में अकेले BART के गलत जवाब भी पढ़ने में बिल्कुल ठीक लगते हैं। Jeopardy में Washington के लिए BART ने लिखा <q>This state has the largest number of counties in the U.S.</q>, जिसे paper गलत बताता है। उसी जवाब के लिए RAG ने लिखा <q>It’s the only U.S. state named for a U.S. president</q>। <span class="mine">paper से</span></p>
+
+  <p>एक दूसरे task में define middle ear का एक sentence वाला जवाब लिखना था। वहाँ BART ने लिखा कि middle ear, middle ear और नाक के बीच का हिस्सा है, जो गलत है। RAG ने लिखा <q>The middle ear includes the tympanic cavity and the three ossicles.</q> <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="hotswap">Documents बदलकर नई जानकारी: index hot-swapping</h4>
+
+  <p>पड़ाव 3 की पहली दिक्कत थी कि नई बात डालने के लिए फिर से training चाहिए। RAG के documents एक <button class="def" data-w="w-index">index</button> में रहते हैं, यानी passages की ऐसी list, जिसमें retriever तेज़ी से ढूँढ सके। RAG paper ने Wikipedia के December 2016 और December 2018 वाले दो indexes बनाए। <span class="mine">paper से</span></p>
+
+  <p>फिर paper ने 82 ऐसे world leaders की list बनाई, जो इन दो तारीखों के बीच बदल गए थे। Model से <q>Who is the President of Peru?</q> जैसे सवाल पूछे। Model के parameters चारों हालात में वही थे, सिर्फ़ index बदला: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Index ↓ / किस साल के leaders →</th><th class="numh">2016 वाले</th><th class="numh">2018 वाले</th></tr></thead>
+    <tbody>
+      <tr><td>December 2016 का index</td><td class="num"><b>70%</b></td><td class="num">4%</td></tr>
+      <tr><td>December 2018 का index</td><td class="num">12%</td><td class="num"><b>68%</b></td></tr>
+    </tbody>
+  </table></div>
+  <p>सही साल का index हो, तो 68% से 70% जवाब सही हैं, और गलत साल का हो, तो सिर्फ़ 4% से 12%। <b>मतलब documents बदलने से model की जानकारी बदल गई, और इसके लिए कोई training नहीं लगी।</b> Index को ऐसे बदलने को <b class="term">index hot-swapping</b> कहते हैं। <a href="02-retrieval-dense.html#retrieval">Lesson 2</a> इसी रास्ते को <button class="def" data-w="w-nonparam">non-parametric memory</button> कहता है: जानकारी parameters के बाहर, documents में।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Course ने Thursday वाला office hour 9am से 10am कर दिया। अकेले LLM वाले system में, और documents वाले system में, इसे सही करने के लिए क्या बदलना होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>अकेले LLM के लिए parameters बदलने होंगे, यानी फिर से training। Documents वाले system में सिर्फ़ office hours वाला passage बदलना काफ़ी है, क्योंकि अगले सवाल पर retriever नया passage prompt में लाएगा। Paper का 2016 और 2018 वाला experiment यही दिखाता है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">9</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे Stanford की वो चार slides हैं, जिन पर ये lesson टिका है, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई symbol अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval?" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p10-boxes.png"><img src="img/slide-p10-boxes.png" alt="उसी slide के दोनों boxes, बड़े करके" loading="lazy"></a>
+    <figcaption>Stanford की Why Retrieval वाली slide, और नीचे उसके दोनों boxes, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Why Retrieval वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>बाएँ box में LLM ने Wednesday afternoon क्यों लिखा, जबकि उस दिन office hour होता ही नहीं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Queue log न parameters में था, न prompt में। Next-token prediction फिर भी हर step पर कोई token चुनता है, और सबसे आम token Wednesday था। Probability ने बताया कि क्या आम है, ये नहीं कि क्या सच है। (पड़ाव 2, 3 और 5)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाएँ box में Retrieved वाली line model तक कैसे पहुँची, और model का क्या बदला?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>वो line prompt में है। Parameters वही हैं, सिर्फ़ “|” के बाद का text बदला, यानी p(Thursday | x) = 0.21 से p(Thursday | x, z) = 0.81। (पड़ाव 4 और 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाएँ जवाब का <q>about 3 students ahead of you</q> वाला 3 कहाँ से आया, और ये hallucination क्यों नहीं है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Log की line में Thu 9am के आगे 3 लिखा है, और जवाब ने वही number लिया। जवाब एक source पर टिका है, जिसे पढ़ने वाला check कर सकता है। (पड़ाव 4 और 5)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p14.png"><img src="img/slide-p14.png" alt="Stanford slide: Retrieval Augmented Generation (RAG) का diagram" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p14-generator.png"><img src="img/slide-p14-generator.png" alt="उसी slide का generator वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p14-retriever.png"><img src="img/slide-p14-retriever.png" alt="उसी slide का retriever वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Retrieval Augmented Generation (RAG), और नीचे उसका generator वाला और retriever वाला हिस्सा, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">RAG वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Generator के नीचे (Parametric) और retriever के नीचे (Non-Parametric) क्यों लिखा है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Generator की जानकारी उसके parameters θ में है, यानी parametric knowledge। Retriever के पीछे Document Index है, जिसमें passages का text parameters के बाहर रहता है, और उसे training के बिना बदल सकते हैं। (पड़ाव 3, 6 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाईं तरफ़ सबसे ऊपर वाला y, <q>The middle ear includes the tympanic cavity and the three ossicles.</q>, किसने लिखा? उसी सवाल पर अकेले BART ने क्या लिखा था?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>ये documents वाले RAG का जवाब है। अकेले BART ने लिखा था कि middle ear, middle ear और नाक के बीच का हिस्सा है, जो गलत है। (पड़ाव 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Slide के बाकी हिस्से क्या करते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>बाईं तरफ़ तीन तरह के input x हैं: सवाल, जाँचने वाला fact, और Jeopardy का जवाब। Query Encoder q सवाल का vector q(x) बनाता है, और Document Index में हर passage का vector d(z) है (<a href="03-vectors-dense.html#embedding">lesson 3</a>)। MIPS, यानी maximum inner product search, सबसे बड़े dot product वाले passages z<sub>1</sub> से z<sub>4</sub> निकालता है (<a href="02-retrieval-dense.html#retriever">lesson 2</a> और <a href="05-rag-model-dense.html#parts">lesson 5</a>)।</p>
+          <p>Marginalize कई passages के साथ लिखे जवाबों को जोड़ता है (<a href="04-probability-tools-dense.html#marginal">lesson 4</a>)। ऊपर का dashed arrow training है, जो q और p<sub>θ</sub>, दोनों को एक साथ बदलती है (<a href="05-rag-model-dense.html#training">lesson 5</a>)।</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p16-formula.png"><img src="img/slide-p16-formula.png" alt="उसी slide का formula, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Deep Dive into RAG, और नीचे उसका formula, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Deep Dive वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Generator वाली line में p(y|x, z) को हमारे example से पढ़िए: x, z और y क्या हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>x model को मिला text है, z queue log की line, और y Thursday। p(Thursday | x, z) = 0.81, जबकि बिना z के p(Thursday | x) = 0.21 था। (पड़ाव 6)</p>
+        </details>
+      </li>
+      <li>
+        <p><q>Writes the answer one token at a time</q>: तीन tokens वाले जवाब <q>Wednesday afternoon.</q> की p(y|x) कैसे निकलेगी?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>हर token की probability, उससे पहले के text के साथ, और फिर सबका गुणा: 0.34 × 0.46 × 0.71 = 0.111। (पड़ाव 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Formula में ∑, p(z|x) और ≈ क्या कर रहे हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Retriever कई passages लाता है, और p(z|x) हर passage पर उसका भरोसा है। हर passage के साथ generator जवाब को अलग probability देता है, और ∑ इन्हें भरोसे के हिसाब से जोड़ता है, जैसा लाल note कहता है। जोड़ सिर्फ़ top-K, यानी सबसे ऊँचे K passages पर है, इसलिए = की जगह ≈ है।</p>
+          <p>ये जोड़ <a href="04-probability-tools-dense.html#marginal">lesson 4</a> हाथ से करता है, और नीचे की दोनों lines, RAG-Sequence और RAG-Token, <a href="05-rag-model-dense.html#seq-token">lesson 5</a> में आती हैं।</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p20.png"><img src="img/slide-p20.png" alt="Stanford slide: RAG Performance on Open-Domain QA" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p20-qa.png"><img src="img/slide-p20-qa.png" alt="उसी slide की बाईं table, बड़ी करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p20-human.png"><img src="img/slide-p20-human.png" alt="उसी slide की दाईं table, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: RAG Performance on Open-Domain QA, और नीचे उसकी दोनों tables, बड़ी करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">RAG Performance वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Closed Book वाली दो rows किस जानकारी से जवाब देती हैं, और NQ पर RAG-Seq. से कितनी पीछे हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>सिर्फ़ parameters से। T5-11B 44.5 − 34.5 = 10.0 points पीछे है, और SSM के साथ भी 44.5 − 36.6 = 7.9। REALM और DPR open-book systems हैं, जो passages में से जवाब उठाते हैं (<a href="05-rag-model-dense.html#results">lesson 5</a> और <a href="12-dpr-dense.html#results">lesson 12</a>)। (पड़ाव 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>T5-11B+SSM का SSM क्या है, और TQA column में “- /50.1” का क्या मतलब है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>SSM training का extra दौर है, जिसमें model नाम और तारीखों की खाली जगह भरता है। TQA के दो test sets हैं: बाईं तरफ़ आम open-domain वाला, और दाईं तरफ़ Wikipedia वाला। T5 ने सिर्फ़ Wikipedia वाले पर नापा, इसलिए बाईं जगह “-” है। (पड़ाव 7)</p>
+          <p>RAG paper के हिसाब से Wikipedia वाले सवाल आसान हैं, इसलिए RAG-Seq. भी वहाँ 56.8 की जगह 68.0 पर है। <span class="mine">paper से</span></p>
+        </details>
+      </li>
+      <li>
+        <p>दाईं table में Factuality के 42.7% और 7.1% क्या कहते हैं? इस column का जोड़ कितना है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>452 जोड़ों में लोगों ने 42.7% बार RAG के सवाल को ज़्यादा factual माना, और सिर्फ़ 7.1% बार अकेले BART के सवाल को। Column का जोड़ 7.1 + 42.7 + 11.7 + 17.7 + 20.8 = 100.0 है। (पड़ाव 8)</p>
+          <p>Specificity का मतलब है कि सवाल अपने जवाब से कितना खास जुड़ा है। उस column का जोड़ 93.0 निकलता है, 100 नहीं, और paper इसकी वजह नहीं बताता।</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>LLM एक बार में एक token लिखता है। पूरे जवाब की probability हर token की probability का गुणा है, जैसे 0.34 × 0.46 × 0.71 = 0.111।</li>
+    <li>जानकारी दो जगह से आती है: parameters और prompt। सिर्फ़ parameters वाला T5-11B NQ पर 34.5 पर है, जबकि documents वाला RAG, 17.6 गुना कम parameters के साथ, 44.5 पर।</li>
+    <li>Probability बताती है कि क्या आम है, ये नहीं कि क्या सच है। लोगों ने RAG के सवाल 6 गुना ज़्यादा बार ज़्यादा factual पाए, और index बदलने से training के बिना नई जानकारी आई।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-llm">LLM</dt><dd>Large language model: text पढ़कर आगे का text, एक बार में एक token, लिखने वाला model। जैसे Wednesday afternoon लिखने वाला model।</dd>
+    <dt id="w-token">Token</dt><dd>Text का छोटा टुकड़ा: शब्द, शब्द का हिस्सा, या punctuation। Model इन्हीं को पढ़ता और लिखता है। जैसे crowded के दो tokens: crowd और ed।</dd>
+    <dt id="w-vocabulary">Vocabulary</dt><dd>Model के सारे tokens की तय list, जिसमें हर token का एक ID number है। जैसे उसमें Wednesday है, लेकिन Wednesdayy नहीं।</dd>
+    <dt id="w-tokenizer">Tokenizer</dt><dd>Text को vocabulary के tokens में तोड़ने वाला program। जैसे Wednesdayy को Wednesday और y में।</dd>
+    <dt id="w-probability">Probability</dt><dd>0 से 1 के बीच का number, जो किसी बात का chance बताता है। सारे options का जोड़ 1 होता है। जैसे 20 में से 5 lectures में quiz हुआ, तो 5 ÷ 20 = 0.25।</dd>
+    <dt id="w-ntp">Next-token prediction</dt><dd>अब तक का text देखकर हर token को probability देना, एक चुनना, जोड़ना, और दोहराना। जैसे Wednesday, फिर afternoon, फिर full stop।</dd>
+    <dt id="w-parameters">Parameters (weights)</dt><dd>Model के अंदर के numbers, जिनसे हर अगले token की probability निकलती है। जैसे T5-11B में करीब 11 billion parameters हैं।</dd>
+    <dt id="w-training">Training</dt><dd>Parameters को थोड़ा-थोड़ा बदलना, ताकि text के असली अगले token की probability बढ़े। जैसे Office hours are on के बाद Thursday 0.10 से 0.12।</dd>
+    <dt id="w-parametric">Parametric knowledge</dt><dd>Parameters में बँटी हुई जानकारी। Model इसका source नहीं बता सकता, और नई बात के लिए फिर से training चाहिए।</dd>
+    <dt id="w-cutoff">Knowledge cutoff</dt><dd>वो तारीख, जिस पर training रुकी। उसके बाद की बातें, और आपका private data, model में नहीं हैं। जैसे March 2026 की cutoff हो, तो Oct 2026 की announcement model में नहीं है।</dd>
+    <dt id="w-prompt">Prompt</dt><dd>वो text, जो आप model को अभी देते हैं: सवाल, instructions, और साथ के documents। जैसे queue log की line, जिससे Thursday 0.21 से 0.81 हुआ।</dd>
+    <dt id="w-context">Context window</dt><dd>Model एक बार में ज़्यादा से ज़्यादा कितने tokens पढ़ सकता है। Prompt और जवाब, दोनों इसमें आते हैं। जैसे 8,000 की window में 7,500 का prompt हो, तो जवाब के लिए 500 बचते हैं।</dd>
+    <dt id="w-hallucination">Hallucination</dt><dd>भरोसे वाला, लेकिन गलत या बिना source वाला जवाब। जैसे log देखे बिना लिखा Wednesday afternoon।</dd>
+    <dt id="w-decoding">Greedy decoding और sampling</dt><dd>हर step पर सबसे ऊँची probability वाला token लेना greedy decoding है, और probability के हिसाब से random चुनना sampling। जैसे greedy हर बार Wednesday afternoon लिखता है, और sampling 100 में से करीब 21 बार Thursday से शुरू करता है।</dd>
+    <dt id="w-ssm">Salient span masking (SSM)</dt><dd>Pretraining का extra दौर, जिसमें model Wikipedia के sentences में नाम और तारीखों की खाली जगह भरता है। जैसे इससे T5-11B का TriviaQA score 50.1 से 60.5 हुआ।</dd>
+    <dt id="w-bart">BART</dt><dd>Text पढ़कर text लिखने वाला model, जिसमें करीब 400 million parameters हैं। RAG का generator यही है। जैसे Jeopardy test में अकेला BART सिर्फ़ 7.1% जोड़ों में ज़्यादा factual निकला।</dd>
+    <dt id="w-hotswap">Index hot-swapping</dt><dd>Parameters छुए बिना documents का index बदलना, ताकि model की जानकारी बदले। जैसे 2018 के index से 2018 के leaders पर 68% सही जवाब, और 2016 के index से सिर्फ़ 4%।</dd>
+  </dl>
+
+  <div class="pager">
+    <span class="muted">पहला lesson</span>
+    <a href="02-retrieval-dense.html">अगला: Lesson 2, Retrieval</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Paper: Lewis et al., 2020, “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”। दूसरा paper: Roberts et al., 2020, “How Much Knowledge Can You Pack Into the Parameters of a Language Model?”। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें इन papers में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  /* ---------- next-token widget ---------- */
+  var START = "The least crowded office hour this week is";
+  var DAYS = [[" Wednesday", 0.34], [" Thursday", 0.21], [" Tuesday", 0.18], [" Friday", 0.15], [" Monday", 0.12]];
+  var TIME = [[" afternoon", 0.46], [" morning", 0.31], [".", 0.23]];
+  var END1 = [[".", 0.71], [" session", 0.29]];
+  var END2 = [[".", 1.0]];
+
+  function nextDist(chosen) {
+    var n = chosen.length;
+    if (n === 0) return DAYS;
+    var last = chosen[n - 1];
+    if (last === ".") return null;
+    if (n === 1) return TIME;
+    if (last === " session") return END2;
+    return END1;
+  }
+
+  var chosen = [];
+  var textEl = document.getElementById("ntp-text");
+  var barsEl = document.getElementById("ntp-bars");
+  var outEl = document.getElementById("ntp-out");
+  var greedyBtn = document.getElementById("ntp-greedy");
+
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+  function render() {
+    var html = esc(START);
+    chosen.forEach(function (t, i) {
+      html += '<span class="' + (i === chosen.length - 1 ? "new" : "") + '">' + esc(t) + "</span>";
+    });
+    textEl.innerHTML = html;
+    var d = nextDist(chosen);
+    if (!d) {
+      barsEl.innerHTML = "";
+      outEl.innerHTML = "जवाब पूरा हुआ। " + chosen.length + " steps, हर step पर एक token। किसी step पर model ने queue log नहीं देखा, क्योंकि वो उसके पास था ही नहीं।";
+      greedyBtn.disabled = true;
+      return;
+    }
+    greedyBtn.disabled = false;
+    var max = Math.max.apply(null, d.map(function (x) { return x[1]; }));
+    barsEl.innerHTML = d.map(function (x, i) {
+      return '<button type="button" class="lbl" data-i="' + i + '">' + esc(x[0]) + '</button>' +
+        '<div class="bar' + (x[1] === max ? " win" : "") + '"><span style="width:' + (x[1] * 100) + '%"></span></div>' +
+        '<span class="val">' + x[1].toFixed(2) + "</span>";
+    }).join("");
+    outEl.textContent = "Step " + (chosen.length + 1) + ": अगले token की probabilities। किसी पर click कीजिए।";
+    barsEl.querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { chosen.push(d[Number(b.dataset.i)][0]); render(); });
+    });
+  }
+  greedyBtn.addEventListener("click", function () {
+    var d = nextDist(chosen);
+    if (!d) return;
+    var best = d[0];
+    d.forEach(function (x) { if (x[1] > best[1]) best = x; });
+    chosen.push(best[0]);
+    render();
+  });
+  document.getElementById("ntp-reset").addEventListener("click", function () { chosen = []; render(); });
+  render();
+
+  /* ---------- prompt widget ---------- */
+  var LOG = "Queue log, last 3 weeks: Tue 4pm: 14 waiting avg; Thu 9am: 3.";
+  var WITHOUT = [[" Wednesday", 0.34], [" Thursday", 0.21], [" Tuesday", 0.18], [" Friday", 0.15], [" Monday", 0.12]];
+  var WITH = [[" Thursday", 0.81], [" Tuesday", 0.06], [" Wednesday", 0.05], [" Friday", 0.04], [" Monday", 0.04]];
+  var box = document.getElementById("ctx-on");
+  var ctxText = document.getElementById("ctx-text");
+  var ctxBars = document.getElementById("ctx-bars");
+  function renderCtx() {
+    var on = box.checked;
+    ctxText.innerHTML = (on ? '<span class="new">' + esc(LOG) + "</span><br>" : "") + esc(START);
+    var d = on ? WITH : WITHOUT;
+    ctxBars.innerHTML = d.map(function (x, i) {
+      return '<span class="lbl">' + esc(x[0]) + '</span><div class="bar' + (i === 0 ? " win" : "") + '"><span style="width:' + (x[1] * 100) + '%"></span></div><span class="val">' + x[1].toFixed(2) + "</span>";
+    }).join("");
+  }
+  box.addEventListener("change", renderCtx);
+  renderCtx();
+})();
+</script>
+</body>
+</html>

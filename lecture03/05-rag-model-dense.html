@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Lesson 4 के आख़िर में retriever ने गलत passage को ज़्यादा वज़न दिया, और सही जवाब का chance 0.685 से 0.315 पर गिरा। Retriever को सिर्फ़ सवाल-जवाब के जोड़ों से सुधारना है, इसका पूरा गणित समझना है, और आख़िर में RAG की Stanford slides खुद पढ़नी हैं।">
+<title>Lesson 5: RAG model (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 5 / 18 · <a href="05-rag-model.html">आसान</a> · <b>गहरा</b> · <a href="05-rag-model-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 5 · गहरा version</p>
+  <h1>RAG model: retriever और generator एक साथ</h1>
+  <p class="lede"><b>RAG एक model है, जिसमें दो models जुड़े हैं। Retriever सवाल के लिए passages लाकर हर एक को वज़न देता है, और generator हर passage के साथ जवाब लिखता है।</b> दोनों एक ही loss से साथ train होते हैं, और इस training को सिर्फ़ सवाल-जवाब के जोड़े चाहिए। RAG का पूरा नाम Retrieval-Augmented Generation है, और ये Lewis और साथियों का 2020 का model है।</p>
+  <p class="lede">इसकी ज़रूरत <a href="04-probability-tools-dense.html#read">lesson 4</a> के आख़िरी सवाल में दिखी। वहाँ retriever ने पुराने forum post को 0.731 वज़न दिया, और queue log को सिर्फ़ 0.269। Generator के numbers वही रहे, फिर भी सही जवाब <q>Thursday 9am</q> का chance 0.685 से गिरकर 0.315 हो गया। गलती retriever की है, लेकिन training data में सिर्फ़ सवाल और जवाब लिखे हैं। जवाब queue log से आया, ये कहीं नहीं लिखा, और RAG इसी हालत में retriever को सिखा लेता है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 10 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 10 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#parts">RAG के दो models: retriever और generator</a><span class="can">हर हिस्से का काम बता पाएँगे, और Stanford की RAG वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#formula">Marginalization: passage का label नहीं चाहिए</a><span class="can">जवाब की probability हाथ से निकाल पाएँगे, और बता पाएँगे कि passage का label क्यों नहीं चाहिए।</span></li>
+      <li><a href="#seq-token">RAG-Sequence और RAG-Token</a><span class="can">दोनों तरीकों से probability निकाल पाएँगे, और बता पाएँगे कि नतीजे कब अलग आते हैं।</span></li>
+      <li><a href="#training">एक loss से retriever और generator की training</a><span class="can">बता पाएँगे कि training किस passage का score बढ़ाती है, और कौन से हिस्से बदलते हैं।</span></li>
+      <li><a href="#results">NQ पर नतीजे</a><span class="can">Paper की मुख्य table पढ़ पाएँगे, और बता पाएँगे कि lesson 6 की ज़रूरत क्यों है।</span></li>
+          <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#posterior">Training के नियम का गणित</a><span class="can">Score पर loss की दर हाथ से निकाल पाएँगे, और बता पाएँगे कि वो prior − posterior क्यों है।</span></li>
+      <li><a href="#endtoend">एक loss से generator और query encoder तक</a><span class="can">दोनों पर दर निकाल पाएँगे, और paper के retriever वाले experiments पढ़ पाएँगे।</span></li>
+      <li><a href="#decoding">RAG-Sequence और RAG-Token गहराई से</a><span class="can">हर token का posterior निकाल पाएँगे, और decoding और K का असर समझा पाएँगे।</span></li>
+      <li><a href="#scale">असली पैमाना और पूरे नतीजे</a><span class="can">Paper के असली numbers और पूरी results table पढ़ पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">RAG वाली छहों Stanford slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="02-retrieval-dense.html#retriever">Lesson 2</a> (retriever, top-K), <a href="03-vectors-dense.html#embedding">Lesson 3</a> (vector, dot product, encoder, index) और <a href="04-probability-tools-dense.html">Lesson 4</a> (marginalization, softmax, ∏, loss)। पड़ाव 6 से आगे lesson 4 के गहरे version का <a href="04-probability-tools-dense.html#training">पड़ाव 9</a> (दर, negative marginal log-likelihood) भी काम आता है। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="parts">
+  <h3><span class="cn">1</span>RAG के दो models: retriever और generator</h3>
+
+  <p><b>RAG के अंदर दो models हैं। Retriever p<sub>η</sub>(z|x) हर passage z को वज़न देता है, और generator p<sub>θ</sub>(y|x, z) सवाल x और एक passage पढ़कर जवाब y लिखता है।</b> ये वही दो probabilities हैं, जो <a href="04-probability-tools-dense.html#read">lesson 4</a> के formula में थीं। नीचे लिखे छोटे η (eta) और θ (theta) दोनों models के <button class="def" data-w="w-parameters">parameters</button> के नाम हैं, यानी वो numbers, जिन्हें training बदलती है।</p>
+
+  <h4 class="sub" id="retriever">Retriever: DPR</h4>
+
+  <p>RAG का retriever DPR नाम का model है, जिसकी अपनी training <a href="12-dpr-dense.html#contrastive">lesson 12</a> में आती है। उसमें दो <button class="def" data-w="w-encoder">encoders</button> हैं, और दोनों <b class="term">BERT</b> से बने हैं, जो Google का 2018 का एक encoder model है। Query encoder सवाल x का vector q(x) बनाता है, और passage encoder हर passage z का vector d(z)।</p>
+
+  <p>किसी passage का score इन दोनों vectors का <button class="def" data-w="w-dot">dot product</button> है, जिसे d(z)<sup>⊤</sup>q(x) लिखते हैं। फिर <button class="def" data-w="w-softmax">softmax</button> scores को वज़नों में बदलता है, जिनका जोड़ 1 होता है। Lesson 4 में scores 1.0 और 0.0 से वज़न 0.731 और 0.269 बने थे। Stanford की slide यही बात ऐसे लिखती है:</p>
+  <div class="formula">p<sub>η</sub>(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</div>
+  <p>यहाँ <button class="def" data-w="w-propto">∝</button> का मतलब है: हर passage का exp निकालिए, फिर सबको एक ही number से भाग दीजिए, ताकि जोड़ 1 हो।</p>
+
+  <p>Passages बहुत सारे हैं। Paper में Wikipedia के करीब 2.1 करोड़ passages हैं, हर एक 100 शब्दों का। <span class="mine">paper से</span> इनके vectors सवाल आने से पहले एक बार बनते हैं, और एक <button class="def" data-w="w-index">index</button> में रखे रहते हैं। सवाल आने पर सिर्फ़ query encoder चलता है, और फिर एक search सबसे बड़े K dot products वाले passages निकालती है। इस search को <b class="term">MIPS</b> कहते हैं, यानी maximum inner product search, क्योंकि inner product dot product का ही दूसरा नाम है।</p>
+
+  <h4 class="sub" id="generator">Generator: BART</h4>
+
+  <p><b class="term">Generator</b> सवाल और एक passage पढ़कर जवाब लिखता है, <a href="01-how-llms-answer-dense.html#next-token">lesson 1</a> के LLM की तरह एक बार में एक token। RAG का generator <button class="def" data-w="w-bart">BART</button> है, जो एक <b class="term">encoder-decoder</b> model है। उसका encoder input text पढ़कर उसके vectors बनाता है, और decoder उन vectors को देखते हुए जवाब का एक-एक token लिखता है।</p>
+
+  <p>BART एक ही text पढ़ता है, इसलिए सवाल और passage को आगे-पीछे जोड़कर एक text बनाते हैं। दो texts को ऐसे जोड़ने को <b class="term">concatenate</b> करना कहते हैं। Queue log के साथ input और output ऐसा दिखेगा: <span class="mine">मेरा example</span></p>
+  <div class="sentence">Input: question: Which office hour is least crowded? passage: Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<br>Output: <span class="new">Thursday 9am</span></div>
+
+  <figure>
+    <div class="flow">
+      <div class="node"><b>सवाल x</b><span class="ex">Which office hour is least crowded?</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Query encoder q(x)</b><span class="ex">सवाल का vector</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>MIPS</b><span class="ex">Index के हर d(z) से dot product, top-K</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>z<sub>1</sub> … z<sub>K</sub></b><span class="ex">हर एक का वज़न, softmax से</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Generator p<sub>θ</sub></b><span class="ex">हर z के साथ एक बार</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Marginalize</b><span class="ex">जोड़कर p(y|x)</span></div>
+    </div>
+    <figcaption>एक सवाल पर RAG का पूरा रास्ता। पहले चार boxes retriever हैं, और आख़िरी दो generator। Marginalize वाला box पड़ाव 2 में आता है।</figcaption>
+  </figure>
+
+  <p>इस ढाँचे की एक कीमत है। Generator हर passage के साथ अलग से चलता है, इसलिए K = 5 हो, तो एक सवाल पर generator 5 बार चलता है।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p14.png"><img src="img/slide-p14.png" alt="Stanford slide: RAG का पूरा ढाँचा, retriever और generator" loading="lazy"></a>
+    <figcaption>Stanford की slide: RAG का ढाँचा। हरा box retriever p<sub>η</sub> है, जिसमें query encoder q, MIPS और document index d(z) हैं। नीला box generator p<sub>θ</sub> है। ऊपर का dashed arrow training है, जो पड़ाव 4 में आता है। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="formula">
+  <h3><span class="cn">2</span>Marginalization: passage का label नहीं चाहिए</h3>
+
+  <p><b>RAG passage को एक छिपा हुआ choice मानता है, और जवाब की probability सारे लाए गए passages पर वज़न वाले जोड़ से निकालता है।</b> ऐसे छिपे हुए choice को <b class="term">latent variable</b> कहते हैं। जवाब किसी एक passage से आया, लेकिन किससे, ये data में नहीं लिखा।</p>
+
+  <p>Retriever को सीधे सिखाने के लिए हर सवाल के साथ उसका सही passage लिखा होना चाहिए। लाखों सवालों के लिए कोई इंसान इतने passages नहीं चुनता। Lesson 4 का <button class="def" data-w="w-marginal">marginalization</button> इसी हालत का तरीका है: हर case की probability को उसके वज़न से गुणा कीजिए, फिर सब जोड़िए। वहाँ 0.5 × 0.8 + 0.5 × 0.1 = 0.45 था।</p>
+
+  <p>अब सवाल <q>Which office hour is least crowded?</q> पर देखिए। Retriever 3 passages लाया, यानी K = 3, और उनके scores 1.8, 1.1 और 0.0 हैं। Softmax में e<sup>1.8</sup> = 6.05, e<sup>1.1</sup> = 3.00 और e<sup>0</sup> = 1 हैं, जिनका जोड़ 10.05 है। तो queue log का वज़न 6.05 ÷ 10.05 = 0.60 है, और इसी तरह बाकी दो के 0.30 और 0.10। <span class="mine">numbers मेरे बनाए हैं</span></p>
+
+  <p>Generator हर passage के साथ <q>Thursday 9am</q> को एक probability देता है। हर row में वज़न और generator की probability का गुणा है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage z</th><th class="numh">वज़न p(z|x)</th><th class="numh">p(“Thu 9am” | x, z)</th><th class="numh">गुणा</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log<span class="sub">Thursday 9am पर average 3 students</span></td><td class="num">0.6</td><td class="num">0.9</td><td class="num">0.54</td></tr>
+      <tr class="hi"><td>Office hours page<span class="sub">Tuesday 4pm और Thursday 9am, कौन खाली है ये नहीं लिखा</span></td><td class="num">0.3</td><td class="num">0.5</td><td class="num">?</td></tr>
+      <tr><td>पुराना forum post<span class="sub">midweek afternoons are usually the least crowded</span></td><td class="num">0.1</td><td class="num">0.1</td><td class="num">0.01</td></tr>
+      <tr class="total"><td>जोड़ = p(“Thu 9am” | x)</td><td></td><td></td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">दूसरी row आप निकालिए</p>
+    <p>Office hours page का वज़न 0.3 है, और उसके साथ generator 0.5 देता है। गुणा कितना है, और <q>Thursday 9am</q> का कुल chance कितना?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>0.3 × 0.5 = 0.15। कुल chance = 0.54 + 0.15 + 0.01 = <b>0.70</b>।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><q>Wednesday afternoon</q> के लिए generator के numbers 0.05, 0.2 और 0.8 हैं, क्योंकि forum post midweek afternoons की बात करता है। उसका जोड़ 0.6 × 0.05 + 0.3 × 0.2 + 0.1 × 0.8 = 0.03 + 0.06 + 0.08 = 0.17 है। तो RAG <q>Thursday 9am</q> चुनता है, 0.70 बनाम 0.17।</p>
+
+  <p>यही हिसाब symbols में ऐसा लिखते हैं:</p>
+  <div class="formula">p(y|x) ≈ <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i> ∈ top-<i>K</i></span></span> p<sub>η</sub>(z|x) · p<sub>θ</sub>(y|x, z)</div>
+  <p>p<sub>η</sub>(z|x) वज़न हैं (0.6, 0.3, 0.1), p<sub>θ</sub>(y|x, z) generator के numbers हैं (0.9, 0.5, 0.1), और ∑ उनके गुणा जोड़ता है (0.70)। जोड़ सिर्फ़ top-K passages पर है, बाकी 2.1 करोड़ पर नहीं, इसलिए “=” की जगह <button class="def" data-w="w-approx">≈</button> लिखा है।</p>
+
+  <p><b>इस पूरे हिसाब में कहीं नहीं लिखा कि सही passage queue log है।</b> Formula को सिर्फ़ सवाल x और जवाब y चाहिए, और passage जोड़ के अंदर छिपा रहता है। इसलिए RAG को train करने के लिए सवाल-जवाब के जोड़े काफ़ी हैं।</p>
+
+  <div class="widget" id="ragw">
+    <h4>Retriever के scores बदलिए</h4>
+    <p class="hint">Sliders retriever के scores हैं, और generator के numbers नहीं बदलते। Widget exact वज़न लेता है, इसलिए नीचे 0.70 की जगह 0.701 दिखता है। आख़िरी column पड़ाव 4 में आता है।</p>
+    <div class="ctl">
+      <label for="w1">Queue log</label><input id="w1" type="range" min="-1" max="3" step="0.1" value="1.8"><output id="o1">1.8</output>
+      <label for="w2">Office hours page</label><input id="w2" type="range" min="-1" max="3" step="0.1" value="1.1"><output id="o2">1.1</output>
+      <label for="w3">Forum post</label><input id="w3" type="range" min="-1" max="3" step="0.1" value="0"><output id="o3">0.0</output>
+    </div>
+    <div class="btns">
+      <button type="button" data-s="1.8,1.1,0">अच्छा retriever</button>
+      <button type="button" data-s="1,1,1">तीनों बराबर</button>
+      <button type="button" data-s="0,0.7,1.9">बिगड़ा retriever</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="num">p(z|x)</th><th class="num">“Thu 9am”</th><th class="num">“Wed”</th><th>Training</th></tr></thead>
+      <tbody id="ragw-body"></tbody>
+    </table></div>
+    <div class="bars" id="ragw-bars"></div>
+    <p class="out" id="ragw-out"></p>
+  </div>
+
+  <p>अब “बिगड़ा retriever” दबाइए। Retriever अब forum post को 0.69 वज़न देता है, <q>Wednesday afternoon</q> 0.60 पर पहुँचता है, और <q>Thursday 9am</q> सिर्फ़ 0.27 पर रहता है। Generator के numbers वही हैं, इसलिए ये पूरा फ़र्क retriever के वज़नों से आया। <b>मतलब RAG का जवाब retriever के वज़नों पर उतना ही टिका है, जितना generator के numbers पर।</b></p>
+
+  <p>इस जोड़ की एक हद भी है। सही passage top-K में आया ही नहीं, तो वो जोड़ में नहीं है, और training उसका वज़न नहीं बढ़ा सकती। Lesson 2 में इसे <button class="def" data-w="w-ceiling">recall ceiling</button> कहा था।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="seq-token">
+  <h3><span class="cn">3</span>RAG-Sequence और RAG-Token: वज़न वाला जोड़ कब लगे</h3>
+
+  <p><b>RAG-Sequence हर passage के साथ पूरा जवाब लिखता है, फिर वज़न वाला जोड़ लगाता है। RAG-Token जवाब के हर token पर अलग से वज़न वाला जोड़ लगाता है।</b> अब तक पूरा जवाब एक टुकड़ा था, लेकिन generator उसे एक-एक token करके लिखता है। जब जवाब के अलग हिस्से अलग passages में हों, तब दोनों तरीकों के नतीजे अलग आते हैं।</p>
+
+  <p>पूरे जवाब की probability उसके tokens की probabilities का गुणा है, जो lesson 4 का <button class="def" data-w="w-chain">chain rule</button> है। जैसे Thursday की probability 0.9 हो, और उसके बाद Zoom की 0.2, तो पूरे जवाब की 0.9 × 0.2 = 0.18।</p>
+
+  <p>अब सवाल लीजिए: <q>Least crowded office hour, and where is it?</q> जवाब के दो tokens हैं: <q>Thursday</q> और <q>Zoom</q>। Queue log बताता है कि Thursday सबसे खाली है, लेकिन जगह नहीं बताता। Office hours page में <q>Thursday 9am on Zoom</q> लिखा है, लेकिन ये नहीं कि कौन सा slot खाली है। <span class="mine">numbers मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">वज़न</th><th class="numh">p(Thursday | x, z)</th><th class="numh">p(Zoom | x, z, Thursday)</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.6</td><td class="num">0.9</td><td class="num">0.2</td></tr>
+      <tr><td>Office hours page</td><td class="num">0.4</td><td class="num">0.5</td><td class="num">0.9</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>RAG-Sequence पहले हर passage के साथ पूरा जवाब लिखता है, फिर वज़न वाला जोड़ लगाता है:</p>
+  <ol class="plain">
+    <li>Queue log के साथ पूरा जवाब: 0.9 × 0.2 = 0.18।</li>
+    <li>Office hours page के साथ पूरा जवाब: 0.5 × 0.9 = 0.45।</li>
+    <li>वज़न वाला जोड़: 0.6 × 0.18 + 0.4 × 0.45 = 0.108 + 0.180 = <b>0.288</b>।</li>
+  </ol>
+  <p>Slide इसे ऐसे कहती है: <q>pick one passage, generate the whole answer with it</q>।</p>
+
+  <p>RAG-Token हर token पर पहले वज़न वाला जोड़ लगाता है, फिर tokens का गुणा करता है:</p>
+  <ol class="plain">
+    <li>Thursday: 0.6 × 0.9 + 0.4 × 0.5 = 0.54 + 0.20 = 0.74।</li>
+    <li>Zoom: 0.6 × 0.2 + 0.4 × 0.9 = 0.12 + 0.36 = 0.48।</li>
+    <li>गुणा: 0.74 × 0.48 = <b>0.355</b>।</li>
+  </ol>
+  <p>Slide पर इसका मतलब है: <q>re-pick the passage at every token of the answer</q>।</p>
+
+  <p><b>RAG-Token को ज़्यादा probability मिली, 0.355 बनाम 0.288।</b> वो Thursday के लिए queue log पर और Zoom के लिए office hours page पर टिक सकता है। RAG-Sequence को पूरा जवाब एक ही passage से लिखना पड़ता है, और कोई अकेला passage दोनों बातें नहीं जानता।</p>
+
+  <p>दोनों formulas में वही चीज़ें हैं, बस ∑ और <button class="def" data-w="w-prod">∏</button> की जगह बदली है। ∏ का मतलब है नीचे लिखी range पर सबका गुणा, ठीक वैसे जैसे ∑ सबका जोड़ है। यहाँ y<sub><i>i</i></sub> जवाब का i-वाँ token है, और y<sub>&lt;<i>i</i></sub> उससे पहले के सारे tokens।</p>
+  <div class="formula">RAG-Sequence: p(y|x) ≈ ∑<sub><i>z</i></sub> p(z|x) ∏<sub><i>i</i></sub> p(y<sub><i>i</i></sub> | x, z, y<sub>&lt;<i>i</i></sub>)</div>
+  <div class="formula">RAG-Token: p(y|x) ≈ ∏<sub><i>i</i></sub> ∑<sub><i>z</i></sub> p(z|x) p(y<sub><i>i</i></sub> | x, z, y<sub>&lt;<i>i</i></sub>)</div>
+  <p>RAG-Sequence में ∏ अंदर है: पहले हर passage पर tokens का गुणा होता है (0.18 और 0.45), फिर ∑। RAG-Token में ∑ अंदर है: पहले हर token पर passages का जोड़ होता है (0.74 और 0.48), फिर ∏। पड़ाव 5 के नतीजों में दोनों तरीके करीब-करीब बराबर निकलते हैं।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG, formula और RAG-Sequence, RAG-Token" loading="lazy"></a>
+    <figcaption>Stanford की slide: Deep Dive into RAG। ऊपर retriever और generator हैं, बीच में पड़ाव 2 का formula, और नीचे RAG-Sequence और RAG-Token की दो lines। अब आप इसकी हर line पढ़ सकते हैं।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>ऊपर वाले example में दोनों passages का वज़न 0.5-0.5 कर दीजिए। RAG-Sequence और RAG-Token, दोनों की probability निकालिए।</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>RAG-Sequence: 0.5 × 0.18 + 0.5 × 0.45 = 0.315। RAG-Token: (0.5 × 0.9 + 0.5 × 0.5) × (0.5 × 0.2 + 0.5 × 0.9) = 0.70 × 0.55 = 0.385। RAG-Token फिर आगे है, क्योंकि दोनों tokens अब भी अलग passages से आते हैं।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="training">
+  <h3><span class="cn">4</span>एक loss से retriever और generator की training</h3>
+
+  <p><b>RAG की training सही जवाब की probability का −ln छोटा करती है, और यही एक loss retriever और generator, दोनों को बदलता है।</b> एक loss से सारे हिस्सों को साथ train करने को <b class="term">end-to-end training</b> कहते हैं। Data में सिर्फ़ सवाल-जवाब के जोड़े हैं, फिर भी इसी loss से retriever सीखता है कि किस passage को ज़्यादा वज़न दे।</p>
+
+  <p><button class="def" data-w="w-loss">Loss</button> lesson 4 वाला है: सही जवाब की probability p का −ln। पड़ाव 2 में <q>Thursday 9am</q> को 0.70 मिला था, तो loss = −ln 0.70 = 0.357। सारे training examples j पर ये losses जुड़ते हैं:</p>
+  <div class="formula"><span class="sum"><span class="op">∑</span><span class="lim"><i>j</i></span></span> − log p(y<sub><i>j</i></sub> | x<sub><i>j</i></sub>)</div>
+  <p>Slide इसे <button class="def" data-w="w-nmll">negative marginal log-likelihood</button> कहती है। Marginal इसलिए, क्योंकि p(y|x) खुद passages पर marginalization से बना है, और slide का log यही ln है।</p>
+
+  <h4 class="sub" id="rule">किस passage का score बढ़ने से loss घटता है</h4>
+
+  <p>नीचे की table में हर row एक score को 0.5 बढ़ाती है, और बाकी दो scores वैसे ही रहते हैं। यहाँ वज़न 3 decimals तक हैं, इसलिए पहली row में loss 0.355 है, 0.357 नहीं। <span class="mine">हिसाब मेरा</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किसका score 0.5 बढ़ा</th><th>वज़न: queue log, office hours, forum</th><th class="numh">p(“Thu 9am” | x)</th><th class="numh">Loss</th></tr></thead>
+    <tbody>
+      <tr><td>किसी का नहीं</td><td>0.602, 0.299, 0.099</td><td class="num">0.701</td><td class="num">0.355</td></tr>
+      <tr class="hi"><td>Queue log, 1.8 से 2.3</td><td>0.714, 0.215, 0.072</td><td class="num">0.757</td><td class="num">0.279</td></tr>
+      <tr><td>Office hours page, 1.1 से 1.6</td><td>0.504, 0.413, 0.083</td><td class="num">0.668</td><td class="num">0.403</td></tr>
+      <tr><td>Forum post, 0.0 से 0.5</td><td>0.565, 0.281, 0.154</td><td class="num">0.664</td><td class="num">0.409</td></tr>
+    </tbody>
+  </table></div>
+  <p>Queue log का score बढ़ा, तो कुल chance 0.701 से 0.757 हुआ, और loss घटा। बाकी दोनों में से किसी का score बढ़ा, तो कुल chance घटा और loss बढ़ा, office hours page के 0.5 के बावजूद।</p>
+
+  <p>इसकी वजह weighted average में है। p(y|x) generator के numbers 0.9, 0.5 और 0.1 का weighted average है, यानी हर number को उसके वज़न से गुणा करके जोड़। Weighted average हमेशा सबसे छोटे और सबसे बड़े number के बीच रहता है, और जिस number का वज़न बढ़े, average उसी की तरफ़ खिसकता है।</p>
+
+  <p>Queue log को अलग रखकर देखिए। Office hours page और forum post के वज़न आपस में 3 : 1 हैं, यानी 0.75 और 0.25। उनका average 0.75 × 0.5 + 0.25 × 0.1 = 0.4 है। तो कुल chance = 0.6 × 0.9 + 0.4 × 0.4 = 0.54 + 0.16 = 0.70। Queue log का score बढ़ने पर भी ये 3 : 1 नहीं बदलता, क्योंकि softmax में बाकी दोनों के exps वही रहते हैं। इसलिए queue log का वज़न w हो, तो कुल chance w × 0.9 + (1 − w) × 0.4 है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Queue log का वज़न w</th><th class="numh">कुल chance</th></tr></thead>
+    <tbody>
+      <tr><td>0.5</td><td class="num">0.65</td></tr>
+      <tr class="hi"><td>0.6, अभी</td><td class="num">0.70</td></tr>
+      <tr><td>0.7</td><td class="num">0.75</td></tr>
+      <tr><td>0.8</td><td class="num">0.80</td></tr>
+      <tr><td>1.0</td><td class="num">0.90</td></tr>
+    </tbody>
+  </table></div>
+  <p>Office hours page के साथ यही हिसाब उल्टा चलता है, क्योंकि उसका 0.5 बाकी दोनों passages के average 0.79 से कम है।</p>
+
+  <p><b>नियम ये है: जिस passage के साथ generator सही जवाब को कुल chance से ज़्यादा probability देता है, training उसका score बढ़ाती है।</b> जिसके साथ कम देता है, उसका score training घटाती है। यहाँ कुल chance 0.70 है, इसलिए queue log (0.9) का score बढ़ेगा, और office hours page (0.5) और forum post (0.1) के scores घटेंगे। <span class="mine">ये नियम slide पर नहीं है, ये गणित से निकलता है</span></p>
+
+  <p>अब बिगड़े retriever पर यही नियम चलाइए। वहाँ कुल chance 0.27 है, इसलिए queue log (0.9) और office hours page (0.5), दोनों के scores बढ़ेंगे, और forum post (0.1) का घटेगा। Data में queue log का नाम कहीं नहीं था, फिर भी training retriever को queue log की तरफ़ ले जाती है। पड़ाव 2 के widget का आख़िरी column यही नियम दिखाता है।</p>
+
+  <h4 class="sub" id="whotrains">कौन से हिस्से train होते हैं</h4>
+
+  <p>Training हर parameter को उस दिशा में थोड़ा खिसकाती है, जिसमें loss घटे, और ये दिशा <button class="def" data-w="w-gradient">gradient</button> बताता है। Loss से पीछे की तरफ़ चलकर हर parameter का gradient निकालने के तरीके को <b class="term">backpropagation</b> कहते हैं, छोटे में backprop। RAG में ये gradient generator के parameters θ तक, और retriever में query encoder तक पहुँचता है।</p>
+
+  <p>Passage encoder और index नहीं बदलते, क्योंकि passage encoder बदलता, तो 2.1 करोड़ passages के vectors दोबारा बनाकर index फिर से बनाना पड़ता। <span class="mine">paper से</span> इसलिए training सिर्फ़ सवाल की तरफ़ से सुधार करती है। वो query encoder को ऐसे बदलती है, कि काम के passages से q(x) का dot product बढ़े। किसी passage का vector खराब बना हो, तो training उसे नहीं सुधार सकती।</p>
+
+  <p>पड़ाव 1 की slide पर ऊपर वाला dashed arrow यही कहता है: <q>End-to-End Backprop through q and p<sub>θ</sub></q>। Arrow q और p<sub>θ</sub> तक जाता है, document index के d(z) तक नहीं।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Widget में “तीनों बराबर” दबाइए, यानी हर passage का वज़न 1/3। <q>Thursday 9am</q> का कुल chance कितना है? Training किस passage का score बढ़ाएगी, किसका घटाएगी, और office hours page का क्या होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>कुल chance (0.9 + 0.5 + 0.1) ÷ 3 = 0.50 है। Queue log (0.9) इससे ऊपर है, तो उसका score बढ़ेगा। Forum post (0.1) नीचे है, तो उसका घटेगा। Office hours page ठीक 0.5 देता है, यानी कुल chance के बराबर, इसलिए उसका score वैसा ही रहेगा।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="results">
+  <h3><span class="cn">5</span>NQ पर नतीजे: RAG, T5-11B और DPR</h3>
+
+  <p>Paper RAG को सवाल-जवाब के datasets पर नापता है। Natural Questions (NQ) में Google search पर लोगों के असली सवाल हैं, और उनके जवाब Wikipedia में हैं। <span class="mine">paper से</span> जवाब तभी सही गिनते हैं, जब वो सही जवाब से हूबहू मिले, और इस नाप को <b class="term">Exact Match</b> कहते हैं। Score ऐसे सवालों का % है।</p>
+
+  <p>Table में दो किस्म के models हैं। <b class="term">Closed book</b> model के पास कोई document नहीं होता, वो सिर्फ़ अपने parameters से जवाब देता है। Open book model पहले documents में ढूँढता है, फिर जवाब देता है।</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Model</th><th>किस तरह का</th><th class="numh">NQ</th></tr></thead>
+    <tbody>
+      <tr><td>T5-11B</td><td>Closed book, 11 billion parameters</td><td class="num">34.5</td></tr>
+      <tr><td>REALM</td><td>Open book, passage में से जवाब का टुकड़ा उठाता है</td><td class="num">40.4</td></tr>
+      <tr><td>DPR</td><td>Open book, passage में से जवाब का टुकड़ा उठाता है</td><td class="num">41.5</td></tr>
+      <tr><td>RAG-Token</td><td>Open book, जवाब खुद लिखता है</td><td class="num">44.1</td></tr>
+      <tr class="hi"><td>RAG-Sequence</td><td>Open book, जवाब खुद लिखता है</td><td class="num">44.5</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>T5-11B 34.5 पर है, और RAG-Sequence 44.5 पर, यानी 10 points आगे। 1,000 सवालों में ये 345 और 445 हूबहू सही जवाब हैं। <b>मतलब documents वाला RAG, सिर्फ़ parameters वाले T5-11B से 1,000 में 100 सवाल ज़्यादा हूबहू सही करता है।</b></p>
+
+  <p>DPR वाली row का मतलब DPR retriever के ऊपर बना पूरा QA system है, जो passage में से जवाब का टुकड़ा उठाता है। RAG उसी तरह का retriever लेकर जवाब खुद लिखता है, और 41.5 से 44.5 पर पहुँचता है। RAG-Token, RAG-Sequence से सिर्फ़ 0.4 पीछे है।</p>
+
+
+
+  <p>RAG ने retriever को सवाल-जवाब के जोड़ों से सिखाया, लेकिन इसके लिए generator के parameters भी बदले। आज आप LLM अक्सर किसी company की API से लेते हैं, जैसे GPT या Gemini, और उसके parameters नहीं बदल सकते। <a href="06-rag-pipeline-dense.html#frozen">Lesson 6</a> इसी हालत से शुरू होता है।</p>
+
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 5 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले पड़ाव 4 वाले नियम का पूरा गणित आता है, फिर ये कि वही loss generator और query encoder तक कैसे पहुँचता है। उसके बाद RAG-Sequence और RAG-Token गहराई से, फिर paper का असली पैमाना, और आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="posterior">
+  <h3><span class="cn">6</span>Training के नियम का गणित: score पर loss की दर</h3>
+
+  <p><b>किसी score पर loss की दर बताती है कि score थोड़ा बढ़े, तो loss कितना बदलता है।</b> Training हर score को इस दर की उल्टी दिशा में खिसकाती है। पड़ाव 4 के नियम ने सिर्फ़ दिशा बताई थी। ये दर दिशा के साथ ये भी बताती है कि किस score को कितना धक्का मिलेगा।</p>
+
+  <h4 class="sub" id="rate">दर: input थोड़ा बदलिए, फिर बदलाव का भाग</h4>
+
+  <p>किसी चीज़ की दर निकालने का तरीका सीधा है। Input को बहुत थोड़ा बदलिए, देखिए output कितना बदला, और उस बदलाव को input के बदलाव से भाग दीजिए। इस पड़ाव में exact वज़न 0.602, 0.299 और 0.099 चलते हैं, इसलिए कुल chance 0.701 है और loss 0.355। अब एक बार में एक score 0.01 बढ़ाइए: <span class="mine">हिसाब मेरा</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किसका score 0.01 बढ़ा</th><th class="numh">Loss का बदलाव</th><th class="numh">बदलाव ÷ 0.01</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log</td><td class="num">−0.00171</td><td class="num">−0.171</td></tr>
+      <tr><td>Office hours page</td><td class="num">+0.00086</td><td class="num">+0.086</td></tr>
+      <tr><td>Forum post</td><td class="num">+0.00086</td><td class="num">+0.086</td></tr>
+    </tbody>
+  </table></div>
+  <p>0.01 की जगह और छोटा बदलाव लीजिए, तो ये दरें −0.171, +0.086 और +0.085 पर टिक जाती हैं। जिस number पर दर टिकती है, उसे ∂𝓛/∂s लिखते हैं। ∂ का मतलब है कि सिर्फ़ यही एक score बदला, बाकी सब वैसे ही रहे, और ऐसी दर को <button class="def" data-w="w-partial">partial derivative</button> कहते हैं। Minus का मतलब है कि queue log का score बढ़ने पर loss घटता है।</p>
+
+  <h4 class="sub" id="post">Posterior: जवाब देखने के बाद हर passage का हिस्सा</h4>
+
+  <p>ये दरें पड़ाव 2 की table से सीधे निकलती हैं। उस table के गुणा वाले column में हर passage का कुल chance में हिस्सा था: 0.54, 0.15 और 0.01, कुल 0.70। हर हिस्से को कुल से भाग दीजिए: 0.54 ÷ 0.70 = 0.771, 0.15 ÷ 0.70 = 0.214 और 0.01 ÷ 0.70 = 0.014। Exact वज़नों से यही numbers 0.773, 0.213 और 0.014 आते हैं।</p>
+
+  <p><b>जवाब देखने के बाद के इन वज़नों को <span class="term">posterior</span> कहते हैं, और इन्हें p(z|x, y) लिखते हैं।</b> Retriever के अपने वज़न p<sub>η</sub>(z|x) जवाब देखने से पहले के हैं, और उन्हें prior कहते हैं। Prior सिर्फ़ सवाल देखता है, जबकि posterior ये भी देखता है कि किस passage के साथ सही जवाब कितनी आसानी से बनता है।</p>
+  <div class="formula">p(z|x, y) = <span class="frac"><span>p<sub>η</sub>(z|x) · p<sub>θ</sub>(y|x, z)</span><span>p(y|x)</span></span></div>
+  <p>Queue log के लिए ऊपर 0.602 × 0.9 = 0.542 है, और नीचे 0.701, तो posterior 0.773 है। p(z|x, y) और p<sub>θ</sub>(y|x, z) अलग चीज़ें हैं, जैसे <a href="04-probability-tools-dense.html#probrules">lesson 4</a> में p(full | Tuesday) और p(Tuesday | full) अलग थे।</p>
+
+  <p>अब दरों को देखिए: −0.171 = 0.602 − 0.773, +0.086 = 0.299 − 0.213, और +0.085 = 0.099 − 0.014। <b>हर score पर loss की दर ठीक prior − posterior है।</b></p>
+  <div class="formula">∂𝓛 / ∂s<sub>z</sub> = p<sub>η</sub>(z|x) − p(z|x, y)</div>
+  <p>पड़ाव 4 का नियम इसी में छिपा है। Posterior ÷ prior = p<sub>θ</sub>(y|x, z) ÷ p(y|x) है। इसलिए posterior तभी prior से बड़ा होता है, जब उस passage के साथ generator का number कुल chance से बड़ा हो। Queue log के लिए 0.9 ÷ 0.701 = 1.284, और सच में 0.773 ÷ 0.602 = 1.284।</p>
+
+  <h4 class="sub" id="derive">ये दर कहाँ से आती है: पाँच steps</h4>
+
+  <p>Generator के numbers को a<sub>z</sub> लिखिए: 0.9, 0.5 और 0.1। Formula तक lesson 4 का ln वाला नियम और दरों के तीन नियम पहुँचा देते हैं। हर step के साथ numbers से जाँच है:</p>
+  <ol class="plain">
+    <li><b>Loss को दो हिस्सों में तोड़िए।</b> Softmax का वज़न e<sup>s</sup> ÷ Z है, जहाँ Z = e<sup>1.8</sup> + e<sup>1.1</sup> + e<sup>0</sup> = 10.054। इसलिए p(y|x) = u ÷ Z, जहाँ u = 6.050 × 0.9 + 3.004 × 0.5 + 1 × 0.1 = 7.047। Lesson 4 का नियम ln(a ÷ b) = ln a − ln b लगाइए, तो 𝓛 = −ln u + ln Z। जाँच: −1.953 + 2.308 = 0.355।</li>
+    <li><b>e<sup>s</sup> की दर खुद e<sup>s</sup> है।</b> जाँच: (e<sup>1.81</sup> − e<sup>1.80</sup>) ÷ 0.01 = 6.08, यानी करीब e<sup>1.8</sup> = 6.05।</li>
+    <li><b>ln u की दर 1 ÷ u है।</b> जाँच: (ln 7.057 − ln 7.047) ÷ 0.01 = 0.1418, और 1 ÷ 7.047 = 0.1419।</li>
+    <li><b>जुड़ी हुई दरें गुणा होती हैं।</b> इसे दरों वाला <button class="def" data-w="w-chainrule">chain rule</button> कहते हैं। Queue log का score बदले, तो u में सिर्फ़ e<sup>1.8</sup> × 0.9 बदलता है, 5.445 की दर से। u बदले, तो ln u उसके 1 ÷ 7.047 गुना बदलता है। तो ln u की दर 5.445 ÷ 7.047 = 0.773 है, जो queue log का posterior है। इसी तरह ln Z की दर 6.05 ÷ 10.054 = 0.602 है, जो उसका prior है।</li>
+    <li><b>दोनों हिस्से जोड़िए।</b> 𝓛 = −ln u + ln Z में queue log की दर −0.773 + 0.602 = −0.171 है। हर passage के लिए यही हिसाब prior − posterior देता है।</li>
+  </ol>
+
+  <h4 class="sub" id="step">Scores पर training का एक कदम</h4>
+
+  <p>Training हर score को उसकी दर की उल्टी दिशा में खिसकाती है। Step का size 1 लीजिए, यानी हर score में से उसकी दर घटाइए: 1.8 + 0.171 = 1.971, 1.1 − 0.086 = 1.014, और 0.0 − 0.085 = −0.085। नए वज़न 0.661, 0.254 और 0.085 बनते हैं, कुल chance 0.701 से 0.731 होता है, और loss 0.355 से 0.314। <span class="mine">हिसाब मेरा</span></p>
+
+  <p><b>मतलब training retriever के वज़नों को posterior की तरफ़ खींचती है: queue log का वज़न 0.602 से 0.661 हुआ, उसके posterior 0.773 की तरफ़।</b> असली training ये कदम scores पर नहीं, parameters पर लेती है, जो पड़ाव 7 में आता है।</p>
+
+  <p>बिगड़े retriever में (scores 0, 0.7 और 1.9) prior 0.103, 0.208 और 0.689 हैं, और गुणा 0.093, 0.104 और 0.069, कुल 0.266। Posterior 0.349, 0.391 और 0.260 बनते हैं, इसलिए दरें −0.246, −0.183 और +0.430 हैं। Queue log और office hours page, दोनों ऊपर जाते हैं, और forum post को सबसे बड़ा धक्का नीचे की तरफ़ मिलता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>“तीनों बराबर” पर, यानी हर prior 1/3 पर, posterior और दरें निकालिए। Office hours page की दर कितनी है, और क्यों?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>गुणा 0.300, 0.167 और 0.033 हैं, कुल 0.50। Posterior 0.600, 0.333 और 0.067 हैं। दरें 0.333 − 0.600 = −0.267, 0.333 − 0.333 = 0, और 0.333 − 0.067 = +0.267 हैं। Office hours page की दर 0 है, क्योंकि उसका 0.5 कुल chance 0.50 के बराबर है, और तब posterior prior के बराबर रहता है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="endtoend">
+  <h3><span class="cn">7</span>एक loss, दो models: generator और query encoder तक दर</h3>
+
+  <p><b>वही loss generator को भी दर देता है, और query encoder को भी, और दोनों दरों में posterior फिर आता है।</b> पड़ाव 6 में सब कुछ scores पर था। अब देखिए कि ये दरें दोनों models के parameters तक कैसे पहुँचती हैं, और passage encoder तक क्यों नहीं।</p>
+
+  <h4 class="sub" id="genrate">Generator पर दर: posterior जितना धक्का</h4>
+
+  <p>Generator का number a<sub>z</sub> उसके tokens की probabilities का गुणा है, और lesson 4 के नियम से ln a<sub>z</sub> उनके ln का जोड़ है। इसलिए ln a<sub>z</sub> पर आई दर सीधे हर token तक जाती है, और यहाँ वही दर देखिए। हर ln a<sub>z</sub> को 0.01 बढ़ाइए, यानी a<sub>z</sub> को e<sup>0.01</sup> = 1.01005 से गुणा कीजिए: <span class="mine">हिसाब मेरा</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Generator का कौन सा number</th><th class="numh">दर, 0.01 के बदलाव से</th><th class="numh">Posterior</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>0.9, queue log के साथ</td><td class="num">−0.774</td><td class="num">0.773</td></tr>
+      <tr><td>0.5, office hours page के साथ</td><td class="num">−0.214</td><td class="num">0.213</td></tr>
+      <tr><td>0.1, forum post के साथ</td><td class="num">−0.014</td><td class="num">0.014</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Generator के हर ln a<sub>z</sub> पर loss की दर ठीक −posterior है।</b> वजह पड़ाव 6 वाली है। ln a<sub>z</sub> बदलने पर u का हिस्सा e<sup>s<sub>z</sub></sup> a<sub>z</sub> उसी की दर से बदलता है, और ln u की दर 1 ÷ u है। उनका गुणा e<sup>s<sub>z</sub></sup> a<sub>z</sub> ÷ u posterior है, और loss में −ln u है, इसलिए minus। Z में a<sub>z</sub> नहीं है, इसलिए वो हिस्सा नहीं बदलता।</p>
+
+  <p>इसका मतलब ये है कि generator उस passage के साथ सही जवाब लिखना सबसे ज़्यादा सीखता है, जिसका posterior सबसे बड़ा है। Queue log के साथ <q>Thursday 9am</q> लिखने पर 0.773 का धक्का है, और forum post के साथ सिर्फ़ 0.014 का। इसलिए generator ये नहीं सीखता कि forum post पढ़कर भी Thursday 9am लिखे, जबकि वो बात forum post में है ही नहीं। <span class="mine">ये मतलब हिसाब से निकाला है, slide पर नहीं</span></p>
+
+  <h4 class="sub" id="qvector">Query vector पर दर, और उस पर एक कदम</h4>
+
+  <p>Retriever में score d(z)<sup>⊤</sup>q(x) है, और training के हाथ में सिर्फ़ q(x) है। अब q(x) को एक असली vector मानिए, जिसमें 2 numbers हैं, और passages के vectors भी 2-2 numbers के लीजिए। Office hours page का vector lesson 3 वाला ही है। <span class="mine">vectors मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Text, और उसका vector</th><th>q(x) से dot product</th></tr></thead>
+    <tbody>
+      <tr><td>सवाल, q(x)<span class="sub mono">[1.0, 2.0]</span></td><td>–</td></tr>
+      <tr class="hi"><td>Queue log, d(z)<span class="sub mono">[1.0, 0.4]</span></td><td>1.0 × 1.0 + 2.0 × 0.4 = 1.8</td></tr>
+      <tr><td>Office hours page<span class="sub mono">[0.9, 0.1]</span></td><td>1.0 × 0.9 + 2.0 × 0.1 = 1.1</td></tr>
+      <tr><td>Forum post<span class="sub mono">[0.4, −0.2]</span></td><td>1.0 × 0.4 + 2.0 × (−0.2) = 0.0</td></tr>
+    </tbody>
+  </table></div>
+  <p>q(x) का पहला number q<sub>1</sub> 0.01 बढ़े, तो हर score उस passage के पहले number × 0.01 बढ़ता है। वजह ये है कि dot product में q<sub>1</sub> सिर्फ़ पहले numbers से गुणा होता है। इसलिए score की q<sub>1</sub> पर दर उस passage का पहला number है। Chain rule से loss की q<sub>1</sub> पर दर ऐसे बनती है:</p>
+  <ol class="plain">
+    <li>Queue log: score की दर −0.171, गुणा पहला number 1.0, यानी −0.171।</li>
+    <li>Office hours page: 0.086 × 0.9 = 0.077।</li>
+    <li>Forum post: 0.085 × 0.4 = 0.034।</li>
+    <li>जोड़: −0.171 + 0.077 + 0.034 = −0.060।</li>
+  </ol>
+  <p>दूसरे number के लिए यही हिसाब −0.068 + 0.009 − 0.017 = −0.077 देता है। तो loss की q(x) पर दर [−0.060, −0.077] है, और formula यही हिसाब ऐसे लिखता है:</p>
+  <div class="formula">∂𝓛 / ∂q(x) = ∑<sub><i>z</i></sub> ( p<sub>η</sub>(z|x) − p(z|x, y) ) d(z)</div>
+
+  <p>अब q(x) को इसकी उल्टी दिशा में step size 1 से खिसकाइए: [1.0 + 0.060, 2.0 + 0.077] = [1.060, 2.077]। नए scores 1.890, 1.161 और 0.009 हैं, वज़न 0.612, 0.295 और 0.093, कुल chance 0.707, और loss 0.355 से 0.346 हो जाता है।</p>
+
+  <p>Office hours page का score भी 1.1 से 1.161 बढ़ा, जबकि उसकी दर कहती थी कि वो घटे। सारे scores एक ही q(x) से बनते हैं, इसलिए training उन्हें अलग-अलग नहीं हिला सकती। फिर भी loss घटा, क्योंकि queue log का score सबसे ज़्यादा बढ़ा: 0.090, जबकि office hours page का 0.061।</p>
+
+  <h4 class="sub" id="fixed">Passage vectors क्यों नहीं बदलते</h4>
+
+  <p>d(z) पर भी loss की दर होती है। Queue log के vector पर वो (prior − posterior) × q(x) = −0.171 × [1.0, 2.0] = [−0.171, −0.342] है। <a href="12-dpr-dense.html#notation">Lesson 12</a> में DPR की अपनी training passage encoder को ऐसी ही दर से बदलती है, क्योंकि तब कोई index नहीं बना होता।</p>
+
+  <p>RAG ये कदम नहीं लेता। Passage encoder BERT<sub>d</sub> बदलता, तो 2.1 करोड़ passages के vectors और index बीच-बीच में दोबारा बनाने पड़ते, जैसा REALM अपनी pretraining में करता है। Paper के हिसाब से इसके बिना भी नतीजे अच्छे रहे, इसलिए passage encoder और index fixed हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="realparams">Toy से असली models तक</h4>
+
+  <p>Toy में q(x) खुद बदला। असल में q(x) = BERT<sub>q</sub>(x) है, और <button class="def" data-w="w-backprop">backpropagation</button> यही chain rule BERT<sub>q</sub> की हर layer तक ले जाता है। Generator वाली दर BART के हर parameter तक पहुँचती है। Paper के हिसाब से दोनों BERT encoders के 11-11 करोड़ parameters हैं, और BART के 40.6 करोड़, कुल 62.6 करोड़। <span class="mine">paper से</span> Passage encoder के 11 करोड़ नहीं बदलते, इसलिए training करीब 51.6 करोड़ parameters बदलती है। <span class="mine">हिसाब मेरा</span></p>
+
+  <h4 class="sub" id="ablation">Paper के experiments: retriever को रोककर, और BM25 लगाकर</h4>
+
+  <p>Paper ने ये भी नापा कि retriever का सीखना कितना काम आता है। इसके लिए उसने बदले हुए models train किए। ऐसे experiment को <b class="term">ablation</b> कहते हैं: model का एक हिस्सा हटाइए या रोकिए, और देखिए कि नतीजा कितना गिरा। Frozen वाले model में query encoder भी नहीं बदलता। BM25 वाले में DPR की जगह <a href="11-bm25-dense.html#bm25">lesson 11</a> का BM25 है, और उसके scores softmax में जाते हैं। <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Retriever</th><th class="numh">RAG-Token</th><th class="numh">RAG-Sequence</th></tr></thead>
+    <tbody>
+      <tr><td>BM25</td><td class="num">29.7</td><td class="num">31.8</td></tr>
+      <tr><td>DPR, frozen</td><td class="num">37.8</td><td class="num">41.2</td></tr>
+      <tr class="hi"><td>DPR, जो सीखता है</td><td class="num">43.5</td><td class="num">44.0</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">NQ पर Exact Match, dev set पर। इसलिए ये पड़ाव 5 के test वाले 44.1 और 44.5 से थोड़े अलग हैं।</p>
+  <ul class="plain">
+    <li>Query encoder रोकने से RAG-Sequence 44.0 से 41.2 पर आता है, यानी 2.8 points नीचे। RAG-Token में ये गिरावट 5.7 points है।</li>
+    <li>BM25 के साथ NQ 12 से 14 points गिरता है: 44.0 से 31.8, और 43.5 से 29.7।</li>
+    <li>FEVER में, जहाँ किसी claim को Wikipedia से सही या गलत ठहराना होता है, BM25 सबसे अच्छा रहा। Paper का अंदाज़ा है कि वहाँ claims में नाम ज़्यादा हैं, और शब्द मिलाना BM25 का काम है।</li>
+  </ul>
+
+  <p>एक खतरा भी है। Paper के शुरुआती experiments में कहानी लिखने जैसे कुछ कामों पर retriever हर सवाल के लिए वही passages लाने लगा। फिर generator ने passages को अनदेखा करना सीख लिया, और RAG अकेले BART जैसा हो गया। इसे <b class="term">retrieval collapse</b> कहते हैं। Paper का अंदाज़ा है कि लंबे जवाबों में retriever तक पहुँचने वाली दरें कमज़ोर पड़ती हैं। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="decoding">
+  <h3><span class="cn">8</span>RAG-Sequence और RAG-Token गहराई से: posterior, decoding और K</h3>
+
+  <p><b>दोनों तरीकों का फ़र्क posterior में दिखता है: RAG-Token हर token पर अलग posterior रख सकता है, और RAG-Sequence पूरे जवाब पर एक।</b> Paper दोनों formulas ऐसे लिखता है, और हमारे Thursday-Zoom example में N = 2, y<sub>1</sub> = Thursday और y<sub>2</sub> = Zoom हैं: <span class="mine">paper से</span></p>
+  <div class="formula">p<sub>RAG-Sequence</sub>(y|x) ≈ ∑<sub><i>z</i> ∈ top-<i>k</i>(p(·|x))</sub> p<sub>η</sub>(z|x) ∏<sub><i>i</i>=1</sub><sup><i>N</i></sup> p<sub>θ</sub>(y<sub><i>i</i></sub> | x, z, y<sub>1:<i>i</i>−1</sub>)</div>
+  <div class="formula">p<sub>RAG-Token</sub>(y|x) ≈ ∏<sub><i>i</i>=1</sub><sup><i>N</i></sup> ∑<sub><i>z</i> ∈ top-<i>k</i>(p(·|x))</sub> p<sub>η</sub>(z|x) p<sub>θ</sub>(y<sub><i>i</i></sub> | x, z, y<sub>1:<i>i</i>−1</sub>)</div>
+  <p>y<sub>1:<i>i</i>−1</sub> का मतलब token 1 से token i − 1 तक, यानी पड़ाव 3 वाला y<sub>&lt;<i>i</i></sub>। Zoom के लिए ये सिर्फ़ Thursday है। top-k(p(·|x)) retriever के लाए k passages हैं, यहाँ queue log और office hours page।</p>
+
+  <h4 class="sub" id="pertoken">हर token पर posterior</h4>
+
+  <p>RAG-Token में हर token का अपना वज़न वाला जोड़ है, इसलिए हर token का अपना posterior भी है। Thursday पर queue log का 0.54 ÷ 0.74 = 0.730 है, और office hours page का 0.20 ÷ 0.74 = 0.270। Zoom पर ये 0.12 ÷ 0.48 = 0.25 और 0.36 ÷ 0.48 = 0.75 हैं। <b>पहले token पर queue log आगे है, और दूसरे पर office hours page।</b> RAG-Sequence में पूरे जवाब का एक ही posterior है: 0.108 ÷ 0.288 = 0.375 और 0.180 ÷ 0.288 = 0.625।</p>
+
+  <p>Paper का Figure 2 यही चीज़ एक असली example पर दिखाता है। Jeopardy में input <q>Hemingway</q> था, और RAG-Token ने लिखा: <q>"The Sun Also Rises" is a novel by this author of "A Farewell to Arms"</q>। Sun लिखते वक्त उस passage का posterior ऊँचा था, जिसमें The Sun Also Rises है, और A Farewell to Arms पर दूसरे passage का। हर नाम का पहला token लिखने के बाद posterior फैल जाता है, क्योंकि बाकी नाम BART अपने parameters से पूरा कर लेता है। <span class="mine">paper से</span></p>
+
+  <p>जवाब एक ही token का हो, तो दोनों formulas एक हो जाते हैं, क्योंकि ∏ में बस एक term बचता है। FEVER के labels, जैसे supports, ऐसे ही एक token हैं, इसलिए वहाँ RAG-Sequence और RAG-Token बराबर हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="thorough">जवाब लिखना: Thorough और Fast decoding</h4>
+
+  <p>Training में सही जवाब पहले से पता है, इसलिए उसकी probability निकालना काफ़ी है। Test पर model को जवाब खुद लिखना है, और इसे decoding कहते हैं। RAG-Token हर token पर जोड़ी हुई probability लेता है, जैसे Thursday पर 0.74, और एक आम generator की तरह token by token लिखता है। QA में paper हर token पर सबसे बड़ी probability वाला token चुनता है, यानी lesson 1 वाली <button class="def" data-w="w-decoding">greedy decoding</button>। <span class="mine">paper से</span></p>
+
+  <p>RAG-Sequence की probability tokens में नहीं टूटती, क्योंकि उसका जोड़ पूरे जवाब के बाद लगता है। इसलिए paper उसका जवाब तीन steps में निकालता है: <span class="mine">paper से</span></p>
+  <ol class="plain">
+    <li>हर passage के साथ generator अलग से एक जवाब लिखता है। ये जवाब उम्मीदवार हैं, और K passages से ज़्यादा से ज़्यादा K उम्मीदवार बनते हैं।</li>
+    <li>हर उम्मीदवार के लिए generator उन passages के साथ दोबारा चलता है, जिनके साथ वो उम्मीदवार नहीं लिखा गया था। इससे हर passage के साथ उसकी probability मिलती है।</li>
+    <li>हर उम्मीदवार का वज़न वाला जोड़ बनता है, और सबसे बड़े जोड़ वाला उम्मीदवार जवाब बनता है।</li>
+  </ol>
+  <p>इस तरीके को <b class="term">Thorough decoding</b> कहते हैं। Step 2 छोड़ दीजिए, यानी जिस passage के साथ उम्मीदवार नहीं बना, वहाँ उसकी probability 0 मान लीजिए, तो वो Fast decoding है। NQ पर RAG-Sequence 50 passages लेता है और Thorough decoding चलाता है, क्योंकि जवाब छोटे हैं। तब 50 उम्मीदवारों तक, हर एक के लिए 50 passages, यानी करीब 50 × 50 = 2,500 generator runs तक। लंबे जवाबों वाले कामों में paper ने Fast decoding रखी, क्योंकि Thorough से नतीजे नहीं सुधरे। <span class="mine">2,500 वाली गिनती मेरी है</span></p>
+
+  <h4 class="sub" id="k">कितने passages: K का असर</h4>
+
+  <p>Training में K = 5 या 10 था, और दोनों में खास फ़र्क नहीं दिखा। Test पर paper K खुद चुनता है: NQ के लिए RAG-Token 15 passages लेता है, और RAG-Sequence 50। Paper का Figure 3 दिखाता है कि ज़्यादा passages लाने पर RAG-Sequence का NQ score बढ़ता है, और फिर करीब वहीं टिका रहता है। RAG-Token का score करीब 10 passages पर सबसे ऊपर पहुँचता है, और उसके बाद थोड़ा गिरता है। <span class="mine">paper से</span></p>
+
+  <p>उसी figure का दूसरा graph answer recall दिखाता है, यानी कितने % सवालों में top-K के अंदर जवाब वाला passage है। हर K पर RAG के सीखे हुए retriever की line fixed DPR से ऊपर है, और BM25 की line दोनों से काफ़ी नीचे। मतलब end-to-end training के बाद retriever सही passages को ज़्यादा ऊपर लाता है, जो पड़ाव 6 का नतीजा है।</p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="scale">
+  <h3><span class="cn">9</span>Paper का असली पैमाना और पूरे नतीजे</h3>
+
+  <p>हमारे example में 3 passages और 2 numbers वाले vectors थे, ताकि हिसाब हाथ से हो सके। Paper में mechanism वही है, सिर्फ़ numbers बड़े हैं: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>चीज़</th><th>हमारा example</th><th>RAG paper में</th></tr></thead>
+    <tbody>
+      <tr><td>Passages</td><td>3</td><td>करीब 2.1 करोड़, December 2018 के Wikipedia के 100-100 शब्दों के टुकड़े</td></tr>
+      <tr><td>Vector की लंबाई</td><td>2</td><td>768, BERT-base का vector<span class="sub">ये number lesson 12 से है</span></td></tr>
+      <tr><td>Index</td><td>–</td><td><button class="def" data-w="w-faiss">FAISS</button> में <button class="def" data-w="w-hnsw">HNSW</button> index, CPU memory में करीब 100 GB<span class="sub">compress करके 36 GB</span></td></tr>
+      <tr><td>K</td><td>3</td><td>training में 5 या 10, NQ के test पर 15 (RAG-Token) और 50 (RAG-Sequence)</td></tr>
+      <tr><td>Models</td><td>–</td><td>दो BERT-base, 11-11 करोड़ parameters, और BART-large, 40.6 करोड़</td></tr>
+      <tr><td>Training</td><td>हाथ से</td><td>8 GPUs, हर एक में 32 GB memory</td></tr>
+      <tr><td>NQ के सवाल</td><td>1</td><td>training में 79,169, test में 3,611</td></tr>
+    </tbody>
+  </table></div>
+  <p>Test के 3,611 सवालों में RAG-Sequence का 44.5 मतलब करीब 1,607 हूबहू सही जवाब। Exact Match सख़्त है: वो Thursday 9 am और Thursday 9am को अलग मानता है। इसलिए 44.5 का मतलब ये नहीं कि बाकी 55.5% जवाब सच में गलत थे।</p>
+
+  <h4 class="sub" id="table1">पूरी results table</h4>
+
+  <p>पड़ाव 5 में सिर्फ़ NQ वाला column था। Slide की table में चार datasets हैं, जिन्हें phone पर पढ़ने के लिए यहाँ दो tables में बाँटा है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Model</th><th class="numh">NQ</th><th class="numh">TQA<span class="sub">आम / Wiki test</span></th></tr></thead>
+    <tbody>
+      <tr><td>T5-11B</td><td class="num">34.5</td><td class="num">– / 50.1</td></tr>
+      <tr><td>T5-11B + SSM</td><td class="num">36.6</td><td class="num">– / 60.5</td></tr>
+      <tr><td>REALM</td><td class="num">40.4</td><td class="num">– / –</td></tr>
+      <tr><td>DPR</td><td class="num">41.5</td><td class="num">57.9 / –</td></tr>
+      <tr><td>RAG-Token</td><td class="num">44.1</td><td class="num">55.2 / 66.1</td></tr>
+      <tr class="hi"><td>RAG-Sequence</td><td class="num">44.5</td><td class="num">56.8 / 68.0</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Model</th><th class="numh">WQ</th><th class="numh">CT</th></tr></thead>
+    <tbody>
+      <tr><td>T5-11B</td><td class="num">37.4</td><td class="num">–</td></tr>
+      <tr><td>T5-11B + SSM</td><td class="num">44.7</td><td class="num">–</td></tr>
+      <tr><td>REALM</td><td class="num">40.7</td><td class="num">46.8</td></tr>
+      <tr><td>DPR</td><td class="num">41.1</td><td class="num">50.6</td></tr>
+      <tr><td>RAG-Token</td><td class="num">45.5</td><td class="num">50.0</td></tr>
+      <tr class="hi"><td>RAG-Sequence</td><td class="num">45.2</td><td class="num">52.2</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Exact Match (%), test set पर। TQA = TriviaQA, WQ = WebQuestions, CT = CuratedTrec।</p>
+  <ul class="plain">
+    <li>हर column का सबसे बड़ा number slide पर bold है। NQ और CT पर RAG-Sequence आगे है (44.5 और 52.2), WQ पर RAG-Token (45.5), और TQA के आम test set पर DPR (57.9)।</li>
+    <li>TQA के दो numbers दो test sets के हैं। बाईं तरफ़ open-domain वाला आम test set है, और दाईं तरफ़ Wikipedia वाला, जिस पर T5 नापा गया था। Paper के हिसाब से Wiki वाले सवाल आसान हैं, इसलिए RAG-Sequence वहाँ 68.0 पर है, और आम वाले पर 56.8।</li>
+    <li>WQ और CT छोटे datasets हैं, CT में सिर्फ़ 635 training सवाल, इसलिए paper ने इनके RAG models NQ वाले RAG से शुरू किए। CT के जवाब regular expressions में लिखे हैं, इसलिए paper ने पहले उनसे सादा जवाब बनाए। <span class="mine">paper से</span></li>
+  </ul>
+
+  <p>DPR वाली row पूरा DPR QA system है। उसमें retriever के बाद एक BERT <button class="def" data-w="w-crossenc">cross-encoder</button> passages को दोबारा क्रम में लगाता है। फिर एक reader passage में से जवाब का टुकड़ा उठाता है। RAG के पास न ऐसा reranker है, न ऐसा reader, फिर भी वो NQ पर 41.5 से 44.5 पर है। <span class="mine">paper से</span></p>
+
+  <p>Paper के मुताबिक़ जवाब लिखने का एक फ़ायदा ये है कि जिस passage में जवाब हूबहू नहीं है, उसके सुराग भी काम आते हैं। NQ के जिन सवालों में किसी लाए गए passage में सही जवाब नहीं था, उनमें भी RAG ने 11.8% जवाब सही लिखे। Passage में से टुकड़ा उठाने वाला model वहाँ 0% पर रहता। <span class="mine">paper से</span></p>
+
+  <p>REALM और T5-11B + SSM एक खास pretraining से गुज़रे थे, जिसे <button class="def" data-w="w-ssm">salient span masking</button> कहते हैं, और RAG ने ऐसी pretraining नहीं की। लेकिन RAG का retriever DPR से शुरू होता है, जो NQ और TriviaQA के सवाल-passage जोड़ों पर पहले train हुआ था। <b>यानी RAG की अपनी training को passage labels नहीं चाहिए, लेकिन उसका शुरुआती retriever labels से बना है।</b> <span class="mine">paper से</span></p>
+
+  <p>Paper एक और तुलना देता है। T5 के sizes में RAG के सबसे करीब T5-large है, जिसके 77 करोड़ parameters हैं, और वो NQ पर 28.9 पर है। ये RAG-Sequence के 44.5 से 15.6 points पीछे है। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="jeopardy">Jeopardy वाला test</h4>
+
+  <p>Jeopardy में जवाब पहले मिलता है, और उसके लिए एक सवाल लिखना होता है। Paper ने 452 जोड़ों में अकेले BART और RAG-Token के लिखे सवाल लोगों को दिखाए। लोगों ने हर जोड़े में चुना कि कौन सा सवाल बेहतर है: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>लोगों का फ़ैसला</th><th class="numh">Factuality</th><th class="numh">Specificity</th></tr></thead>
+    <tbody>
+      <tr><td>BART बेहतर</td><td class="num">7.1%</td><td class="num">16.8%</td></tr>
+      <tr class="hi"><td>RAG बेहतर</td><td class="num">42.7%</td><td class="num">37.4%</td></tr>
+      <tr><td>दोनों अच्छे</td><td class="num">11.7%</td><td class="num">11.8%</td></tr>
+      <tr><td>दोनों खराब</td><td class="num">17.7%</td><td class="num">6.9%</td></tr>
+      <tr><td>कोई बहुमत नहीं</td><td class="num">20.8%</td><td class="num">20.1%</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>Factuality का मतलब है कि कोई भरोसेमंद source उस बात को सही ठहराए। Specificity का मतलब है कि सवाल अपने input से कितना कसकर जुड़ा है।</li>
+    <li>Factuality में RAG, BART से 42.7 ÷ 7.1 = 6.0 गुना ज़्यादा बार बेहतर निकला, और specificity में 37.4 ÷ 16.8 = 2.2 गुना। <span class="mine">हिसाब मेरा</span></li>
+    <li>Factuality वाला column जोड़ने पर 100.0 आता है, लेकिन specificity वाला 93.0। Paper इस फ़र्क की वजह नहीं बताता। <span class="mine">हिसाब मेरा</span></li>
+  </ul>
+  <p>Jeopardy के सवालों में अक्सर दो अलग बातें होती हैं, जैसे Hemingway वाले सवाल में दो किताबें। इसलिए paper के अपने-आप वाले नाप पर यहाँ RAG-Token सबसे आगे रहा। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे Stanford की RAG वाली छह slides हैं, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई symbol अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p14.png"><img src="img/slide-p14.png" alt="Stanford slide: RAG का ढाँचा" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p14-retriever.png"><img src="img/slide-p14-retriever.png" alt="उसी slide का retriever वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p14-generator.png"><img src="img/slide-p14-generator.png" alt="उसी slide का generator वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p14-backprop.png"><img src="img/slide-p14-backprop.png" alt="उसी slide का ऊपर वाला dashed arrow, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की RAG वाली slide, और नीचे उसके retriever, generator और training arrow वाले हिस्से, बड़े करके। बाईं तरफ़ तीन काम हैं: question answering, fact verification और Jeopardy वाले सवाल। नीचे लिखे REALM और DPR, पड़ाव 9 की table की open book rows हैं।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">RAG के ढाँचे वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Retriever के नीचे (Non-Parametric) और generator के नीचे (Parametric) लिखा है। Query encoder के भी parameters हैं, तो retriever non-parametric क्यों कहलाता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Retriever की जानकारी passages के index में है, यानी <button class="def" data-w="w-nonparam">non-parametric memory</button> में। Generator की जानकारी उसके parameters θ में है, यानी <button class="def" data-w="w-parametric">parametric knowledge</button> में। Query encoder के parameters सिर्फ़ ये तय करते हैं कि index में से क्या निकले। Paper भी index को non-parametric memory कहता है। (पड़ाव 1) <span class="mine">paper से</span></p>
+        </details>
+      </li>
+      <li>
+        <p>ऊपर का dashed arrow q और p<sub>θ</sub> पर रुकता है। वो Document Index के d(z) तक क्यों नहीं जाता?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Training की दरें query encoder और generator तक जाती हैं। d(z) पर भी दर होती है, जैसे toy में queue log के vector पर [−0.171, −0.342], लेकिन RAG ये कदम नहीं लेता। d(z) बदलता, तो 2.1 करोड़ vectors और index दोबारा बनाने पड़ते। (पड़ाव 4 और 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Documents z<sub>1</sub> और z<sub>2</sub> के नीचे बैंगनी हिस्सा है, और Jeopardy वाले input से एक line उन तक जाती है। ये क्या दिखाता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>बैंगनी हिस्सा input x है, उसी रंग का जिसमें Jeopardy वाला x है। Line x को हर passage तक ले जाती है, यानी x और z concatenate होकर generator में जाते हैं, हर passage के साथ अलग से। (पड़ाव 1)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG, formula के साथ" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p16-seqtoken.png"><img src="img/slide-p16-seqtoken.png" alt="उसी slide की RAG-Sequence और RAG-Token वाली lines, बड़ी करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p17.png"><img src="img/slide-p17.png" alt="Stanford slide: Deep Dive into RAG, training वाली line के साथ" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p17-loss.png"><img src="img/slide-p17-loss.png" alt="उसी slide की training वाली line, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की दो Deep Dive slides। पहली में formula और नीचे की दो lines हैं, दूसरी में training वाली line। दोनों के ज़रूरी हिस्से बड़े करके नीचे हैं। Formula के हर symbol की बात lesson 4 के गहरे version में है।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Deep Dive वाली slides पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>RAG-Sequence वाली line कहती है <q>pick one passage</q>। क्या RAG-Sequence सच में एक passage चुनकर बाकी छोड़ देता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>नहीं। वो हर passage के साथ पूरा जवाब लिखता है, और सबका वज़न वाला जोड़ लेता है: 0.6 × 0.18 + 0.4 × 0.45 = 0.288। <q>Pick one passage</q> का मतलब है कि पूरा जवाब एक ही passage पर टिका है, इसलिए पूरे जवाब का एक posterior है, 0.375 और 0.625। (पड़ाव 3 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>लाल note कहता है कि हर passage के जवाब को retriever के भरोसे से तौलिए। जवाब देखने के बाद ये भरोसा कैसा दिखता है, और training उसका क्या करती है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Formula का भरोसा prior p(z|x) है। जवाब देखने के बाद वाला भरोसा posterior है, queue log के लिए 0.602 की जगह 0.773। Training prior को posterior की तरफ़ खींचती है, क्योंकि score पर loss की दर prior − posterior है। (पड़ाव 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>दूसरी slide कहती है <q>Jointly train the retriever and generator</q>। Retriever का कौन सा हिस्सा सच में train होता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>सिर्फ़ query encoder BERT<sub>q</sub>। Passage encoder BERT<sub>d</sub> और index fixed हैं, जबकि generator BART पूरा train होता है। 62.6 करोड़ में से करीब 51.6 करोड़ parameters बदलते हैं। (पड़ाव 4 और 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Training वाली line में ∑<sub>j</sub> किन चीज़ों पर चलता है, और NQ के लिए कितने j हैं? क्या किसी j में passage लिखा है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>हर training जोड़े (x<sub>j</sub>, y<sub>j</sub>) पर। NQ में 79,169 training सवाल हैं, और paper हर सवाल के हर सही जवाब को अलग जोड़ा बनाता है, इसलिए j इससे भी ज़्यादा हैं। किसी जोड़े में passage नहीं लिखा, इसीलिए p(y<sub>j</sub>|x<sub>j</sub>) passages पर marginalization से बनता है। (पड़ाव 2, 4 और 9) <span class="mine">paper से</span></p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p18.png"><img src="img/slide-p18.png" alt="Stanford slide: Retriever: DPR" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p18-formula.png"><img src="img/slide-p18-formula.png" alt="उसी slide का formula, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p18-topk.png"><img src="img/slide-p18-topk.png" alt="उसी slide की top-k वाली line, बड़ी करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p19.png"><img src="img/slide-p19.png" alt="Stanford slide: Generator: BART" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p19-bullets.png"><img src="img/slide-p19-bullets.png" alt="उसी slide की तीनों lines, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की retriever और generator वाली slides, और उनके हिस्से बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Retriever और generator वाली slides पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>BERT<sub>d</sub> और BERT<sub>q</sub> कहाँ से आते हैं, और RAG की training में इनमें से कौन बदलता है? Lesson 12 के DPR से इसमें क्या फ़र्क है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>दोनों DPR से आते हैं, जो NQ और TriviaQA के सवाल-passage जोड़ों पर पहले train हुआ था। RAG में सिर्फ़ BERT<sub>q</sub> बदलता है। DPR की अपनी training में दोनों बदलते हैं, क्योंकि तब index नहीं बना होता। (पड़ाव 7 और 9) <span class="mine">paper से</span></p>
+        </details>
+      </li>
+      <li>
+        <p>top-k(p(·|x)) में k कितना है? Training और NQ के test में इसकी value क्या है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>k लाए गए passages की गिनती है, यानी पिछली slides वाला K। Training में 5 या 10, और NQ के test पर RAG-Token के लिए 15 और RAG-Sequence के लिए 50। (पड़ाव 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Generator वाली slide कहती है <q>x and z are concatenated</q>, और ये भी कि कोई भी encoder-decoder चलेगा। ये दोनों बातें RAG के formula से कैसे जुड़ती हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Formula को generator से सिर्फ़ p<sub>θ</sub>(y|x, z) चाहिए। BART एक ही text पढ़ता है, इसलिए x और z जुड़कर एक input बनते हैं, जैसे पड़ाव 1 वाला queue log का input। K passages हों, तो K अलग inputs बनते हैं। जो भी encoder-decoder ये probability दे, वो इस जगह लग सकता है। (पड़ाव 1 और 2)</p>
+        </details>
+      </li>
+      <li>
+        <p>Generator <q>one token at a time</q> लिखता है। K passages हों, तो RAG-Token और RAG-Sequence में generator जवाब कैसे लिखता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>दोनों में generator हर passage के साथ अलग चलता है, यानी K inputs पर। RAG-Token हर token पर K passages की probabilities जोड़कर एक ही जवाब लिखता है। RAG-Sequence हर passage के साथ अलग जवाब लिखता है, और Thorough decoding में हर उम्मीदवार को बाकी passages के साथ दोबारा जाँचता है। (पड़ाव 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p20.png"><img src="img/slide-p20.png" alt="Stanford slide: RAG Performance on Open-Domain QA" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p20-qa.png"><img src="img/slide-p20-qa.png" alt="उसी slide की QA वाली table, बड़ी करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p20-human.png"><img src="img/slide-p20-human.png" alt="उसी slide की लोगों के फ़ैसलों वाली table, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की results वाली slide, और नीचे उसकी दोनों tables, बड़ी करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Results वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>DPR (41.5) और RAG-Seq. (44.5) के retriever एक ही तरह के हैं। फिर दोनों में फ़र्क कहाँ से आता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>DPR system passage में से जवाब का टुकड़ा उठाता है, और उसके साथ एक reranker भी है। RAG जवाब खुद लिखता है, और उसका query encoder जवाब वाले loss से और train हुआ। जिन सवालों में किसी passage में जवाब नहीं था, उनमें भी RAG ने 11.8% सही लिखे। (पड़ाव 5, 7 और 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>WQ column में bold 45.5 RAG-Token का है। क्या इसका मतलब है कि WQ के लिए RAG-Token साफ़ तौर पर बेहतर है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>फ़र्क सिर्फ़ 45.5 − 45.2 = 0.3 है। WQ के test में 2,033 सवाल हैं, तो 0.3% करीब 6 सवाल है, और इतने छोटे फ़र्क को पक्का मानना मुश्किल है। (पड़ाव 9) <span class="mine">हिसाब मेरा</span></p>
+        </details>
+      </li>
+      <li>
+        <p>दाईं table के दोनों columns जोड़िए। क्या निकलता है, और RAG के बारे में ये table क्या कहती है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Factuality: 7.1 + 42.7 + 11.7 + 17.7 + 20.8 = 100.0। Specificity: 16.8 + 37.4 + 11.8 + 6.9 + 20.1 = 93.0, और paper इसकी वजह नहीं बताता। दोनों में सबसे बड़ी row RAG बेहतर वाली है: factuality में RAG, BART से 6.0 गुना ज़्यादा बार बेहतर निकला। (पड़ाव 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>RAG passage को छिपा हुआ choice मानता है, और top-K passages पर वज़न वाला जोड़ लगाता है: p(y|x) ≈ ∑ p<sub>η</sub>(z|x) · p<sub>θ</sub>(y|x, z)। इसलिए RAG की अपनी training को सही passage के labels नहीं चाहिए।</li>
+    <li>हर score पर loss की दर prior − posterior है, और generator के हर ln a<sub>z</sub> पर −posterior। इसलिए training retriever के वज़नों को posterior की तरफ़ खींचती है, और generator उसी passage के साथ सबसे ज़्यादा सीखता है, जिसका posterior बड़ा है।</li>
+    <li>RAG-Token हर token पर अलग posterior रख सकता है, और RAG-Sequence पूरे जवाब पर एक। Query encoder और generator train होते हैं, passage encoder और index नहीं। फिर भी सीखने वाला retriever NQ के dev set पर frozen retriever से 2.8 points आगे है, और BM25 से 12.2।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-rag">RAG</dt><dd>Retrieval-Augmented Generation: retriever और generator को एक model में जोड़कर एक ही loss से साथ train करना। जैसे queue log लाकर उससे <q>Thursday 9am</q> लिखना।</dd>
+    <dt id="w-latent">Latent variable</dt><dd>छिपा हुआ choice, जो data में नहीं लिखा। RAG में ये choice है कि जवाब किस passage से आया। जैसे सवाल-जवाब के जोड़े में ये नहीं लिखा कि जवाब queue log से आया।</dd>
+    <dt id="w-eta-theta">η और θ</dt><dd>Retriever (eta) और generator (theta) के parameters के नाम। इसीलिए retriever को p<sub>η</sub>(z|x) लिखते हैं, और generator को p<sub>θ</sub>(y|x, z)।</dd>
+    <dt id="w-bert">BERT</dt><dd>Google का 2018 का encoder model। RAG के retriever के दोनों encoders, query encoder और passage encoder, इसी से बने हैं।</dd>
+    <dt id="w-mips">MIPS</dt><dd>Maximum inner product search: index में सबसे बड़े dot product वाले K passages ढूँढना। जैसे 2.1 करोड़ passages में से सबसे ऊँचे 5 scores वाले passages।</dd>
+    <dt id="w-generator">Generator</dt><dd>सवाल और एक passage पढ़कर जवाब लिखने वाला model, p<sub>θ</sub>(y|x, z)। RAG में ये BART है। जैसे queue log के साथ <q>Thursday 9am</q> को 0.9।</dd>
+    <dt id="w-encdec">Encoder-decoder</dt><dd>Encoder input के vectors बनाता है, और decoder उन्हें देखकर एक-एक token लिखता है। BART ऐसा model है।</dd>
+    <dt id="w-concat">Concatenate</dt><dd>दो texts को आगे-पीछे जोड़कर एक text बनाना। जैसे <q>question: …</q> के बाद <q>passage: …</q> जोड़ना।</dd>
+    <dt id="w-ragseq">RAG-Sequence</dt><dd>हर passage के साथ पूरा जवाब, फिर वज़न वाला जोड़। जैसे 0.6 × 0.18 + 0.4 × 0.45 = 0.288।</dd>
+    <dt id="w-ragtok">RAG-Token</dt><dd>हर token पर वज़न वाला जोड़, फिर tokens का गुणा। जैसे 0.74 × 0.48 = 0.355।</dd>
+    <dt id="w-e2e">End-to-end training</dt><dd>एक ही loss से सारे हिस्सों को साथ train करना। RAG में query encoder और generator, दोनों उसी −ln p(y|x) से सीखते हैं। जैसे −ln 0.70 = 0.357।</dd>
+    <dt id="w-backprop">Backpropagation</dt><dd>Loss से पीछे की तरफ़ चलकर हर parameter का gradient निकालने का तरीका, छोटे में backprop। RAG में ये generator और query encoder तक जाता है, passage encoder तक नहीं।</dd>
+    <dt id="w-em">Exact Match</dt><dd>जवाब सही जवाब से हूबहू मिले, तभी सही। Score ऐसे सवालों का % है। जैसे NQ पर RAG-Sequence का 44.5।</dd>
+    <dt id="w-closed">Closed book और open book</dt><dd>सिर्फ़ parameters से जवाब, या पहले documents में ढूँढकर जवाब। जैसे NQ पर closed book T5-11B 34.5, और open book RAG-Sequence 44.5।</dd>
+      <dt id="w-posterior">Posterior और prior</dt><dd>Prior p<sub>η</sub>(z|x) जवाब देखने से पहले passage का वज़न है। Posterior p(z|x, y) जवाब देखने के बाद का वज़न है, यानी कुल chance में उस passage का हिस्सा। जैसे queue log का prior 0.602 है, और posterior 0.773।</dd>
+    <dt id="w-ablation">Ablation</dt><dd>Model का एक हिस्सा हटाकर या रोककर दोबारा नापना, ताकि उस हिस्से का असर दिखे। जैसे RAG-Sequence में query encoder रोकने पर NQ (dev) 44.0 से 41.2 पर आता है।</dd>
+    <dt id="w-thorough">Thorough और Fast decoding</dt><dd>RAG-Sequence से जवाब लिखने के दो तरीके। हर passage के साथ एक उम्मीदवार बनता है। Thorough हर उम्मीदवार को हर passage के साथ जाँचता है, और Fast सिर्फ़ वहीं, जहाँ वो बना। जैसे NQ पर 50 passages के साथ Thorough में करीब 2,500 generator runs तक।</dd>
+    <dt id="w-collapse">Retrieval collapse</dt><dd>Training में retriever का हर सवाल पर वही passages लाने लगना, जिसके बाद generator उन्हें अनदेखा करना सीख लेता है। जैसे paper में कहानी लिखने वाले काम पर।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="04-probability-tools-dense.html">पिछला: Lesson 4</a>
+    <a href="06-rag-pipeline-dense.html">अगला: Lesson 6, RAG pipeline</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Paper: Lewis et al., 2020, “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var P = [
+    { id: "Queue log", thu: 0.9, wed: 0.05 },
+    { id: "Office hours page", thu: 0.5, wed: 0.2 },
+    { id: "Forum post", thu: 0.1, wed: 0.8 }
+  ];
+  var ins = [1, 2, 3].map(function (i) { return document.getElementById("w" + i); });
+  var outs = [1, 2, 3].map(function (i) { return document.getElementById("o" + i); });
+  var body = document.getElementById("ragw-body");
+  var bars = document.getElementById("ragw-bars");
+  var out = document.getElementById("ragw-out");
+  var btns = document.querySelectorAll("#ragw .btns button");
+  function f2(x) { return (Math.round(x * 100 + 1e-9) / 100).toFixed(2); }
+  function render() {
+    var s = ins.map(function (x) { return Number(x.value); });
+    outs.forEach(function (o, i) { o.textContent = s[i].toFixed(1); });
+    var e = s.map(Math.exp), tot = e[0] + e[1] + e[2];
+    var p = e.map(function (x) { return x / tot; });
+    var thu = 0, wed = 0;
+    P.forEach(function (z, i) { thu += p[i] * z.thu; wed += p[i] * z.wed; });
+    body.innerHTML = P.map(function (z, i) {
+      var g = p[i] * (z.thu / thu - 1);
+      var dir = Math.abs(g) < 0.005 ? "वैसा ही" : (g > 0 ? "बढ़ेगा" : "घटेगा");
+      return "<tr><td>" + z.id + '</td><td class="num">' + f2(p[i]) + '</td><td class="num"><span class="hide-sm">' + z.thu + " × " + f2(p[i]) + " = </span>" + f2(p[i] * z.thu) +
+        '</td><td class="num"><span class="hide-sm">' + z.wed + " × " + f2(p[i]) + " = </span>" + f2(p[i] * z.wed) + "</td><td>" + dir + "</td></tr>";
+    }).join("") + '<tr class="total"><td>जोड़ = p(y|x)</td><td></td><td class="num">' + f2(thu) + '</td><td class="num">' + f2(wed) + "</td><td></td></tr>";
+    var thuWins = thu >= wed;
+    bars.innerHTML =
+      '<span>Thursday 9am</span><div class="bar' + (thuWins ? " win" : "") + '"><span style="width:' + thu * 100 + '%"></span></div><span class="val">' + f2(thu) + "</span>" +
+      '<span>Wednesday</span><div class="bar' + (!thuWins ? " win" : "") + '"><span style="width:' + wed * 100 + '%"></span></div><span class="val">' + f2(wed) + "</span>";
+    out.innerHTML = "RAG का जवाब: <b>" + (thuWins ? "Thursday 9am" : "Wednesday afternoon") + "</b>" + (thuWins ? "" : ", जो queue log के हिसाब से गलत है") +
+      "। सही जवाब का loss = −ln " + thu.toFixed(3) + " = <b>" + (-Math.log(thu)).toFixed(3) + "</b>।";
+    var key = s.map(function (v) { return String(v); }).join(",");
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.s === key ? "true" : "false"); });
+  }
+  ins.forEach(function (x) { x.addEventListener("input", render); });
+  btns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var v = b.dataset.s.split(",");
+      ins.forEach(function (x, i) { x.value = v[i]; });
+      render();
+    });
+  });
+  render();
+})();
+</script>
+</body>
+</html>

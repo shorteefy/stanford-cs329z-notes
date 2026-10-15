@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="काटने के बाद ACME वाले chunk में न company का नाम बचा, न quarter, इसलिए retriever उसे 49 मिलते-जुलते chunks से अलग नहीं कर पाता। Chunk को उसका खोया context वापस देना है।">
+<title>Lesson 8: खोया context</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 8 / 18 · <b>आसान</b> · <a href="08-contextual-retrieval-dense.html">गहरा</a> · <a href="08-contextual-retrieval-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 8 · आसान version</p>
+  <h1>Chunk का खोया context वापस लाना</h1>
+  <p class="lede"><b>Document को chunks में काटते ही हर chunk अपने आस-पास का text खो देता है, और अक्सर वही text बताता था कि बात किसकी है।</b> ये lesson ये context लौटाने के दो तरीके सिखाता है। Contextual retrieval में एक LLM हर chunk का context लिखता है, और late chunking में encoder पहले पूरा document पढ़ता है।</p>
+  <p class="lede"><a href="07-chunking.html#size">Lesson 7</a> में queue log का chunk <q>office hour averaged 3.</q> नहीं बताता था कि किस दिन की बात है। ये lesson यही दिक्कत 50 companies की filings पर देखता है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 4 पड़ाव हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#loss">Context loss</a><span class="can">गिनकर दिखा पाएँगे कि ACME वाला chunk top-20 में सिर्फ़ 40% बार क्यों आता है।</span></li>
+      <li><a href="#contextual">Contextual retrieval</a><span class="can">Score के 1 से 5 होने का हिसाब, और failures के 5.7% से 2.9% पर आने का मतलब समझा पाएँगे।</span></li>
+      <li><a href="#late">Late chunking</a><span class="can">Naive और late chunking के vectors हाथ से निकाल पाएँगे, और cosine से उनका फ़र्क दिखा पाएँगे।</span></li>
+      <li><a href="#compare">दोनों तरीकों की तुलना</a><span class="can">अपने index और budget के हिसाब से सही तरीका चुन पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="02-retrieval.html#retriever">Lesson 2</a> (word overlap), <a href="03-vectors.html#cosine">Lesson 3</a> (embedding, cosine) और <a href="07-chunking.html#kinds">Lesson 7</a> (chunk, contextual embedding, mean pooling)। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="loss">
+  <h3><span class="cn">1</span>Context loss: काटने के बाद chunk नहीं बताता कि बात किसकी है</h3>
+
+  <p><b>Context loss का मतलब है: काटने के बाद chunk में वो शब्द नहीं बचते, जो बताते कि बात किसकी है।</b> <button class="def" data-w="w-chunk">Chunk</button> document का वो टुकड़ा है, जिसे retriever लौटाता है। नाम अक्सर document में सबसे ऊपर एक बार आता है, इसलिए नीचे वाले chunks नाम के बिना रह जाते हैं।</p>
+
+  <p>Slides का example लीजिए। Corpus में 50 companies की Q2 2023 वाली filings हैं, हर company की एक। <span class="mine">50 companies मेरा example है</span> हर filing में लगभग यही line है: <q>The company’s revenue grew by X% over the previous quarter.</q> Query है: <q>What was the revenue growth for ACME Corp in Q2 2023?</q> ACME की filing में नाम और quarter सबसे ऊपर लिखे हैं, इसलिए जवाब वाले chunk में न ACME है, न Q2 2023।</p>
+
+  <p>अब lesson 2 के <button class="def" data-w="w-overlap">word overlap</button> से गिनिए, यानी query के कितने शब्द chunk में भी हैं। वहाँ queue log का score 2 था, क्योंकि उसमें office और hour थे। What, was, the, for और in जैसे <button class="def" data-w="w-stopwords">stopwords</button> हटाने पर query के 6 शब्द बचते हैं: revenue, growth, ACME, Corp, Q2 और 2023। ACME वाले chunk में सिर्फ़ revenue है, क्योंकि उसमें growth नहीं, grew लिखा है। इसलिए उसका score 1 है, और बाकी 49 chunks का भी 1। <span class="mine">ये गिनती मेरी है</span></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>पचासों chunks का score 1 है, और बराबर score वाले chunks का क्रम random है। Retriever top-20 लौटाता है। ACME वाला chunk कितने % बार top-20 में आएगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>बराबरी में ACME वाला chunk 50 में से हर जगह पर बराबर मौके से आ सकता है। इनमें से 20 जगहें top-20 में हैं, इसलिए मौका 20 ÷ 50 = 0.4, यानी 40% है। बाकी 60% बार सही chunk top-20 से बाहर रहता है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>यानी जवाब corpus में है, फिर भी retriever उसे 60% बार नहीं लौटाता।</b> Embedding भी नहीं बचाता, क्योंकि embedding model सिर्फ़ chunk का text पढ़ता है। उस text में ACME लिखा ही नहीं, इसलिए vector में ACME की कोई जानकारी नहीं आ सकती।</p>
+
+  <p>Lesson 7 का <button class="def" data-w="w-enriched">context-enriched chunking</button> हर chunk के साथ metadata रखता है, लेकिन 60,000 chunks का metadata हाथ से कोई नहीं लिखेगा।</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="contextual">
+  <h3><span class="cn">2</span>Contextual retrieval: LLM हर chunk के आगे उसका context लिखता है</h3>
+
+  <p><b>Contextual retrieval हर chunk के आगे एक छोटा context जोड़ता है, जिसे एक LLM पूरा document पढ़कर लिखता है।</b> Anthropic ने ये तरीका 2024 में publish किया। ये <button class="def" data-w="w-indexing">indexing time</button> पर, यानी queries आने से पहले, चार steps चलाता है:</p>
+  <ol class="plain">
+    <li>हर chunk के लिए LLM को पूरा document और वो chunk दीजिए।</li>
+    <li>LLM उस chunk का 50 से 100 tokens का छोटा context लिखता है।</li>
+    <li>उस context को chunk के आगे जोड़िए। इस नए text को contextualized chunk कहते हैं।</li>
+    <li>Contextualized chunk का embedding बनाइए, और उसे शब्दों वाले index में भी डालिए, जो <a href="11-bm25.html#bm25">lesson 11</a> में आता है।</li>
+  </ol>
+
+  <p>ACME वाले chunk के आगे LLM ये context लिखता है। रंगीन हिस्सा LLM का लिखा है, और बाकी पुराना chunk:</p>
+  <div class="sentence"><span class="new">From ACME Corp’s Q2 2023 SEC filing; Q1 2023 revenue was $314M.</span> The company’s revenue grew by 3% over the previous quarter.</div>
+
+  <figure class="slide">
+    <a href="img/slide-p26.png"><img src="img/slide-p26.png" alt="Stanford slide: वही chunk, context के बिना और context के साथ" loading="lazy"></a>
+    <figcaption>Stanford की slide: ऊपर query, बाएँ अकेला chunk, और दाएँ वही chunk, पीले context के साथ। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Query के 6 शब्द revenue, growth, ACME, Corp, Q2 और 2023 हैं। Contextualized chunk का word overlap score अब कितना है? दूसरी companies के contextualized chunks का कितना होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>ACME वाले chunk का score 5 है: revenue, ACME, Corp, Q2 और 2023। Growth अब भी नहीं है। दूसरी companies के context में उनका अपना नाम होगा, इसलिए उनका score ज़्यादा से ज़्यादा 3 है: revenue, Q2 और 2023। <span class="mine">ये गिनती मेरी है</span></p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>Context जुड़ने पर ACME वाला chunk 49 chunks की बराबरी से निकलकर सबसे ऊपर आ गया।</b> Embedding model को भी अब ऐसा text मिलता है, जिसमें ACME और Q2 2023 लिखे हैं।</p>
+
+  <h4 class="sub" id="failures">Anthropic के नतीजे: failed retrievals@20</h4>
+
+  <p>Anthropic ने ये तरीका असली data पर नापा। मानिए कि हर query का एक सही chunk है। तब <b class="term">failed retrievals@20</b> बताता है कि कितने % queries में वो chunk top-20 में नहीं आया। ये number जितना छोटा, उतना अच्छा।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>तरीका</th><th class="numh">Failed retrievals@20</th><th class="numh">5.7% से कितनी कमी</th></tr></thead>
+    <tbody>
+      <tr><td>Embedding, आम chunks</td><td class="num">5.7%</td><td class="num">शुरुआत</td></tr>
+      <tr><td>Embedding + शब्दों वाला index, आम chunks</td><td class="num">5.0%</td><td class="num">12%</td></tr>
+      <tr><td>Embedding, contextualized chunks</td><td class="num">3.7%</td><td class="num">35%</td></tr>
+      <tr class="hi"><td>Embedding + शब्दों वाला index, contextualized chunks</td><td class="num">2.9%</td><td class="num">49%</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>तीसरी row की कमी 1,000 queries पर साफ़ दिखती है:</p>
+  <ol class="plain">
+    <li>आम chunks पर 5.7% × 1,000 = 57 queries fail होती हैं।</li>
+    <li>Contextualized chunks पर 3.7% × 1,000 = 37 queries fail होती हैं।</li>
+    <li>57 − 37 = 20 queries बचीं, और 20 ÷ 57 = 0.35। यानी failures 35% कम हुईं।</li>
+  </ol>
+  <p>Failure rate सिर्फ़ 2 points गिरा, 5.7 से 3.7, लेकिन failures 35% घटीं। Points वाली कमी 5.7 − 3.7 है, और % वाली कमी उसी को शुरुआत वाले 5.7 से भाग देती है। <b>शब्दों वाला index भी साथ हो, तो failures 2.9% पर आती हैं, यानी (5.7 − 2.9) ÷ 5.7 = 0.49, करीब आधी।</b> दोनों index की lists मिलाने का तरीका <a href="14-hybrid-rerank.html#hybrid">lesson 14</a> में है।</p>
+
+  <p>इसकी कीमत indexing time पर है: हर chunk पर एक LLM call, और हर call में पूरा document। 60,000 chunks हों, तो 60,000 calls लगती हैं। Query time पर कोई extra खर्च नहीं है, क्योंकि context पहले से index में है। एक खतरा भी है: LLM का लिखा context गलत हो, तो वो गलती index में बैठी रहती है।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="late">
+  <h3><span class="cn">3</span>Late chunking: पहले पूरा document encode, फिर chunk का औसत</h3>
+
+  <p>LLM calls महँगी हैं, इसलिए अगला सवाल ये है कि क्या encoder खुद chunk को context दे सकता है। Lesson 7 का <button class="def" data-w="w-contextual">contextual embedding</button> हर token का vector आस-पास के शब्दों से बनाता है। जैसे वहाँ late का vector एक sentence में [0.1, 0.9] था, और दूसरे में [0.9, 0.1]। लेकिन encoder सिर्फ़ उतना text देखता है, जितना उसे मिला।</p>
+
+  <p>आम तरीका encoder को सिर्फ़ chunk देता है: पहले काटिए, फिर हर chunk को अलग से encode कीजिए। इसे <b class="term">naive chunking</b> कहते हैं। इसमें chunk के tokens को बाकी document की कोई खबर नहीं होती।</p>
+
+  <p><b>Late chunking ये क्रम उल्टा कर देता है: encoder पहले पूरा document पढ़ता है, और काटना उसके बाद होता है।</b></p>
+  <ol class="plain">
+    <li>पूरा document एक <b class="term">long-context encoder</b> में डालिए, यानी ऐसे encoder में, जो एक बार में बहुत लंबा text पढ़ सके। जैसे 8,192 tokens, करीब 10 pages। <span class="mine">paper से</span></li>
+    <li>Encoder हर token का vector देता है, और हर vector पूरे document को देखकर बनता है।</li>
+    <li>हर chunk के tokens के vectors का औसत लीजिए। ये उस chunk का vector है।</li>
+  </ol>
+  <p>ये औसत lesson 7 वाली <button class="def" data-w="w-pooling">mean pooling</button> है, जैसे [0.9, 0.1], [0.7, 0.3] और [0.8, 0.2] से [0.8, 0.2]। काटना encoding के बाद, यानी देर से होता है, इसलिए नाम late है।</p>
+
+  <p>एक छोटा document लीजिए: <q>CS 329Z project milestone policy. It is due Week 6.</q> दूसरा chunk <q>It is due Week 6</q> है। हर vector का पहला number बताता है कि बात milestone की कितनी है, और दूसरा कि homework की कितनी। <span class="mine">numbers मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th class="mono">Naive: chunk अकेला</th><th class="mono">Late: पूरा document</th></tr></thead>
+    <tbody>
+      <tr><td>It</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>is</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.8, 0.2]</td></tr>
+      <tr><td>due</td><td class="mono">[0.6, 0.4]</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>Week</td><td class="mono">[0.4, 0.6]</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>6</td><td class="mono">[0.5, 0.5]</td><td class="mono">[1.0, 0.0]</td></tr>
+      <tr class="total"><td>Mean pooling</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.9, 0.1]</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>आख़िरी row ऐसे निकली:</p>
+  <ol class="plain">
+    <li>Naive का पहला number: (0.5 + 0.5 + 0.6 + 0.4 + 0.5) ÷ 5 = 2.5 ÷ 5 = 0.5। दूसरा भी 0.5 आता है।</li>
+    <li>Late का पहला number: (0.9 + 0.8 + 0.9 + 0.9 + 1.0) ÷ 5 = 4.5 ÷ 5 = 0.9। दूसरा: (0.1 + 0.2 + 0.1 + 0.1 + 0.0) ÷ 5 = 0.5 ÷ 5 = 0.1।</li>
+  </ol>
+  <p>Naive में <q>It</q> को नहीं पता कि बात milestone की है या homework की, इसलिए vector बीच में है। Late में encoder ने पहला sentence भी पढ़ा था, इसलिए सारे tokens milestone की तरफ़ झुके।</p>
+
+  <p>Query <q>When is the project milestone due?</q> का vector [0.95, 0.05] मानिए। Lesson 3 की <button class="def" data-w="w-cosine">cosine similarity</button> dot product को दोनों lengths के गुणा से भाग देती है, जैसे 0.74 ÷ (0.82 × 0.91) = 0.99। Naive chunk से cosine तीन steps में निकलता है:</p>
+  <ol class="plain">
+    <li>Dot product: 0.95 × 0.5 + 0.05 × 0.5 = 0.475 + 0.025 = 0.5।</li>
+    <li>Lengths: query की √(0.95² + 0.05²) = √0.905 = 0.951, और chunk की √(0.5² + 0.5²) = √0.5 = 0.707।</li>
+    <li>भाग: 0.5 ÷ (0.951 × 0.707) = 0.5 ÷ 0.672 = 0.74।</li>
+  </ol>
+  <p>Late chunk [0.9, 0.1] पर यही हिसाब 0.86 ÷ (0.951 × 0.906) = 1.00 देता है। <b>Late chunk की दिशा query से लगभग पूरी मिलती है, जबकि naive chunk 0.74 पर रह जाता है।</b></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>अब homework वाली query लीजिए, vector [0.05, 0.95]। Naive chunk [0.5, 0.5] और late chunk [0.9, 0.1], दोनों से इसका cosine निकालिए। Naive chunk की कमज़ोरी क्या दिखी?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Naive: (0.025 + 0.475) ÷ (0.951 × 0.707) = <b>0.74</b>। Late: (0.045 + 0.095) ÷ (0.951 × 0.906) = <b>0.16</b>।</p>
+      <p>Naive chunk दोनों queries पर 0.74 देता है, यानी milestone वाला chunk homework के सवाल पर भी उतना ही ऊपर आता है। <span class="mine">ये query मेरी है</span></p>
+    </details>
+  </div>
+
+  <figure class="slide" style="margin-top:28px">
+    <a href="img/slide-p30.png"><img src="img/slide-p30.png" alt="Stanford slide: naive chunking और late chunking" loading="lazy"></a>
+    <figcaption>Stanford की slide: बीच में naive chunking, और दाएँ late chunking।</figcaption>
+  </figure>
+
+  <p>Paper में 256 tokens वाले chunks पर late chunking का औसत score 52.2 से 54.0 हुआ। ये 0 से 100 तक का ranking score है, जिसे <a href="13-metrics.html#ndcg">lesson 13</a> खोलता है। फ़ायदा सबसे छोटे chunks पर सबसे बड़ा है, क्योंकि छोटा chunk सबसे ज़्यादा context खोता है।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="compare">
+  <h3><span class="cn">4</span>दोनों तरीकों की तुलना: context text में या vector में</h3>
+
+  <p><b>दोनों तरीके context अलग जगह रखते हैं: contextual retrieval उसे chunk के text में लिखता है, और late chunking सिर्फ़ vector में।</b> बाकी फ़र्क इसी से निकलते हैं:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>Contextual retrieval</th><th>Late chunking</th></tr></thead>
+    <tbody>
+      <tr><td>Context कौन देता है</td><td>LLM, text लिखकर</td><td>Encoder, vectors में</td></tr>
+      <tr><td>Indexing का खर्च</td><td>हर chunk पर एक LLM call</td><td>हर document पर एक encoder run</td></tr>
+      <tr><td>Chunk लंबा होता है?</td><td>हाँ, 50–100 tokens</td><td>नहीं</td></tr>
+      <tr><td>शब्दों वाले index को फ़ायदा</td><td>हाँ, नए शब्द text में हैं</td><td>नहीं</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>ACME वाली query पर ये फ़र्क सीधा दिखता है। Late chunking के बाद भी chunk के text में ACME नहीं है, इसलिए word overlap का score 1 ही रहता है। <b>यानी शब्दों वाले index पर सिर्फ़ contextual retrieval मदद करता है, और embedding पर दोनों।</b> Late chunking की एक हद भी है: पूरा document encoder की लंबाई की limit में आना चाहिए, नहीं तो context फिर कटता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Corpus बहुत बड़ा है, LLM calls का budget कम है, chunks 64 tokens के हैं, और retriever सिर्फ़ embeddings पर चलता है। आप कौन सा तरीका लेंगे? Retriever सिर्फ़ शब्दों वाला index हो, तो?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p><b>Late chunking।</b> उसमें LLM call नहीं लगती, और छोटे chunks पर उसका फ़ायदा सबसे ज़्यादा है। सिर्फ़ शब्दों वाले index पर late chunking कुछ नहीं करता, क्योंकि उसका context text में नहीं जाता। तब contextual retrieval लीजिए।</p>
+    </details>
+  </div>
+
+  <div class="deeper">
+    <h2>गहरे version में और क्या है</h2>
+    <p>गहरे version में ये पूरा lesson है, और उसके बाद 5 पड़ाव और, जो Stanford की slides के level तक ले जाते हैं:</p>
+    <ul class="plain">
+      <li>पड़ाव 5: Anthropic की पूरी pipeline, prompt, metric, खर्च, और reranking के साथ 1.9%।</li>
+      <li>पड़ाव 6: Late chunking अंदर से: i.i.d. और conditional embeddings, attention, और paper का pooling formula।</li>
+      <li>पड़ाव 7: Paper के नतीजे, chunk size वाले charts, और long late chunking।</li>
+      <li>पड़ाव 8: दोनों तरीके एक ही ACME example पर, paper के cosine numbers के साथ।</li>
+      <li>पड़ाव 9: इस हिस्से की छहों Stanford slides, जिन्हें आप खुद पढ़ते हैं।</li>
+    </ul>
+    <p><a href="08-contextual-retrieval-dense.html">गहरा version खोलिए</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>काटने से chunk अपना context खोता है। ACME वाला chunk 49 chunks के बराबर रह गया, और top-20 में सिर्फ़ 40% बार आता है।</li>
+    <li>Contextual retrieval हर chunk के आगे LLM से context लिखवाता है। Failed retrievals@20 5.7% से 3.7% पर आया, और शब्दों वाले index के साथ 2.9% पर।</li>
+    <li>Late chunking पहले पूरा document encode करता है, फिर हर chunk के token vectors का औसत लेता है। LLM call नहीं लगती, लेकिन context सिर्फ़ vector में रहता है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-contextloss">Context loss</dt><dd>काटने के बाद chunk ये न बता पाए कि वो किस document या विषय की बात है। जैसे <q>The company’s revenue grew by 3%</q> में company का नाम नहीं है।</dd>
+    <dt id="w-ctxretrieval">Contextual retrieval</dt><dd>हर chunk के आगे LLM का लिखा 50–100 tokens का context जोड़कर index करना। जैसे <q>From ACME Corp’s Q2 2023 SEC filing</q>।</dd>
+    <dt id="w-failed20">Failed retrievals@20</dt><dd>हर query का एक सही chunk हो, तो कितने % queries में वो top-20 में नहीं आया। छोटा बेहतर। जैसे 1,000 queries में 29 fail हों, तो 2.9%।</dd>
+    <dt id="w-naivechunk">Naive chunking</dt><dd>पहले काटना, फिर हर chunk को अकेले encode करना। तब <q>It is due Week 6</q> का vector [0.5, 0.5] रहता है।</dd>
+    <dt id="w-latechunk">Late chunking</dt><dd>पहले पूरा document encode करना, फिर हर chunk के token vectors पर mean pooling। तब <q>It is due Week 6</q> का vector [0.9, 0.1] बनता है।</dd>
+    <dt id="w-longctx">Long-context encoder</dt><dd>ऐसा encoder, जो एक बार में बहुत लंबा text पढ़ सके। जैसे 8,192 tokens, यानी करीब 10 pages।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="07-chunking.html">पिछला: Lesson 7</a>
+    <a href="09-raptor-graphrag.html">अगला: Lesson 9, पूरे document के सवाल</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Contextual retrieval: Anthropic, “Introducing Contextual Retrieval”, 2024। Late chunking: Günther et al., 2024, “Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding Models”। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary.js"></script>
+<script src="def.js"></script>
+</body>
+</html>

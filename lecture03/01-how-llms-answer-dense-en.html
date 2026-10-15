@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Asked about office hours, an LLM on its own confidently answered Wednesday without ever seeing the queue log. This lesson shows how an LLM builds an answer token by token, then uses the papers' numbers to measure how much parameters alone know and how often models hallucinate.">
+<title>Lesson 1: How an LLM writes (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 1 / 18 · <a href="01-how-llms-answer-en.html">Easy</a> · <b>Dense</b> · <a href="01-how-llms-answer-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 1 · Dense version</p>
+  <h1>How an LLM writes an answer, and where it gets stuck</h1>
+  <p class="lede"><b>An LLM is a model that reads text and writes the text that comes next, one token at a time. It picks each next token by looking at probabilities, and those probabilities come from its parameters and from the text you give it.</b></p>
+  <p class="lede">The lecture opens with a question: <q>Which office hour this week is least crowded?</q> The course's TAs, senior students who help with teaching, hold office hours twice a week: Tuesday 4pm and Thursday 9am. Office hours are fixed times when any student can drop in and ask questions. Ask an LLM on its own, and it answers with confidence: <q>Try the Wednesday afternoon session - midweek hours are usually quietest.</q></p>
+  <p class="lede">The course keeps a queue log, a record of how many students were waiting in line at each office hour. Over the last 3 weeks, Tuesday 4pm averaged 14 students and Thursday 9am only 3. So the right answer is Thursday 9am, and there is no office hour on Wednesday at all. The LLM never saw this log, yet it did not hesitate for a moment. This lesson explains why.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 9 steps. The first 5 are the same as in the easy version, and steps 6 to 9 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#token">Tokens: the model reads pieces of text</a><span class="can">Explain how 6 words can become 7 tokens.</span></li>
+      <li><a href="#next-token">Next-token prediction: one token per step</a><span class="can">Build an answer token by token in the widget.</span></li>
+      <li><a href="#parameters">Parameters and training</a><span class="can">Explain why the queue log is not inside the model.</span></li>
+      <li><a href="#prompt">The prompt and the context window</a><span class="can">Work out how many passages fit in a prompt.</span></li>
+      <li><a href="#hallucination">Hallucination: a confident answer without data</a><span class="can">Explain the Wednesday answer, and read Stanford's first slide.</span></li>
+      <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#notation">The slide's notation, and the probability of a whole answer</a><span class="can">Read p(y | x, z) and θ, and work out a whole answer's probability.</span></li>
+      <li><a href="#closedbook">Closed-book QA: answers from parameters alone</a><span class="can">Read the T5 and RAG numbers.</span></li>
+      <li><a href="#evidence">The papers' experiments</a><span class="can">Say how the papers measured hallucination and the cutoff.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line of the four slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: nothing, school maths is enough. From step 6 on, a few things are covered fully in lessons 2 to 5, and those places link to them. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="token">
+  <h3><span class="cn">1</span>Tokens: the model reads pieces of text</h3>
+
+  <p><b>A token is a small piece of text: sometimes a whole word, sometimes part of a word, sometimes a punctuation mark. An LLM reads text by splitting it into tokens, and it writes its answer in tokens too.</b></p>
+
+  <p>Tokens are needed because a computer can only calculate with numbers. The model has a fixed list of tokens, and each token in it has an ID number. This list is called the <b class="term">vocabulary</b>, and the program that splits text into its tokens is called the <b class="term">tokenizer</b>.</p>
+
+  <p>A common word is often a single token, while a rarer word breaks into a few pieces. For example, <q>Office hours are crowded on Tuesday</q> has 6 words but 7 tokens: <span class="mine">my split</span></p>
+  <div class="tokens"><span class="tok">Office</span><span class="tok"> hours</span><span class="tok"> are</span><span class="tok"> crowd</span><span class="tok">ed</span><span class="tok"> on</span><span class="tok"> Tuesday</span></div>
+
+  <p>Here crowded broke into two tokens, crowd and ed. In the same way, if the vocabulary has no entry for a misspelling like Wednesdayy, the tokenizer still splits it into Wednesday and y. The real split depends on each model's own tokenizer.</p>
+
+  <p>Since the model reads and writes only tokens, this lecture measures every length in tokens, not in words.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="next-token">
+  <h3><span class="cn">2</span>Next-token prediction: one token per step</h3>
+
+  <p><b>While writing an answer, an LLM gives every token a probability at each step, then picks one token and adds it to the text.</b> Then it repeats the same thing on the new text. This loop is called <b class="term">next-token prediction</b>, and the whole answer comes out of it.</p>
+
+  <p>A <b class="term">probability</b> is a number between 0 and 1 that gives the chance of something happening: 0 means never, and 1 means certain. For example, if 5 of the last 20 lectures had a quiz, the probability of a quiz in the next one is 5 ÷ 20 = 0.25. The probability of no quiz is 15 ÷ 20 = 0.75, and the probabilities of all the options always add up to 1.</p>
+
+  <p>Now the model is given this text: <q>The least crowded office hour this week is</q>. Its probabilities for the next token might look like this: <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Next token</th><th class="numh">Probability</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">" Wednesday"</td><td class="num">0.34</td></tr>
+      <tr><td class="mono">" Thursday"</td><td class="num">0.21</td></tr>
+      <tr><td class="mono">" Tuesday"</td><td class="num">0.18</td></tr>
+      <tr><td class="mono">" Friday"</td><td class="num">0.15</td></tr>
+      <tr class="hi"><td class="mono">" Monday"</td><td class="num">?</td></tr>
+      <tr class="total"><td>Sum</td><td class="num">1.00</td></tr>
+    </tbody>
+  </table></div>
+  <p>In reality, the thousands of other tokens also get very small probabilities. To keep the arithmetic small, assume there are only these 5 tokens.</p>
+
+  <div class="recall">
+    <p class="rl">Work out the Monday row</p>
+    <p>The five probabilities must add up to 1. What is Monday's probability?</p>
+    <details><summary>Show the answer</summary>
+      <p>The other four add up to 0.34 + 0.21 + 0.18 + 0.15 = 0.88. So Monday = 1 − 0.88 = <b>0.12</b>.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Now suppose the model always takes the token with the highest probability. At the first step it takes Wednesday, and then it looks at the probabilities for the token after that. Press “Pick the highest” three times in the widget below. <span class="mine">the later steps use my numbers too</span></p>
+
+  <div class="widget" id="ntp">
+    <h4>Build an answer yourself</h4>
+    <p class="hint">Click any token, or press “Pick the highest” three times.</p>
+    <div class="sentence" id="ntp-text"></div>
+    <div class="bars" id="ntp-bars"></div>
+    <div class="btns" style="margin-top:12px">
+      <button type="button" id="ntp-greedy">Pick the highest</button>
+      <button type="button" id="ntp-reset">Start over</button>
+    </div>
+    <p class="out" id="ntp-out"></p>
+  </div>
+
+  <p>After three steps the model writes what it wrote at the start of the lesson: Wednesday afternoon. At no step did it look at the queue log. Wednesday got 0.34 because people often write things like “midweek is quiet”. <b>So a probability tells you which token is common after this text, not which one is true.</b></p>
+
+  <p class="note">Real models often choose at random according to the probabilities. Then the 0.34 token comes up about 34% of the time, and the same question can get different answers.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>In the widget you chose Thursday, morning and the full stop, the tokens at 0.21, 0.31 and 0.71. According to the queue log, Thursday 9am really is the least crowded. Did the model know the answer this time?</p>
+    <details><summary>Show the answer</summary>
+      <p><b>No.</b> The answer came out right by luck. The model never saw the log, and it gave Thursday a lower probability than Wednesday.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="parameters">
+  <h3><span class="cn">3</span>Parameters and training: where the model's knowledge lives</h3>
+
+  <p><b>Parameters are the numbers inside a model. The input tokens are combined with these numbers by a fixed calculation, and that calculation produces the probability of every next token.</b> Another name for parameters is weights, and there are a great many of them. The T5-11B model on Stanford's slides, for example, has about 11 billion parameters. <span class="mine">from the paper</span></p>
+
+  <p>The values of these parameters are set by <b class="term">training</b>. At first the parameters are random. Then the model reads a large amount of text, and at every position training checks what probability the model gave to the real next token. Then it nudges the parameters a little so that this probability goes up.</p>
+
+  <p>Here is one step. The training text contains the line <q>Office hours are on Thursday.</q> After reading <q>Office hours are on</q>, the model gives the next token Thursday a probability of 0.10. Training changes the parameters slightly, and now the same text gives Thursday 0.12. <span class="mine">my example</span> The total stays at 1, so all the other tokens together dropped from 0.90 to 0.88.</p>
+
+  <p>So whatever the model “knows” is spread across the values of its parameters, not stored in a separate file or database. Knowledge held this way is called <b class="term">parametric knowledge</b>. Training stops on some date, and after that the parameters do not change. That date is called the <b class="term">knowledge cutoff</b>.</p>
+
+  <p>The queue log is this course's own data, so it never went into any model's training. Its 14 and 3 are not in any parameter. This shows the two problems with parametric knowledge:</p>
+  <ul class="plain">
+    <li>New facts do not get in. To add something from after the knowledge cutoff, or your private data, the model has to be trained again.</li>
+    <li>The model cannot name a source. The knowledge is mixed into billions of numbers, so the model cannot tell which document a fact came from.</li>
+  </ul>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="prompt">
+  <h3><span class="cn">4</span>The prompt and the context window</h3>
+
+  <p><b>The prompt is the text you give the model right now: the question, instructions, and any document that comes with them.</b> At every step, next-token prediction looks at all the text so far, and that includes the prompt. So the prompt's text can change every probability, while the parameters stay the same.</p>
+
+  <p>Now put the queue log line in the prompt before the question, the line that says 14 for Tuesday 4pm and 3 for Thursday 9am.</p>
+
+  <p class="callout"><b>Think first:</b> The parameters are the same, and only the prompt changed. Will Thursday's 0.21 and Wednesday's 0.34 go up or down? Make a guess, then switch on the box below.</p>
+
+  <div class="widget" id="ctx">
+    <h4>Change the prompt, watch the probabilities</h4>
+    <p class="hint">The parameters stay the same. Only the prompt changes. <span class="mine">my numbers</span></p>
+    <label class="switch"><input type="checkbox" id="ctx-on"> Add the queue log line to the prompt</label>
+    <div class="sentence" id="ctx-text"></div>
+    <div class="bars" id="ctx-bars"></div>
+  </div>
+
+  <p>With the log added, Thursday's probability goes from 0.21 to 0.81, and Wednesday's from 0.34 to 0.05, while the parameters stay the same. <b>Put information that is not in the parameters into the prompt, and the model uses it.</b> The whole lecture is built on this.</p>
+
+  <p>The prompt has a limit too. The model can read only a fixed number of tokens at once, and this limit is called the <b class="term">context window</b>. Both the prompt and the answer the model writes count toward it. For example, if the window is 8,000 tokens and the prompt is 7,500, only 500 tokens are left for the answer.</p>
+
+  <p>All of a course's documents together can be far larger than this window. So for every question you have to choose which pieces go into the prompt, and lesson 2 starts from that choice.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The context window is 8,000 tokens. The question and instructions take 300 tokens, and the answer needs 700. Each passage, a piece of a document, is 500 tokens. At most how many passages fit in the prompt?</p>
+    <details><summary>Show the answer</summary>
+      <p>That leaves 8,000 − 300 − 700 = 7,000 tokens for passages, and 7,000 ÷ 500 = <b>14 passages</b>.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="hallucination">
+  <h3><span class="cn">5</span>Hallucination: a confident answer without data</h3>
+
+  <p><b>A hallucination is an answer that reads well and sounds confident, but is wrong or does not rest on any source.</b> The Wednesday afternoon answer is one, and its cause comes from putting the last three steps together.</p>
+
+  <p>The queue log was not in the parameters, because it never went into training (step 3). It was not in the prompt either (step 4). Even so, next-token prediction picks some token at every step, and the most common token was Wednesday (step 2).</p>
+
+  <p>Next-token prediction has no step that stops when the data is missing. So a wrong answer is written with the same confidence as a right one, and the reader cannot tell them apart.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval? The answer of an LLM alone and of an LLM with retrieval" loading="lazy"></a>
+    <figcaption>Stanford's Why Retrieval slide. On the left is the LLM alone, which wrote Wednesday. On the right the prompt holds the queue log line, and the answer is Thursday 9am. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>The right half of the slide shows retrieval, which means finding the right text when the question arrives and putting it into the prompt. There the answer's 3 comes straight from the log line, so a reader can check it. <a href="02-retrieval-dense-en.html#retrieval">Lesson 2</a> starts from here.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Which prompt gives the lowest chance of a hallucination? (a) Only the question. (b) The question and the queue log. (c) The question and an old 2024 forum post that says <q>midweek afternoons are usually quiet</q>.</p>
+    <details><summary>Show the answer</summary>
+      <p><b>(b)</b>. With (c), the model may trust the old post and write Wednesday again, so wrong text in the prompt also does harm. This point comes back in lesson 2.</p>
+    </details>
+  </div>
+
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The 5 steps above are the same as in the easy version. The 4 steps below take you to the level of the Stanford slides. They cover the slide's notation and the probability of a whole answer, then the numbers for models that answer from parameters alone, and then the papers' experiments. Finally you read the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="notation">
+  <h3><span class="cn">6</span>The slide's notation: p(y | x, z), θ, and the probability of a whole answer</h3>
+
+  <p>Stanford's slides call the LLM a generator and describe its job in one line:</p>
+  <div class="sentence">A generator p(y|x, z) that writes the answer one token at a time, given the query x and a retrieved passage z.</div>
+  <p>This line is the next-token prediction of step 2, written in symbols. In this step you read every symbol in it with your own numbers.</p>
+
+  <h4 class="sub" id="given">The text after the “|”: p(y | x) and p(y | x, z)</h4>
+
+  <p>Before the symbols, take two numbers from step 4. After the text <q>The least crowded office hour this week is</q>, Thursday got 0.21, and with the queue log line placed before it, 0.81. The token was the same, and only the text before it changed. The notation records exactly this difference:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>Meaning</th><th>In our example</th></tr></thead>
+    <tbody>
+      <tr><td>x</td><td>The query, the text the model receives</td><td>The least crowded office hour this week is</td></tr>
+      <tr><td>z</td><td>A retrieved passage, a piece of a document placed in the prompt</td><td>The queue log line</td></tr>
+      <tr><td>y</td><td>The answer, or one of its tokens</td><td>Thursday</td></tr>
+      <tr><td>p(y | x)</td><td>The probability of y when only x is given</td><td>0.21</td></tr>
+      <tr class="hi"><td>p(y | x, z)</td><td>The probability of y when both x and z are given</td><td>0.81</td></tr>
+    </tbody>
+  </table></div>
+  <p>The vertical bar “|” is read “given”. After it comes the text the model already has, and the comma means “and”. <a href="04-probability-tools-dense-en.html#conditional">Lesson 4</a> explains this fully under the name <button class="def" data-w="w-conditional">conditional probability</button>. For now it is enough that changing the text after the “|” changes the probability of the same token.</p>
+
+  <h4 class="sub" id="theta">θ: the generator's parameters</h4>
+
+  <p>On the slide the generator's full name is p<sub>θ</sub>. θ (theta) is the name for the generator's parameters, all the numbers from step 3. Writing θ underneath says that these probabilities come from those parameters. The retriever's parameters are called η (eta), and they come in <a href="05-rag-model-dense-en.html#parts">lesson 5</a>.</p>
+
+  <p>The training step from step 3 looks like this in the notation: p<sub>θ</sub>(Thursday | Office hours are on) was 0.10, and after θ changed slightly it became 0.12. There the text stayed the same and θ changed. In step 4 it was the other way round: θ stayed the same, and the text after the “|” changed.</p>
+
+  <h4 class="sub" id="product">One token at a time: the probability of a whole answer</h4>
+
+  <p>The generator writes the answer one token at a time, so the probability of the whole answer is built from the probability of each token. Counting shows this most clearly. Suppose the model writes the same answer 1,000 times, choosing at random each time with the widget's probabilities: <span class="mine">my numbers</span></p>
+  <ol class="plain">
+    <li>At the first step, Wednesday comes up about 1,000 × 0.34 = 340 times.</li>
+    <li>In 46% of those 340, the next token is afternoon: 340 × 0.46 = 156.4, so about 156 times.</li>
+    <li>In 71% of those, a full stop follows: 156.4 × 0.71 = 111.0, so about 111 times.</li>
+  </ol>
+  <p>111 times out of 1,000 means the whole answer <q>Wednesday afternoon.</q> has probability 0.111. That is the product of the three probabilities: 0.34 × 0.46 × 0.71 = 0.111. Each step keeps a share of the cases left by the step before, which is why the probabilities multiply. The formula writes the same product like this:</p>
+  <div class="formula">p(y | x) = p(y<sub>1</sub> | x) × p(y<sub>2</sub> | x, y<sub>1</sub>) × p(y<sub>3</sub> | x, y<sub>1</sub>, y<sub>2</sub>)</div>
+  <p>Here y<sub>1</sub> = Wednesday (0.34), y<sub>2</sub> = afternoon (0.46) and y<sub>3</sub> = the full stop (0.71). After the “|” of each token come the question and all the tokens before it, because next-token prediction looks at all the text so far at every step. The RAG paper writes each token's probability as p<sub>θ</sub>(y<sub>i</sub> | x, z, y<sub>1:i−1</sub>), where y<sub>1:i−1</sub> means tokens 1 to i − 1. <span class="mine">from the paper</span></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Take the widget's other answer, <q>Thursday morning.</q>, whose tokens have probabilities 0.21, 0.31 and 0.71. What is the probability of this whole answer, and how many times more often does <q>Wednesday afternoon.</q> come up?</p>
+    <details><summary>Show the answer</summary>
+      <p>0.21 × 0.31 = 0.0651, and 0.0651 × 0.71 = <b>0.046</b>, so about 46 times in 1,000. Wednesday afternoon comes up 0.111 ÷ 0.046 = 2.4 times as often.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">The same product shows one more thing. Every probability is below 1, so every extra token lowers the probability of the whole answer. Even this widget's most common answer sits at only 0.111, which means that about 889 times in 1,000 the model writes something else.</p>
+
+  <h4 class="sub" id="decoding">Greedy decoding and sampling</h4>
+
+  <p>There are two common ways to pick a token, and both appeared in step 2. Taking the highest-probability token at every step is called <b class="term">greedy decoding</b>. The widget's “Pick the highest” does this, and its answer is always Wednesday afternoon. Choosing at random according to the probabilities is called <b class="term">sampling</b>, and the 1,000-run count above was sampling.</p>
+
+  <p>With sampling, the first token can change from run to run. Run it 100 times and you get Wednesday about 34 times, Thursday 21, Tuesday 18, Friday 15 and Monday 12. So sampling sometimes writes the right Thursday too, but only by luck, as in the question in step 2.</p>
+
+  <p>For question answering, papers often use greedy decoding. The T5 paper in step 7 picks the most likely token at each step, and the RAG paper also uses greedy decoding for question answering. <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="closedbook">
+  <h3><span class="cn">7</span>Closed-book QA: how many answers come from parameters alone</h3>
+
+  <p><b>In closed-book question answering the model gets only the question and no document, so it writes the answer from its parameters alone.</b> That is exactly what the LLM on its own did at the start of the lesson. In the open-book setting the system first searches documents and then writes the answer. Stanford's RAG Performance slide compares <button class="def" data-w="w-closed">closed-book and open-book</button> models.</p>
+
+  <p>The slide's closed-book rows come from a 2020 paper by Roberts and colleagues. They taught Google's T5, a model that reads text and writes text, to answer questions given only the question, with no documents at all. <span class="mine">from the paper</span> From here on this paper is called the T5 paper.</p>
+
+  <h4 class="sub" id="em">Exact Match: did the answer match word for word</h4>
+
+  <p>The numbers in these tables are <button class="def" data-w="w-em">Exact Match</button> scores: the percentage of questions where the model's answer matches the correct answer exactly. Before matching, both are lowercased, and a, an, the, punctuation and extra spaces are removed. <span class="mine">from the paper</span> For example, if the correct answer is Thursday 9am, then <q>thursday 9am.</q> matches. But <q>Thursday 9 am</q> does not, because it has a space between 9 and am.</p>
+
+  <p>The four columns of the slide's table are four datasets. NQ is Natural Questions, real questions people typed into Google search. TQA is TriviaQA, questions from quiz websites. WQ is WebQuestions and CT is CuratedTrec, two smaller question-answer datasets. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="size">What changes when the parameters grow</h4>
+
+  <p>T5 comes in four sizes, and the paper trained all four in the same way to answer questions. Below are the numbers on TriviaQA's Wikipedia test set: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Model</th><th class="numh">Parameters</th><th class="numh">TriviaQA (%)</th></tr></thead>
+    <tbody>
+      <tr><td>T5-Base</td><td class="num">220 million</td><td class="num">29.1</td></tr>
+      <tr><td>T5-Large</td><td class="num">770 million</td><td class="num">35.9</td></tr>
+      <tr><td>T5-3B</td><td class="num">3 billion</td><td class="num">43.4</td></tr>
+      <tr><td>T5-11B</td><td class="num">11 billion</td><td class="num">50.1</td></tr>
+      <tr class="hi"><td>T5-11B + SSM</td><td class="num">11 billion</td><td class="num">60.5</td></tr>
+    </tbody>
+  </table></div>
+  <p>From Base to 11B the parameters grow 11,000 ÷ 220 = 50 times, and the score rises from 29.1 to 50.1, a gain of 21.0 points. <b>Each larger size answers more questions exactly right, so a bigger model holds more knowledge in its parameters.</b> This TriviaQA column is used because its 50.1 and 60.5 are the same numbers as on Stanford's slide. For NQ, the current version of this paper gives T5-11B 32.6 while the slide says 34.5, so for NQ use the slide's number.</p>
+
+  <p>The SSM in the last row, <b class="term">salient span masking</b>, is an extra round of training. In it the model reads Wikipedia sentences with blanks where names and dates were, and has to fill in the blanks. T5 ran this round for 100,000 extra steps, and the TriviaQA score went from 50.1 to 60.5. <span class="mine">from the paper</span> This round is part of <button class="def" data-w="w-pretraining">pretraining</button>, the large training on general text that comes before the model is taught to answer questions.</p>
+
+  <h4 class="sub" id="fewer">Fewer parameters, with documents</h4>
+
+  <p>Now look at the NQ column of the slide's table. In the closed-book rows, T5-11B is at 34.5, and 36.6 with SSM. In the open-book rows, RAG-Seq. is at 44.5. Out of 1,000 questions, that is 345 against 445 exactly right answers, so the system with documents gets 100 more questions right.</p>
+
+  <p>RAG's generator is a model called <button class="def" data-w="w-bart">BART</button>, with about 400 million parameters, and the whole of RAG has about 626 million. T5-11B has 11 billion, which is 11,000 ÷ 626 = 17.6 times as many. The RAG paper also notes that T5-Large, with 770 million parameters, scores 28.9 on NQ. <span class="mine">from the paper</span></p>
+
+  <p><b>So with documents at hand, a system with 17.6 times fewer parameters is still 10 points ahead on NQ.</b> The RAG paper draws the same conclusion: a system that combines parameters with documents needs far fewer parameters to answer questions well. The gain comes from step 4, because the text with the answer reaches the prompt.</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="evidence">
+  <h3><span class="cn">8</span>The papers' experiments: measuring hallucination and the knowledge cutoff</h3>
+
+  <p>Steps 3 and 5 named three weaknesses of parametric knowledge: new facts do not get in, there is no source, and an answer comes out even without the data. The RAG paper opens with the same three. Such models cannot easily expand or revise their memory, cannot show why they predicted something, and can hallucinate. <span class="mine">from the paper</span> The three experiments in this step put numbers on them.</p>
+
+  <h4 class="sub" id="audit">150 answers Exact Match called wrong, checked by hand</h4>
+
+  <p>The T5 paper checked by hand 150 answers on NQ that Exact Match had marked wrong. They fell into four groups: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Group</th><th class="numh">Answers</th><th class="numh">Share</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Really wrong<span class="sub">What does the Ghost of Christmas Present sprinkle from his torch? Correct: warmth. T5: confetti.</span></td><td class="num">93</td><td class="num">62.0%</td></tr>
+      <tr><td>Different wording<span class="sub">For example, April 15 and April 15th.</span></td><td class="num">20</td><td class="num">13.3%</td></tr>
+      <tr><td>Incomplete list of correct answers<span class="sub">Where does the US launch space shuttles from? The list has only florida. T5: kennedy lc39b.</span></td><td class="num">20</td><td class="num">13.3%</td></tr>
+      <tr><td>The answer depends on when it is asked<span class="sub">Who is the secretary of state for Northern Ireland?</span></td><td class="num">17</td><td class="num">11.3%</td></tr>
+    </tbody>
+  </table></div>
+  <p>The arithmetic: 93 + 20 + 20 + 17 = 150, and 93 ÷ 150 = 0.620, 20 ÷ 150 = 0.133, 17 ÷ 150 = 0.113. So Exact Match underrates a closed-book model, but 62% of these answers were still really wrong. The confetti answer reads just as well as a correct one, and that is a hallucination. The last row ties to the knowledge cutoff, because its answer changes over time while the parameters stay fixed at training time.</p>
+
+  <p>At the end of the paper the authors themselves name three points. The model spreads knowledge across its parameters in a way nobody can explain. When it is unsure, it makes up realistic-looking answers. And after training there is no way to add or remove a specific fact. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="jeopardy">Jeopardy questions: people judged factuality</h4>
+
+  <p>In the RAG paper, people checked hallucination directly. Jeopardy is a quiz format where the answer comes first, and you write a question that has it as its answer. For the answer The World Cup, for example: <q>In 1986 Mexico scored as the first country to host this international sports competition twice.</q> <span class="mine">from the paper</span></p>
+
+  <p>Two models wrote such questions. BART is a generator on its own, writing only from its parameters. RAG has the same BART, but its prompt also holds Wikipedia passages. People read 452 pairs and, for each pair, chose which question was more factual, meaning whose statement can be backed up by a trusted source.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>People's verdict</th><th class="numh">Factuality</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>RAG better</td><td class="num">42.7%</td></tr>
+      <tr><td>BART better</td><td class="num">7.1%</td></tr>
+      <tr><td>Both good</td><td class="num">11.7%</td></tr>
+      <tr><td>Both poor</td><td class="num">17.7%</td></tr>
+      <tr><td>No majority</td><td class="num">20.8%</td></tr>
+      <tr class="total"><td>Sum</td><td class="num">100.0%</td></tr>
+    </tbody>
+  </table></div>
+  <p>Of 452 pairs, 42.7% is about 193 pairs and 7.1% about 32. <span class="mine">my arithmetic</span> <b>So RAG's question was judged more factual 42.7 ÷ 7.1 = 6.0 times as often.</b></p>
+
+  <p>In the paper's table of examples, BART's wrong answers also read perfectly well. In Jeopardy, for Washington, BART wrote <q>This state has the largest number of counties in the U.S.</q>, which the paper marks as wrong. For the same answer RAG wrote <q>It’s the only U.S. state named for a U.S. president</q>. <span class="mine">from the paper</span></p>
+
+  <p>In another task the model had to write a one-sentence answer to define middle ear. There BART wrote that the middle ear is the part of the ear between the middle ear and the nose, which is wrong. RAG wrote <q>The middle ear includes the tympanic cavity and the three ossicles.</q> <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="hotswap">New knowledge by swapping the documents: index hot-swapping</h4>
+
+  <p>The first problem in step 3 was that adding a new fact needs training again. RAG keeps its documents in an <button class="def" data-w="w-index">index</button>, a list of passages organised so the retriever can search it fast. The RAG paper built two indexes from Wikipedia, one from December 2016 and one from December 2018. <span class="mine">from the paper</span></p>
+
+  <p>The paper then listed 82 world leaders who changed between those two dates, and asked the model questions like <q>Who is the President of Peru?</q>. The model's parameters were the same in all four cases, and only the index changed: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Index ↓ / leaders of which year →</th><th class="numh">2016</th><th class="numh">2018</th></tr></thead>
+    <tbody>
+      <tr><td>December 2016 index</td><td class="num"><b>70%</b></td><td class="num">4%</td></tr>
+      <tr><td>December 2018 index</td><td class="num">12%</td><td class="num"><b>68%</b></td></tr>
+    </tbody>
+  </table></div>
+  <p>With the index from the right year, 68% to 70% of the answers are correct, and with the wrong year only 4% to 12%. <b>So swapping the documents changed what the model knows, and it took no training.</b> Replacing the index like this is called <b class="term">index hot-swapping</b>. <a href="02-retrieval-dense-en.html#retrieval">Lesson 2</a> calls this route <button class="def" data-w="w-nonparam">non-parametric memory</button>: knowledge kept outside the parameters, in documents.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The course moved the Thursday office hour from 9am to 10am. What has to change to get this right in a system with an LLM alone, and in a system with documents?</p>
+    <details><summary>Show the answer</summary>
+      <p>For the LLM alone, the parameters have to change, which means training again. In the system with documents, changing the office hours passage is enough, because on the next question the retriever brings the new passage into the prompt. The paper's 2016 and 2018 experiment shows exactly this.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">9</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are the four Stanford slides this lesson rests on, unchanged. Under each slide are a few questions. Think of the answer first, then open it. If a symbol stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image to open it at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval?" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p10-boxes.png"><img src="img/slide-p10-boxes.png" alt="The two boxes of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's Why Retrieval slide, and below it the two boxes, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the Why Retrieval slide</p>
+    <ol class="plain">
+      <li>
+        <p>Why did the LLM in the left box write Wednesday afternoon, when there is no office hour that day?</p>
+        <details><summary>Show the answer</summary>
+          <p>The queue log was neither in the parameters nor in the prompt. Next-token prediction still picks some token at every step, and the most common one was Wednesday. The probability said what is common, not what is true. (Steps 2, 3 and 5)</p>
+        </details>
+      </li>
+      <li>
+        <p>How did the Retrieved line in the right box reach the model, and what changed for the model?</p>
+        <details><summary>Show the answer</summary>
+          <p>The line is in the prompt. The parameters are the same, and only the text after the “|” changed, so p(Thursday | x) = 0.21 became p(Thursday | x, z) = 0.81. (Steps 4 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Where does the 3 in <q>about 3 students ahead of you</q> come from, and why is this not a hallucination?</p>
+        <details><summary>Show the answer</summary>
+          <p>The log line has 3 next to Thu 9am, and the answer took that number. The answer rests on a source that the reader can check. (Steps 4 and 5)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p14.png"><img src="img/slide-p14.png" alt="Stanford slide: the Retrieval Augmented Generation (RAG) diagram" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p14-generator.png"><img src="img/slide-p14-generator.png" alt="The generator part of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p14-retriever.png"><img src="img/slide-p14-retriever.png" alt="The retriever part of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: Retrieval Augmented Generation (RAG), and below it the generator part and the retriever part, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the RAG slide</p>
+    <ol class="plain">
+      <li>
+        <p>Why does it say (Parametric) under the generator and (Non-Parametric) under the retriever?</p>
+        <details><summary>Show the answer</summary>
+          <p>The generator's knowledge is in its parameters θ, which is parametric knowledge. Behind the retriever is the Document Index, where the passages' text lives outside the parameters and can be changed without training. (Steps 3, 6 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Who wrote the top y on the right, <q>The middle ear includes the tympanic cavity and the three ossicles.</q>? What did BART on its own write for the same question?</p>
+        <details><summary>Show the answer</summary>
+          <p>This is the answer of RAG, the model with documents. BART on its own wrote that the middle ear is the part of the ear between the middle ear and the nose, which is wrong. (Step 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>What do the other parts of the slide do?</p>
+        <details><summary>Show the answer</summary>
+          <p>On the left are three kinds of input x: a question, a fact to check, and a Jeopardy answer. The Query Encoder q turns the question into a vector q(x), and the Document Index holds a vector d(z) for every passage (<a href="03-vectors-dense-en.html#embedding">lesson 3</a>). MIPS, maximum inner product search, finds the passages z<sub>1</sub> to z<sub>4</sub> with the largest dot products (<a href="02-retrieval-dense-en.html#retriever">lesson 2</a> and <a href="05-rag-model-dense-en.html#parts">lesson 5</a>).</p>
+          <p>Marginalize combines the answers written with several passages (<a href="04-probability-tools-dense-en.html#marginal">lesson 4</a>). The dashed arrow at the top is training, which changes q and p<sub>θ</sub> together (<a href="05-rag-model-dense-en.html#training">lesson 5</a>).</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p16-formula.png"><img src="img/slide-p16-formula.png" alt="The formula from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: Deep Dive into RAG, and below it the formula, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the Deep Dive slide</p>
+    <ol class="plain">
+      <li>
+        <p>Read p(y|x, z) in the generator line with our example: what are x, z and y?</p>
+        <details><summary>Show the answer</summary>
+          <p>x is the text the model receives, z is the queue log line, and y is Thursday. p(Thursday | x, z) = 0.81, while without z, p(Thursday | x) = 0.21. (Step 6)</p>
+        </details>
+      </li>
+      <li>
+        <p><q>Writes the answer one token at a time</q>: how do you get p(y|x) for the three-token answer <q>Wednesday afternoon.</q>?</p>
+        <details><summary>Show the answer</summary>
+          <p>Take each token's probability, given the text before it, and multiply them all: 0.34 × 0.46 × 0.71 = 0.111. (Step 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>What are the ∑, p(z|x) and ≈ doing in the formula?</p>
+        <details><summary>Show the answer</summary>
+          <p>The retriever brings several passages, and p(z|x) is how much it trusts each one. With each passage the generator gives the answer a different probability, and the ∑ adds these up weighted by that trust, as the red note says. The sum runs only over the top-K passages, the K highest-scoring ones, so it is ≈ rather than =.</p>
+          <p><a href="04-probability-tools-dense-en.html#marginal">Lesson 4</a> works this sum by hand, and the two lines at the bottom, RAG-Sequence and RAG-Token, come in <a href="05-rag-model-dense-en.html#seq-token">lesson 5</a>.</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p20.png"><img src="img/slide-p20.png" alt="Stanford slide: RAG Performance on Open-Domain QA" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p20-qa.png"><img src="img/slide-p20-qa.png" alt="The left table of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p20-human.png"><img src="img/slide-p20-human.png" alt="The right table of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: RAG Performance on Open-Domain QA, and below it both tables, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the RAG Performance slide</p>
+    <ol class="plain">
+      <li>
+        <p>What knowledge do the two Closed Book rows answer from, and how far behind RAG-Seq. are they on NQ?</p>
+        <details><summary>Show the answer</summary>
+          <p>From parameters alone. T5-11B is 44.5 − 34.5 = 10.0 points behind, and even with SSM it is 44.5 − 36.6 = 7.9 behind. REALM and DPR are open-book systems that pick the answer out of passages (<a href="05-rag-model-dense-en.html#results">lesson 5</a> and <a href="12-dpr-dense-en.html#results">lesson 12</a>). (Step 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>What is the SSM in T5-11B+SSM, and what does “- /50.1” in the TQA column mean?</p>
+        <details><summary>Show the answer</summary>
+          <p>SSM is an extra round of training in which the model fills in blanks where names and dates were. TQA has two test sets: the usual open-domain one on the left and the Wikipedia one on the right. T5 was measured only on the Wikipedia one, so the left slot shows “-”. (Step 7)</p>
+          <p>According to the RAG paper the Wikipedia questions are easier, which is why RAG-Seq. also scores 68.0 there instead of 56.8. <span class="mine">from the paper</span></p>
+        </details>
+      </li>
+      <li>
+        <p>What do the 42.7% and 7.1% under Factuality in the right table say? What does that column add up to?</p>
+        <details><summary>Show the answer</summary>
+          <p>Across 452 pairs, people judged RAG's question more factual 42.7% of the time, and BART's on its own only 7.1% of the time. The column adds up to 7.1 + 42.7 + 11.7 + 17.7 + 20.8 = 100.0. (Step 8)</p>
+          <p>Specificity means how closely a question is tied to its own answer. That column adds up to 93.0, not 100, and the paper does not say why.</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>An LLM writes one token at a time. The probability of a whole answer is the product of its tokens' probabilities, for example 0.34 × 0.46 × 0.71 = 0.111.</li>
+    <li>Knowledge comes from two places: the parameters and the prompt. T5-11B, with parameters alone, scores 34.5 on NQ, while RAG with documents scores 44.5 with 17.6 times fewer parameters.</li>
+    <li>A probability says what is common, not what is true. People judged RAG's questions more factual 6 times as often as BART's alone, and swapping the index brought in new knowledge without training.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-llm">LLM</dt><dd>Large language model: a model that reads text and writes what comes next, one token at a time. For example, the model that wrote Wednesday afternoon.</dd>
+    <dt id="w-token">Token</dt><dd>A small piece of text: a word, part of a word, or punctuation. The model reads and writes these. For example, crowded is two tokens, crowd and ed.</dd>
+    <dt id="w-vocabulary">Vocabulary</dt><dd>The model's fixed list of tokens, each with an ID number. For example, it contains Wednesday but not Wednesdayy.</dd>
+    <dt id="w-tokenizer">Tokenizer</dt><dd>The program that splits text into the vocabulary's tokens. For example, it splits Wednesdayy into Wednesday and y.</dd>
+    <dt id="w-probability">Probability</dt><dd>A number between 0 and 1 that gives the chance of something. The options always add up to 1. For example, a quiz in 5 of 20 lectures gives 5 ÷ 20 = 0.25.</dd>
+    <dt id="w-ntp">Next-token prediction</dt><dd>Looking at the text so far, giving every token a probability, picking one, adding it, and repeating. For example, Wednesday, then afternoon, then a full stop.</dd>
+    <dt id="w-parameters">Parameters (weights)</dt><dd>The numbers inside a model that produce the probability of every next token. For example, T5-11B has about 11 billion parameters.</dd>
+    <dt id="w-training">Training</dt><dd>Changing the parameters little by little so that the real next token in the text gets a higher probability. For example, Thursday after Office hours are on goes from 0.10 to 0.12.</dd>
+    <dt id="w-parametric">Parametric knowledge</dt><dd>Knowledge spread across the parameters. The model cannot name its source, and a new fact needs training again.</dd>
+    <dt id="w-cutoff">Knowledge cutoff</dt><dd>The date on which training stopped. Later events, and your private data, are not in the model. For example, with a March 2026 cutoff, an October 2026 announcement is not in the model.</dd>
+    <dt id="w-prompt">Prompt</dt><dd>The text you give the model right now: the question, instructions, and accompanying documents. For example, the queue log line that lifted Thursday from 0.21 to 0.81.</dd>
+    <dt id="w-context">Context window</dt><dd>The most tokens a model can read at once. Both the prompt and the answer count. For example, an 8,000-token window with a 7,500-token prompt leaves 500 for the answer.</dd>
+    <dt id="w-hallucination">Hallucination</dt><dd>A confident answer that is wrong or has no source. For example, Wednesday afternoon, written without seeing the log.</dd>
+    <dt id="w-decoding">Greedy decoding and sampling</dt><dd>Greedy decoding takes the highest-probability token at every step, and sampling chooses at random according to the probabilities. For example, greedy always writes Wednesday afternoon, while sampling starts with Thursday about 21 times in 100.</dd>
+    <dt id="w-ssm">Salient span masking (SSM)</dt><dd>An extra round of pretraining in which the model fills in blanked-out names and dates in Wikipedia sentences. For example, it lifted T5-11B's TriviaQA score from 50.1 to 60.5.</dd>
+    <dt id="w-bart">BART</dt><dd>A model that reads text and writes text, with about 400 million parameters. It is RAG's generator. For example, in the Jeopardy test BART on its own was judged more factual in only 7.1% of pairs.</dd>
+    <dt id="w-hotswap">Index hot-swapping</dt><dd>Replacing the document index without touching the parameters, so that the model's knowledge changes. For example, the 2018 index answered 68% of questions about 2018 leaders correctly, and the 2016 index only 4%.</dd>
+  </dl>
+
+  <div class="pager">
+    <span class="muted">First lesson</span>
+    <a href="02-retrieval-dense-en.html">Next: Lesson 2, Retrieval</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Papers: Lewis et al., 2020, “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”, and Roberts et al., 2020, “How Much Knowledge Can You Pack Into the Parameters of a Language Model?”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in these papers but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  /* ---------- next-token widget ---------- */
+  var START = "The least crowded office hour this week is";
+  var DAYS = [[" Wednesday", 0.34], [" Thursday", 0.21], [" Tuesday", 0.18], [" Friday", 0.15], [" Monday", 0.12]];
+  var TIME = [[" afternoon", 0.46], [" morning", 0.31], [".", 0.23]];
+  var END1 = [[".", 0.71], [" session", 0.29]];
+  var END2 = [[".", 1.0]];
+
+  function nextDist(chosen) {
+    var n = chosen.length;
+    if (n === 0) return DAYS;
+    var last = chosen[n - 1];
+    if (last === ".") return null;
+    if (n === 1) return TIME;
+    if (last === " session") return END2;
+    return END1;
+  }
+
+  var chosen = [];
+  var textEl = document.getElementById("ntp-text");
+  var barsEl = document.getElementById("ntp-bars");
+  var outEl = document.getElementById("ntp-out");
+  var greedyBtn = document.getElementById("ntp-greedy");
+
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+  function render() {
+    var html = esc(START);
+    chosen.forEach(function (t, i) {
+      html += '<span class="' + (i === chosen.length - 1 ? "new" : "") + '">' + esc(t) + "</span>";
+    });
+    textEl.innerHTML = html;
+    var d = nextDist(chosen);
+    if (!d) {
+      barsEl.innerHTML = "";
+      outEl.innerHTML = "The answer is complete: " + chosen.length + " steps, one token per step. At no step did the model look at the queue log, because it never had it.";
+      greedyBtn.disabled = true;
+      return;
+    }
+    greedyBtn.disabled = false;
+    var max = Math.max.apply(null, d.map(function (x) { return x[1]; }));
+    barsEl.innerHTML = d.map(function (x, i) {
+      return '<button type="button" class="lbl" data-i="' + i + '">' + esc(x[0]) + '</button>' +
+        '<div class="bar' + (x[1] === max ? " win" : "") + '"><span style="width:' + (x[1] * 100) + '%"></span></div>' +
+        '<span class="val">' + x[1].toFixed(2) + "</span>";
+    }).join("");
+    outEl.textContent = "Step " + (chosen.length + 1) + ": probabilities for the next token. Click one.";
+    barsEl.querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { chosen.push(d[Number(b.dataset.i)][0]); render(); });
+    });
+  }
+  greedyBtn.addEventListener("click", function () {
+    var d = nextDist(chosen);
+    if (!d) return;
+    var best = d[0];
+    d.forEach(function (x) { if (x[1] > best[1]) best = x; });
+    chosen.push(best[0]);
+    render();
+  });
+  document.getElementById("ntp-reset").addEventListener("click", function () { chosen = []; render(); });
+  render();
+
+  /* ---------- prompt widget ---------- */
+  var LOG = "Queue log, last 3 weeks: Tue 4pm: 14 waiting avg; Thu 9am: 3.";
+  var WITHOUT = [[" Wednesday", 0.34], [" Thursday", 0.21], [" Tuesday", 0.18], [" Friday", 0.15], [" Monday", 0.12]];
+  var WITH = [[" Thursday", 0.81], [" Tuesday", 0.06], [" Wednesday", 0.05], [" Friday", 0.04], [" Monday", 0.04]];
+  var box = document.getElementById("ctx-on");
+  var ctxText = document.getElementById("ctx-text");
+  var ctxBars = document.getElementById("ctx-bars");
+  function renderCtx() {
+    var on = box.checked;
+    ctxText.innerHTML = (on ? '<span class="new">' + esc(LOG) + "</span><br>" : "") + esc(START);
+    var d = on ? WITH : WITHOUT;
+    ctxBars.innerHTML = d.map(function (x, i) {
+      return '<span class="lbl">' + esc(x[0]) + '</span><div class="bar' + (i === 0 ? " win" : "") + '"><span style="width:' + (x[1] * 100) + '%"></span></div><span class="val">' + x[1].toFixed(2) + "</span>";
+    }).join("");
+  }
+  box.addEventListener("change", renderCtx);
+  renderCtx();
+})();
+</script>
+</body>
+</html>

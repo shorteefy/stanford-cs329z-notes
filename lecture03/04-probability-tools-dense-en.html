@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="A retriever score of 1.56 and an LLM probability of 0.81 cannot simply be combined, yet lesson 5's RAG formula builds the answer's probability from exactly these numbers. This lesson builds the tools for it, and at the end you read Stanford's RAG slides yourself.">
+<title>Lesson 4: Probability tools (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+  .mat { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; line-height: 1.25; border-left: 1.5px solid currentColor; border-right: 1.5px solid currentColor; border-radius: 5px; padding: 0 7px; margin: 0 2px; }
+  .matrow { display: inline-block; border-left: 1.5px solid currentColor; border-right: 1.5px solid currentColor; border-radius: 5px; padding: 0 7px; margin: 0 2px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 4 / 18 · <a href="04-probability-tools-en.html">Easy</a> · <b>Dense</b> · <a href="04-probability-tools-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 4 · Dense version</p>
+  <h1>Probability tools: getting ready to read the RAG formula</h1>
+  <p class="lede"><b>This lesson builds five tools: conditional probability, the chain rule, marginalization, softmax and loss. Lesson 5's RAG formula is made of exactly these five.</b> That formula combines two kinds of numbers. In <a href="01-how-llms-answer-dense-en.html#prompt">lesson 1</a>, after reading the queue log, the LLM gave <q>Thursday</q> a <button class="def" data-w="w-probability">probability</button> of 0.81. In <a href="03-vectors-dense-en.html#dot">lesson 3</a>, the retriever gave the course's long FAQ page a <button class="def" data-w="w-score">score</button> of 1.56.</p>
+  <p class="lede">These two numbers do not combine directly. 1.56 cannot be a probability, because a probability is never larger than 1. And 0.81 is not the chance of the whole answer, only of its first token. The formula in <a href="05-rag-model-dense-en.html#formula">lesson 5</a> combines them like this: <span class="math">p(y|x) ≈ ∑ p(z|x) · p(y|x, z)</span>, where <span class="math">p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</span>, and training makes <span class="math">∑ −log p(y|x)</span> small. In step 5 you will run this whole formula by hand.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 10 steps. The first 5 are the same as in the easy version, and steps 6 to 10 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#conditional">Conditional probability and the chain rule</a><span class="can">Work out a probability like p(full | Tuesday) from counts, and build the probability of a whole answer from its tokens' probabilities.</span></li>
+      <li><a href="#marginal">Marginalization: when you do not know which case is true</a><span class="can">Get a total probability from the weights of the cases, and read the ∑ in the RAG formula.</span></li>
+      <li><a href="#softmax">Softmax: weights from the retriever's scores</a><span class="can">Compute exp, turn scores into probabilities, and read p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x)).</span></li>
+      <li><a href="#loss">ln and loss: one number for the error</a><span class="can">Use the rule of ln to turn a product into a sum, and compute a loss as −ln p.</span></li>
+      <li><a href="#read">The whole RAG formula by hand</a><span class="can">Work out every part of the formula from your own numbers, and read Stanford's RAG slide.</span></li>
+          <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#probrules">The symbols in the slide's formula, and rules of probability</a><span class="can">Tie every symbol in the slide's formula to your own numbers, and show with numbers how close the ≈ is.</span></li>
+      <li><a href="#logrules">The remaining rules of exp and ln</a><span class="can">Check rules like ln(a ÷ b) and ln(a<sup>n</sup>) with numbers, and explain why the marginal log-likelihood does not split.</span></li>
+      <li><a href="#softmaxfull">Softmax in full: the normalizer, column vectors and top-k</a><span class="can">Read ∝, the bold 𝐝 and 𝐪, ⊤ and top-k(p(·|x)), and explain why MIPS is enough.</span></li>
+      <li><a href="#training">Negative marginal log-likelihood, and the loss's rates</a><span class="can">Compute the loss over many examples, and work out the loss's rates for the retriever and the generator by hand.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line of Stanford's three RAG slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="01-how-llms-answer-dense-en.html#next-token">Lesson 1</a> (probability, token, next-token prediction, training) and <a href="03-vectors-dense-en.html#dot">Lesson 3</a> (vector, dot product, ∑). From step 6 on, a few words come from lesson 5, such as BERT, MIPS and η and θ, and clicking them opens their meaning. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="conditional">
+  <h3><span class="cn">1</span>Conditional probability and the chain rule: a chance that depends on what you know</h3>
+
+  <h4 class="sub" id="given">What comes after the “|” is already known</h4>
+
+  <p><b>A conditional probability is the chance of something when something else is already known.</b> It is written p(A | B) and read “the probability of A, given B”. Every probability in the RAG formula has this vertical bar “|” inside it, so start by seeing what it means with numbers.</p>
+
+  <p>Over the last 20 weeks there were 40 office hour sessions, 20 on Tuesday and 20 on Thursday. Call a session “full” if more than 10 students were waiting. <span class="mine">my numbers</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th class="numh">Full</th><th class="numh">Empty</th><th class="numh">Total</th></tr></thead>
+    <tbody>
+      <tr><td><b>Tuesday</b></td><td class="num">16</td><td class="num">4</td><td class="num">20</td></tr>
+      <tr><td><b>Thursday</b></td><td class="num">2</td><td class="num">18</td><td class="num">20</td></tr>
+      <tr class="total"><td>Total</td><td class="num">18</td><td class="num">22</td><td class="num">40</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>If you do not know the day, count all 40 sessions. 18 of them were full, so p(full) = 18 ÷ 40 = 0.45. Now suppose you know today is Tuesday. Then you count only the Tuesday row, where 16 of 20 were full, so p(full | Tuesday) = 16 ÷ 20 = 0.80. If you know it is Thursday, p(full | Thursday) = 2 ÷ 20 = 0.10. <b>As soon as the day is known, the chance moves from 0.45 to 0.80 or to 0.10.</b></p>
+
+  <div class="formula">p(A | B) = <span class="frac"><span>cases with both A and B</span><span>cases with B</span></span></div>
+  <p>For Tuesday, the top is 16, the full Tuesdays, and the bottom is 20, all Tuesdays.</p>
+
+  <p>Next-token prediction from <a href="01-how-llms-answer-dense-en.html#prompt">lesson 1</a> is also a conditional probability. There the prompt was known, and <q>Thursday</q> had probability 0.21. When the queue log was added to the prompt, what was known changed, and the same probability became 0.81.</p>
+
+  <p>You can now read both pieces of the formula. p(z|x) is the probability of passage z, given the question x. p(y|x, z) is the probability of the answer y, given both the question x and the passage z. Read the comma after the “|” as “and”.</p>
+
+  <h4 class="sub" id="chain">The probability of a whole answer: the chain rule</h4>
+
+  <p>An LLM writes one token at a time, and each token has its own probability. But p(y|x, z) in the formula is the probability of the whole answer y, such as <q>Thursday morning.</q> The rule for turning three token probabilities into one probability is already visible in the table above.</p>
+
+  <p>In the table, Tuesday and full happened together 16 times out of 40, which is 0.40. The same number also comes out in two steps. First take the chance of Tuesday: p(Tuesday) = 20 ÷ 40 = 0.5. Then take the chance of full, given Tuesday: p(full | Tuesday) = 0.8. Their product is 0.5 × 0.8 = 0.40.</p>
+
+  <div class="formula">p(A and B) = p(A) × p(B | A)</div>
+  <p><b>The probability of two things together is the probability of the first, times the probability of the second given the first.</b> This rule is the <button class="def" data-w="w-chain">chain rule</button>. Lesson 12 has a different rule with the same name, about rates, so call this one the chain rule for probabilities.</p>
+
+  <p>For the tokens of an answer, this rule runs again and again. The first token is <q>Thursday</q>, with probability 0.21. Once Thursday is written, <q>morning</q> has probability 0.31, and then the full stop has 0.71. The probability of the whole answer is the product of the three. For the two answers from the widget in <a href="01-how-llms-answer-dense-en.html#next-token">lesson 1</a>, it looks like this:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Answer</th><th>Probability of each token</th><th class="numh">Probability of the whole answer</th></tr></thead>
+    <tbody>
+      <tr><td><q>Thursday morning.</q></td><td>0.21 × 0.31 × 0.71</td><td class="num">0.046</td></tr>
+      <tr><td><q>Wednesday afternoon.</q></td><td>0.34 × 0.46 × 0.71</td><td class="num">0.111</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>For an answer of n tokens, the same product is written with <button class="def" data-w="w-prod">∏</button>. ∏ means multiply everything over the range written below it, just as ∑ means add everything. y<sub><i>i</i></sub> is the i-th token of the answer, and after the “|” in its probability come the question x and all the tokens before it:</p>
+  <div class="formula">p(y | x) = <span class="sum"><span class="op">∏</span><span class="lim"><i>i</i> = 1 … <i>n</i></span></span> p(y<sub><i>i</i></sub> | x, y<sub>1</sub> … y<sub><i>i</i>−1</sub>)</div>
+  <p>In our answer n = 3: y<sub>1</sub> = Thursday, y<sub>2</sub> = morning and y<sub>3</sub> = the full stop. In the probability of y<sub>2</sub>, the question and Thursday come after the “|”. The whole product is 0.21 × 0.31 × 0.71 = 0.046.</p>
+
+  <p>This product has a problem. Every probability is below 1, so the result shrinks with every multiplication. With 20 tokens of probability 0.5 each, the whole answer gets 0.5<sup>20</sup> = 0.00000095. The ln in step 4 solves exactly this problem.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>An answer has 4 tokens with probabilities 0.9, 0.8, 0.5 and 0.9. What is the probability of the whole answer?</p>
+    <details><summary>Show the answer</summary>
+      <p>0.9 × 0.8 = 0.72, then 0.72 × 0.5 = 0.36, and then 0.36 × 0.9 = <b>0.324</b>. The other three tokens are at 0.8 or above, yet the single 0.5 token halved the probability of the whole answer.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="marginal">
+  <h3><span class="cn">2</span>Marginalization: when you do not know which case is true</h3>
+
+  <p><b>Marginalization is the way to get a total probability when you do not know which case is true.</b> Multiply each case's probability by the chance within that case, then add up the products. We will call a case's probability its weight.</p>
+
+  <p>This is exactly the situation in RAG. The retriever brings several passages, and the system does not know in advance which passage is right. With the queue log, the LLM will give <q>Thursday 9am</q> a high probability, and with the old forum post a low one. The system has to turn these into a single probability.</p>
+
+  <p>First look at the same situation with office hours, where the numbers are small. A student goes on Tuesday half the weeks and on Thursday the other half, so p(Tuesday) = 0.5 and p(Thursday) = 0.5. The chance of a full session on each day is known from step 1: 0.8 and 0.1. You just do not know which day the student will go today.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Case z</th><th class="numh">Weight p(z)</th><th class="numh">p(full | z)</th><th class="numh">Product</th></tr></thead>
+    <tbody>
+      <tr><td>Tuesday</td><td class="num">0.5</td><td class="num">0.8</td><td class="num">0.40</td></tr>
+      <tr class="hi"><td>Thursday</td><td class="num">0.5</td><td class="num">0.1</td><td class="num">?</td></tr>
+      <tr class="total"><td>Sum = p(full)</td><td></td><td></td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Work out the Thursday row</p>
+    <p>What is the Thursday product, and what is the total p(full)? If the student goes on Thursday 90% of the time, what is the total chance?</p>
+    <details><summary>Show the answer</summary>
+      <p>Thursday: 0.5 × 0.1 = 0.05. The sum is 0.40 + 0.05 = <b>0.45</b>, the same number step 1 got by counting directly, 18 ÷ 40.</p>
+      <p>With Thursday 90% of the time: 0.1 × 0.8 + 0.9 × 0.1 = 0.08 + 0.09 = <b>0.17</b>. The chance on each day stayed the same, only the weights changed, and the total went from 0.45 to 0.17.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">This method is called <button class="def" data-w="w-marginal">marginalization</button>. It is correct only when the cases do not overlap and their weights add up to 1. Both hold here, because on a given day the student goes either on Tuesday or on Thursday, and 0.5 + 0.5 = 1.</p>
+  <div class="formula">p(A) = <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i></span></span> p(z) × p(A | z)</div>
+  <p>z is a case, here Tuesday or Thursday. p(z) is its weight, 0.5 and 0.5, and p(A | z) is the chance of full in that case, 0.8 and 0.1. <button class="def" data-w="w-sigma">∑</button> adds over all the cases, here 0.40 + 0.05, and the result is p(A) = 0.45.</p>
+
+  <p><b>The RAG formula in <a href="05-rag-model-dense-en.html#formula">lesson 5</a> is exactly this.</b> There a case z is a passage, and its weight is the retriever's confidence p(z|x). The probability of the answer with each passage is p(y|x, z), the product of token probabilities from step 1.</p>
+
+  <p>The RAG formula has <button class="def" data-w="w-approx">≈</button> instead of “=”, which means “approximately equal”. RAG does not add up every passage, only the retriever's <button class="def" data-w="w-topk">top-K</button> passages, the K passages with the highest scores. The other passages have very small weights, so the sum stays nearly the same.</p>
+
+  <p>One condition is still open. Every weight must lie between 0 and 1, and all the weights must add up to 1. The retriever's scores are not like that, so step 3 turns them into weights.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="softmax">
+  <h3><span class="cn">3</span>Softmax: weights from the retriever's scores</h3>
+
+  <p><b>Softmax turns a list of scores into a list of probabilities.</b> It has two steps: take the exp of each score, then divide each exp by the sum of all the exps. First see why both steps are needed.</p>
+
+  <p>In <a href="03-vectors-dense-en.html#dot">lesson 3</a> the question <q>when can I get help from a TA</q> had a vector. The retriever took the <button class="def" data-w="w-dot">dot product</button> of that vector with each passage's vector, multiplying the numbers in the same positions and adding the results. For the office hours page that was 0.8 × 0.9 + 0.2 × 0.1 = 0.74. The other scores were: syllabus 0.26, project page 0.32 and the course's long FAQ page 1.56.</p>
+
+  <p>These are not probabilities, because 1.56 is larger than 1, and the four add up to 2.88, not 1. Dividing each score by the sum of the four does not always work either, because a dot product can also be negative. That would give a negative share, and a probability is never negative.</p>
+
+  <p>So softmax first turns every score into a positive number, and it uses <button class="def" data-w="w-exp">exp</button> for that. exp(s) = e<sup>s</sup>, where e is a fixed number, about 2.718. For example, exp(1) = 2.718 and exp(2) = e × e = 7.389. exp(0) = 1, because any number raised to the power 0 gives 1.</p>
+
+  <p>For a negative score, exp is still positive: exp(−1) = 1 ÷ e = 0.368. Whatever the score, exp is always above 0, and a larger score gives a much larger exp. One rule of exp will be useful later: adding 1 to a score multiplies its exp by e, because e<sup>a+1</sup> = e<sup>a</sup> × e. Check: exp(2) = exp(1) × e = 2.7183 × 2.7183 = 7.389.</p>
+
+  <p>Now see the two steps of softmax on the scores 2.0, 1.0 and 0.1: <span class="mine">my scores</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Score s</th><th class="numh">exp(s)</th><th>Arithmetic</th><th class="numh">Probability</th></tr></thead>
+    <tbody>
+      <tr><td>2.0</td><td class="num">7.389</td><td>7.389 ÷ 11.212</td><td class="num">0.659</td></tr>
+      <tr><td>1.0</td><td class="num">2.718</td><td>2.718 ÷ 11.212</td><td class="num">0.242</td></tr>
+      <tr><td>0.1</td><td class="num">1.105</td><td>1.105 ÷ 11.212</td><td class="num">0.099</td></tr>
+      <tr class="total"><td>Sum</td><td class="num">11.212</td><td></td><td class="num">1.000</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The three exps add up to 11.212, and dividing each exp by that gives 0.659, 0.242 and 0.099. All three lie between 0 and 1 and add up to 1, so they can serve as weights. This whole method is called <button class="def" data-w="w-softmax">softmax</button>:</p>
+  <div class="formula">p<sub><i>i</i></sub> = <span class="frac"><span>exp(s<sub><i>i</i></sub>)</span><span>∑<sub><i>j</i></sub> exp(s<sub><i>j</i></sub>)</span></span></div>
+  <p>On top is the exp of score s<sub>i</sub>, such as exp(2.0) = 7.389 in the first row. Below is the sum of the exps of all the scores, 11.212. So p<sub>1</sub> = 7.389 ÷ 11.212 = 0.659.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Add 1 to every score, giving 3.0, 2.0 and 1.1. Will the probabilities go up, go down, or stay the same?</p>
+    <details><summary>Show the answer</summary>
+      <p>They stay the same: 0.659, 0.242 and 0.099. Adding 1 to a score multiplies each exp by e, as when exp(2.0) = 7.389 becomes exp(3.0) = 20.09. The top and the bottom are both multiplied by e, and the division cancels it. So softmax looks only at the differences between scores.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">The formula in <a href="05-rag-model-dense-en.html#parts">lesson 5</a> writes softmax in a short form:</p>
+  <div class="formula">p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</div>
+  <p><button class="def" data-w="w-propto">∝</button> means “is proportional to”. You first take the exp for each passage, then divide them all by one and the same number, chosen so that they add up to 1. That number is the sum of all the exps, so the softmax division is hidden inside ∝.</p>
+  <p><button class="def" data-w="w-transpose">d(z)<sup>⊤</sup>q(x)</button> is the dot product of the passage's vector and the question's vector. d(z) is the vector of passage z, and q(x) is the vector of question x. The ⊤ is only a way of writing it, and the arithmetic is the same as in lesson 3. For example, the office hours page [0.9, 0.1] and the question [0.8, 0.2] give 0.74.</p>
+
+  <p>Now the 1.56 from the start of the lesson can become a weight too. Softmax over the four scores from lesson 3 gives these weights: FAQ page 0.50, office hours page 0.22, project page 0.14 and syllabus 0.14. <span class="mine">my arithmetic</span> Softmax does not change the order, because a larger score always gives a larger exp. So the FAQ page is still on top, and softmax does not fix the long-vector problem from lesson 3.</p>
+
+  <div class="widget" id="smw">
+    <h4>Run softmax yourself</h4>
+    <p class="hint">Change the scores of the three passages. The probabilities always add up to 1, and even with a negative score every probability stays above 0.</p>
+    <div class="ctl">
+      <label for="s1">Score of passage A</label><input id="s1" type="range" min="-4" max="4" step="0.1" value="2"><output id="so1">2.0</output>
+      <label for="s2">Score of passage B</label><input id="s2" type="range" min="-4" max="4" step="0.1" value="1"><output id="so2">1.0</output>
+      <label for="s3">Score of passage C</label><input id="s3" type="range" min="-4" max="4" step="0.1" value="0.1"><output id="so3">0.1</output>
+    </div>
+    <div class="btns">
+      <button type="button" data-s="2,1,0.1">2, 1, 0.1</button>
+      <button type="button" data-s="3,2,1.1">Every score + 1 (3, 2, 1.1)</button>
+      <button type="button" data-s="1,0,-1">A negative score too (1, 0, −1)</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="numh">Score</th><th class="numh">exp(score)</th><th class="numh">Probability</th></tr></thead>
+      <tbody id="smw-body"></tbody>
+    </table></div>
+    <div class="bars" id="smw-bars"></div>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="loss">
+  <h3><span class="cn">4</span>ln and loss: one number for the error</h3>
+
+  <p><b>A loss is a number that says how far the model is from the right answer, and training makes this number small.</b> In RAG the loss is built from the probability of the right answer, using ln. ln also solves the tiny-number problem from step 1, so look at ln first.</p>
+
+  <p>The <button class="def" data-w="w-ln">natural log</button>, ln x, is the power you must raise e to in order to get x. So ln undoes exp: ln(e<sup>x</sup>) = x. For example, e<sup>1</sup> = 2.718, so ln 2.718 = 1. And e<sup>0</sup> = 1, so ln 1 = 0.</p>
+
+  <p>The ln of a number below 1 is negative, because getting such a number needs a negative power of e. For example, ln 0.1 = −2.303, because e<sup>−2.303</sup> = 1 ÷ e<sup>2.303</sup> = 1 ÷ 10 = 0.1.</p>
+
+  <p>The most useful rule of ln is this: <b>ln(a × b) = ln a + ln b, so the ln of a product is the sum of the two lns.</b> It comes from the rule of exp, because powers add when you multiply: e<sup>2</sup> × e<sup>3</sup> = e<sup>5</sup>. In numbers, 7.389 × 20.09 = 148.4, and e<sup>5</sup> is also 148.4. ln gives exactly these powers, so ln 148.4 = 5 = 2 + 3 = ln 7.389 + ln 20.09.</p>
+
+  <p>For <q>Thursday morning.</q>, this rule turns the product of three probabilities into the sum of three lns:</p>
+  <div class="formula">ln(0.21 × 0.31 × 0.71) = ln 0.21 + ln 0.31 + ln 0.71 = (−1.561) + (−1.171) + (−0.342) = −3.074</div>
+  <p>Check: e<sup>−3.074</sup> = 0.046, the same product as before. For an answer of 20 tokens, instead of a tiny number like 0.5<sup>20</sup> = 0.00000095, you add ln 0.5 twenty times: 20 × (−0.693) = −13.86. <span class="mine">my arithmetic</span></p>
+
+  <p>Now build the number for the error: <button class="def" data-w="w-loss">loss</button> = −ln p, where p is the probability the model gave the right answer. The minus sign in front makes the loss positive, because every probability below 1 has a negative ln. The table below shows how the loss grows as p falls:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">Probability of the right answer</th><th class="numh">Loss = −ln p</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td class="num">0</td><td>Fully sure and right. The loss cannot go lower.</td></tr>
+      <tr><td class="num">0.9</td><td class="num">0.105</td><td>Good</td></tr>
+      <tr><td class="num">0.5</td><td class="num">0.693</td><td>Half sure</td></tr>
+      <tr><td class="num">0.1</td><td class="num">2.303</td><td>Mostly wrong</td></tr>
+      <tr><td class="num">0.01</td><td class="num">4.605</td><td>Very wrong</td></tr>
+    </tbody>
+  </table></div>
+  <p>At p = 0.9 the loss is 0.105, but at p = 0.1 it is 2.303, more than 20 times as much.</p>
+
+  <p>The probability the model gave the right answer is called the <button class="def" data-w="w-likelihood">likelihood</button>. The loss is minus the ln of it, so this loss is called the <button class="def" data-w="w-nll">negative log-likelihood</button>. If <q>Thursday morning.</q> is the right answer, its loss is −(−3.074) = 3.074.</p>
+
+  <p>In <a href="01-how-llms-answer-dense-en.html#parameters">lesson 1</a>, training changed the parameters a little. As a result, the probability of <q>Thursday</q> after <q>Office hours are on</q> went from 0.10 to 0.12. The loss fell from −ln 0.10 = 2.303 to −ln 0.12 = 2.120, a drop of 2.303 − 2.120 = 0.183.</p>
+
+  <p>Training data has many examples. Example j has a question x<sub>j</sub> and its right answer y<sub>j</sub>, and the total loss is the sum of the losses over all examples:</p>
+  <div class="formula">total loss = <span class="sum"><span class="op">∑</span><span class="lim"><i>j</i></span></span> − log p(y<sub><i>j</i></sub> | x<sub><i>j</i></sub>)</div>
+  <p>Stanford's slide and the formula in lesson 5 write log, and they mean this ln.</p>
+
+  <p>The <button class="def" data-w="w-gradient">gradient</button> tells training which way, and by how much, to change each parameter so that the total loss goes down. In the Thursday example, training changed the parameters in the direction that raised the probability from 0.10 to 0.12 and lowered the loss by 0.183. How the gradient is worked out from numbers comes in lesson 12.</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="read">
+  <h3><span class="cn">5</span>The whole RAG formula by hand</h3>
+
+  <p><b>Now the tools work together: softmax gives each passage a weight, marginalization gives the answer's total probability, and −ln gives its loss.</b> Take the question from the start again: <q>Which office hour is least crowded?</q> The retriever brings two passages: the queue log and the old forum post. Their dot product scores are 1.0 and 0.0.</p>
+
+  <p>The LLM gives the right answer <q>Thursday 9am</q> a probability of 0.9 with the queue log, and 0.1 with the forum post. <span class="mine">my numbers</span> The whole calculation takes three steps:</p>
+  <ol class="plain">
+    <li>Softmax (step 3): e<sup>1.0</sup> = 2.718 and e<sup>0</sup> = 1, which add up to 3.718. The queue log's weight is 2.718 ÷ 3.718 = 0.731, and the forum post's is 1 ÷ 3.718 = 0.269.</li>
+    <li>Marginalization (step 2): 0.731 × 0.9 + 0.269 × 0.1 = 0.658 + 0.027 = 0.685.</li>
+    <li>Loss (step 4): −ln 0.685 = 0.378. Check: e<sup>−0.378</sup> = 0.685.</li>
+  </ol>
+  <p><b>So the system is 0.685 sure that the answer is Thursday 9am, and the loss on this question is 0.378.</b> If the retriever gives the queue log a higher score, its weight rises above 0.731, 0.685 rises too, and the loss falls. The formula holds the same three steps:</p>
+
+  <div class="formula">p(y|x) ≈ <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i> ∈ top-<i>K</i></span></span> p(z|x) · p(y|x, z),&nbsp;&nbsp; p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</div>
+  <dl class="sym">
+    <dt>d(z)<sup>⊤</sup>q(x)</dt><dd>The dot product of the passage's and the question's vectors, here 1.0 and 0.0.</dd>
+    <dt>p(z|x)</dt><dd>The softmax weight, here 0.731 and 0.269.</dd>
+    <dt>p(y|x, z)</dt><dd>The probability of the whole answer with that passage, here 0.9 and 0.1.</dd>
+    <dt>∑ and ≈</dt><dd>The weighted sum over K = 2 passages, here 0.685.</dd>
+    <dt>−log p(y|x)</dt><dd>The loss for this question, here 0.378.</dd>
+  </dl>
+
+  <figure class="slide">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG, with the retriever, the generator and the RAG formula" loading="lazy"></a>
+    <figcaption>Stanford's slide: Deep Dive into RAG. At the top are the retriever p(z|x) and the <button class="def" data-w="w-generator">generator</button> p(y|x, z), the LLM that writes the answer. In the middle is this formula. The red note says to weight each passage's answer by how much the retriever trusts that passage. The RAG-Sequence and RAG-Token lines at the bottom come in lesson 5. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Suppose the retriever trusts the wrong passage: the queue log gets score 0.0, and the forum post 1.0. The LLM's numbers stay at 0.9 and 0.1. What are the total probability of <q>Thursday 9am</q> and the loss now?</p>
+    <details><summary>Show the answer</summary>
+      <p>The weights flip: the queue log gets 0.269 and the forum post 0.731. Total probability = 0.269 × 0.9 + 0.731 × 0.1 = 0.242 + 0.073 = <b>0.315</b>, and loss = −ln 0.315 = <b>1.155</b>.</p>
+      <p>The LLM changed nothing, yet the probability fell from 0.685 to 0.315. Wrong weights drag the whole answer down, and in <a href="05-rag-model-dense-en.html#training">lesson 5</a> training fixes exactly this mistake.</p>
+    </details>
+  </div>
+
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The 5 steps above are the same as in the easy version. The 5 steps below take you to the level of the Stanford slides: first every symbol in the slide's formula and the remaining rules of probability, then the remaining rules of exp and ln. After that comes softmax in full, then the training loss and its rates in numbers, and finally you read the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="probrules">
+  <h3><span class="cn">6</span>Every symbol in the slide's formula, and the remaining rules of probability</h3>
+
+  <p>Up to step 5 the formula ran on one question and two passages. Stanford's slide writes the same formula in symbols, so that it applies to every question and every passage:</p>
+  <div class="formula">p(y|x) ≈ <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i> ∈ top−<i>K</i></span></span> p(z|x) p(y|x, z)</div>
+  <p>The table below ties each symbol on the slide to a number from our example:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>Meaning</th><th>In our example</th></tr></thead>
+    <tbody>
+      <tr><td>x</td><td>The question, which the slide calls the query</td><td>Which office hour is least crowded?</td></tr>
+      <tr><td>y</td><td>The answer</td><td>Thursday 9am</td></tr>
+      <tr><td>z</td><td>A passage</td><td>The queue log or the forum post</td></tr>
+      <tr><td>p(z|x)</td><td>Retriever: the weight of passage z, given the question</td><td>0.731 and 0.269</td></tr>
+      <tr><td>p(y|x, z)</td><td>Generator: the probability of the answer, given the question and the passage</td><td>0.9 and 0.1</td></tr>
+      <tr><td>p(z|x) p(y|x, z)</td><td>The product of the two. In maths, writing two things side by side means multiplying them.</td><td>0.658 and 0.027</td></tr>
+      <tr><td><i>z</i> ∈ top−<i>K</i></td><td>The range under the ∑: every z among the retriever's top-K passages. ∈ means “belongs to”.</td><td>K = 2: the queue log and the forum post</td></tr>
+      <tr><td>≈ and p(y|x)</td><td>The answer's total probability, only approximately equal because the other passages are left out</td><td>0.685</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4 class="sub" id="genprod">The generator's product, in the paper's symbols</h4>
+
+  <p>The slide says the generator writes the answer <q>one token at a time</q>. That is the chain rule from step 1, and the RAG paper writes it out in full: <span class="mine">from the paper</span></p>
+  <div class="formula">p<sub>θ</sub>(y | x, z) = <span class="sum"><span class="op">∏</span><span class="lim"><i>i</i> = 1 … <i>N</i></span></span> p<sub>θ</sub>(y<sub><i>i</i></sub> | x, z, y<sub>1:<i>i</i>−1</sub>)</div>
+  <p>Here N is the number of tokens in the answer, and y<sub>1:i−1</sub> means token 1 through token i−1, all the tokens before token i. In <q>Thursday morning.</q>, for i = 2 this is y<sub>1:1</sub> = Thursday, and for i = 1 there is no token before. The paper writes the generator as p<sub>θ</sub> and the retriever as p<sub>η</sub>, and <button class="def" data-w="w-eta-theta">η and θ</button> come in lesson 5.</p>
+
+  <p>The chain rule works the same way for three or more things: p(A and B and C) = p(A) × p(B | A) × p(C | A and B). In the probability of each new thing, everything before it comes after the “|”. The generator's product is exactly this, except that the question x and the passage z are also known for every token.</p>
+
+  <h4 class="sub" id="reverse">p(A|B) and p(B|A) are different</h4>
+
+  <p>Swap the two sides of the “|” and the probability changes. In the table from step 1, p(full | Tuesday) = 16 ÷ 20 = 0.80. But p(Tuesday | full) counts the full sessions: 16 of the 18 full sessions were on Tuesday, so it is 16 ÷ 18 = 0.89.</p>
+  <p>The top number, 16, is the same in both, but the bottom is different. So when you read a formula, check what comes after the “|”. p(y|x, z) is the probability of the answer when the passage is known, not the probability of the passage when the answer is known.</p>
+
+  <h4 class="sub" id="approx">How close the ≈ is</h4>
+
+  <p>Marginalization requires adding up all the cases. RAG adds only the top-K passages, and softmax also runs only over those K scores. To see the effect, add a third passage to the corpus: the Homework 1 announcement, with score −1.0, with which the LLM gives Thursday 9am a probability of 0.1. <span class="mine">my numbers</span></p>
+
+  <p>The three passages have exps 2.718, 1 and 0.368, which add up to 4.086. So the softmax weights are 0.665, 0.245 and 0.090. The full sum is then 0.665 × 0.9 + 0.245 × 0.1 + 0.090 × 0.1 = 0.599 + 0.024 + 0.009 = 0.632, while over the top 2, in step 5, the sum was 0.685.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Homework 1 announcement</th><th class="numh">Sum over all three passages</th><th class="numh">Sum over the top 2</th></tr></thead>
+    <tbody>
+      <tr><td>Score −1.0<span class="sub">weight 0.090</span></td><td class="num">0.632</td><td class="num">0.685</td></tr>
+      <tr class="hi"><td>Score −3.0<span class="sub">weight 0.013</span></td><td class="num">0.677</td><td class="num">0.685</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>If the Homework score is −3.0, its weight is only 0.013, and the gap between the two sums shrinks from 0.053 to 0.008. <b>So the smaller the weights of the passages left out, the closer the ≈.</b> The top-2 sum is a little larger, because softmax shares the left-out passage's weight between the other two, and with that passage the answer's probability was only 0.1.</p>
+
+  <p>The paper says the retriever returns a distribution truncated to the top K, that is, a list of probabilities for only K passages, adding up to 1. During training K is 5 or 10. <span class="mine">from the paper</span> Out of about 21 million Wikipedia passages only 5 or 10 are added up, so the ≈ is close only when all the other passages have very small weights.</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="logrules">
+  <h3><span class="cn">7</span>The remaining rules of exp and ln</h3>
+
+  <p>Steps 3 and 4 gave a few rules of exp and ln. The slides and the later lessons need a few more, and all of them follow from the fact that ln undoes exp. Each rule below comes with a check in numbers:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Rule</th><th>Check</th></tr></thead>
+    <tbody>
+      <tr><td>1. e<sup>a+b</sup> = e<sup>a</sup> × e<sup>b</sup></td><td>e<sup>1.5</sup> = e<sup>1</sup> × e<sup>0.5</sup> = 2.718 × 1.649 = 4.482</td></tr>
+      <tr><td>2. e<sup>−a</sup> = 1 ÷ e<sup>a</sup></td><td>e<sup>−1</sup> = 1 ÷ 2.718 = 0.368</td></tr>
+      <tr><td>3. ln(e<sup>x</sup>) = x, and e<sup>ln x</sup> = x</td><td>ln 7.389 = 2, and e<sup>ln 0.685</sup> = e<sup>−0.378</sup> = 0.685</td></tr>
+      <tr><td>4. ln(a × b) = ln a + ln b</td><td>ln(0.21 × 0.31) = (−1.561) + (−1.171) = −2.732</td></tr>
+      <tr class="hi"><td>5. ln(a ÷ b) = ln a − ln b</td><td>ln(7.3891 ÷ 2.7183) = 2 − 1 = 1, and indeed 7.3891 ÷ 2.7183 = 2.7183, which is e</td></tr>
+      <tr><td>6. ln(a<sup>n</sup>) = n × ln a</td><td>ln(0.5<sup>20</sup>) = 20 × (−0.693) = −13.86</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Rule 5 follows from rule 4. a ÷ b means a × (1 ÷ b), and by rules 2 and 3, ln(1 ÷ b) = −ln b, because e<sup>−ln b</sup> = 1 ÷ e<sup>ln b</sup> = 1 ÷ b. Rule 6 is rule 4 applied n times, as with the 20-token answer.</p>
+
+  <h4 class="sub" id="logshare">The ln of a softmax share</h4>
+
+  <p>Rules 3 and 5 together make the ln of a softmax share simple. The share is e<sup>s</sup> ÷ Z, where Z is the sum of all the exps, so ln(e<sup>s</sup> ÷ Z) = s − ln Z. In step 5 the queue log's score was 1.0 and Z = 3.718. So −ln 0.731 = −1.0 + ln 3.718 = −1.0 + 1.313 = 0.313. The contrastive loss in <a href="12-dpr-dense-en.html#whyshare">lesson 12</a> starts from exactly this form.</p>
+
+  <h4 class="sub" id="logsum">The ln of a sum does not split</h4>
+
+  <p><b>There is no such rule for ln(a + b), and in general ln(a + b) is not equal to ln a + ln b.</b> Take the sum from step 5: −ln(0.658 + 0.027) = −ln 0.685 = 0.378. Taking −ln of each part separately and adding gives 0.419 + 3.612 = 4.031, a completely different number.</p>
+
+  <p>That is why the slide calls the loss the negative <i>marginal</i> log-likelihood: the marginalization over passages comes first, and the log is applied to the whole sum. The loss cannot be split passage by passage. It means a single loss holds both the retriever's weights and the generator's probabilities, which step 9 shows.</p>
+
+  <h4 class="sub" id="logbase">log10 and ln, and −ln 0</h4>
+
+  <p>The slide just says log. In machine learning papers this almost always means the natural log, ln. At school, log often meant log10, the power you raise 10 to: log10 0.1 = −1, while ln 0.1 = −2.303.</p>
+
+  <p>The two differ by a fixed factor: the ln of any number is 2.303 times its log10, because ln 10 = 2.303. For example, the loss from step 5 would be 0.378 ÷ 2.303 = 0.164 with log10. Every example's loss would be divided by the same number, so which parameters are best does not change.</p>
+
+  <p>The other limit is at 0. e<sup>x</sup> is never 0, so ln 0 has no value. The closer p gets to 0, the larger −ln p grows: −ln 0.001 = 6.908, and −ln 0.000001 = 13.816. A probability that comes out of softmax is never exactly 0, because exp is always above 0, so such a loss can be very large but never infinite.</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="softmaxfull">
+  <h3><span class="cn">8</span>Softmax in full: the normalizer, column vectors and top-k</h3>
+
+  <p>The slide gives the retriever's formula as:</p>
+  <div class="formula">p(z|x) ∝ exp(𝐝(z)<sup>⊤</sup> 𝐪(x)),&nbsp;&nbsp; 𝐝(z) = BERT<sub>d</sub>(z),&nbsp;&nbsp; 𝐪(x) = BERT<sub>q</sub>(x)</div>
+  <p>This step covers every part of it: first the remaining properties of softmax, then the division hidden behind ∝, then the bold 𝐝 and 𝐪 and the ⊤, and finally top-k.</p>
+
+  <h4 class="sub" id="negscale">Negative scores and scale</h4>
+
+  <p>A dot product can be negative, and softmax handles that too. The scores 1, 0 and −1 add up to 0, and you cannot divide by 0. But their exps 2.718, 1 and 0.368 add up to 4.086, giving probabilities 0.665, 0.245 and 0.090.</p>
+
+  <p>In step 3, adding 1 to every score changed nothing. That holds for any number c, because by rule 1, e<sup>s+c</sup> = e<sup>s</sup> × e<sup>c</sup>, and e<sup>c</sup> cancels between the top and the bottom. Multiplying the scores does make a difference. Multiply 2.0, 1.0 and 0.1 by 2, and at 4.0, 2.0 and 0.2 the probabilities change from 0.659, 0.242, 0.099 to 0.864, 0.117 and 0.019. The gaps doubled, so the top score's share grew.</p>
+
+  <p>In a dot product, this scale comes from the length of the vectors. In lesson 3 the FAQ page's vector was [1.6, 1.4], twice [0.8, 0.7]. So its score was doubled too: 1.56 = 2 × 0.78.</p>
+
+  <h4 class="sub" id="normalizer">The division behind ∝: the normalizer Z</h4>
+
+  <p>a ∝ b means a = c × b, where c is the same number for every passage. In softmax c = 1 ÷ Z, where Z is the sum of all the exps. This Z is called the <b class="term">normalizer</b>, because it is what makes the probabilities add up to 1.</p>
+
+  <p>In step 5, Z = 2.718 + 1 = 3.718, so c = 1 ÷ 3.718 = 0.269. The queue log's weight is 2.718 × 0.269 = 0.731, and the forum post's is 1 × 0.269 = 0.269. Z depends on the question but not on any one passage, so the ratios between passages show without it, and the formula hides it inside ∝. In RAG this sum runs over the top-K passages only, as step 6 showed.</p>
+
+  <h4 class="sub" id="colvec">Bold 𝐝 and 𝐪, column vectors and ⊤</h4>
+
+  <p>On the slide, 𝐝 and 𝐪 are bold. In maths a bold letter means a vector, not a single number. 𝐝(z) is the vector of passage z, and 𝐪(x) is the vector of question x.</p>
+
+  <p>Maths usually writes a vector standing up, with its numbers one above the other, and calls it a <b class="term">column vector</b>. ⊤ means transpose: laying the standing vector down, turning the column into a row. With the vectors of the office hours page and the question, it looks like this:</p>
+  <div class="formula">𝐝 = <span class="mat"><span>0.9</span><span>0.1</span></span>&nbsp;&nbsp;&nbsp; 𝐝<sup>⊤</sup> = <span class="matrow">0.9&nbsp;&nbsp;0.1</span>&nbsp;&nbsp;&nbsp; 𝐪 = <span class="mat"><span>0.8</span><span>0.2</span></span></div>
+  <div class="formula">𝐝<sup>⊤</sup>𝐪 = <span class="matrow">0.9&nbsp;&nbsp;0.1</span> <span class="mat"><span>0.8</span><span>0.2</span></span> = 0.9 × 0.8 + 0.1 × 0.2 = 0.74</div>
+  <p>The rule for a row times a column is: multiply the row's first number by the column's first number, the second by the second, and add everything up. That is the dot product, so 𝐝<sup>⊤</sup>𝐪 is a way of writing the dot product. Stack the rows of many passages one under another, and a single multiplication gives all their scores. That matrix product comes in <a href="12-dpr-dense-en.html#matrix">lesson 12</a>.</p>
+
+  <p>BERT<sub>d</sub> and BERT<sub>q</sub> are two separate <button class="def" data-w="w-encoder">encoders</button>. The small d says the first one reads passages, because the paper calls a passage a document. The small q says the second one reads the query, the question. Both are built from <button class="def" data-w="w-bert">BERT</button>-base. <span class="mine">from the paper</span></p>
+
+  <h4 class="sub" id="topk">Why MIPS is enough for top-k(p(·|x))</h4>
+
+  <p>The slide's second line is top-k(p(·|x)). The “·” marks an empty slot, which each passage fills in turn. So p(·|x) is the full list of weights of all passages for question x, and top-k is the k passages with the largest weights in it.</p>
+
+  <p>Finding these k passages does not need softmax, because exp is an <b class="term">increasing function</b>: a larger input always gives a larger output. Dividing by Z is also the same for every passage, so the weights come in the same order as the scores. The lesson 3 scores 1.56, 0.74, 0.32 and 0.26 give weights 0.499, 0.220, 0.145 and 0.136, in exactly the same order.</p>
+
+  <p>So the passages with the k largest weights are the ones with the largest dot products. Another name for the dot product is the inner product, so this search is called Maximum Inner Product Search, or <button class="def" data-w="w-mips">MIPS</button>. According to the paper, MIPS finds an approximate top k without looking at every passage, so when the number of passages doubles, the search time grows by less than double. <span class="mine">from the paper</span> How that works is in <a href="10-vector-search-dense-en.html">lesson 10</a>.</p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="training">
+  <h3><span class="cn">9</span>Negative marginal log-likelihood, and the loss's rates in numbers</h3>
+
+  <p>Stanford's second slide says: <q>Jointly train the retriever and generator to minimize the negative marginal log-likelihood ∑<sub>j</sub> −log p(y<sub>j</sub>|x<sub>j</sub>)</q>. In this step, first read that name word by word, then see how a single loss tells both models which way to change.</p>
+
+  <h4 class="sub" id="nmll">The four words of the name</h4>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Word</th><th>Meaning</th><th>In step 5</th></tr></thead>
+    <tbody>
+      <tr><td>likelihood</td><td>The probability of the right answer, p(y|x)</td><td>0.685</td></tr>
+      <tr><td>marginal</td><td>This probability comes from marginalization over passages</td><td>0.658 + 0.027</td></tr>
+      <tr><td>log-likelihood</td><td>Its ln</td><td>ln 0.685 = −0.378</td></tr>
+      <tr class="hi"><td>negative</td><td>A minus sign in front, so that the loss is positive</td><td>0.378</td></tr>
+    </tbody>
+  </table></div>
+  <p>So the loss for each example is −ln of a sum, and step 7 showed that this sum does not split passage by passage.</p>
+
+  <h4 class="sub" id="examples">The loss over many examples</h4>
+
+  <p>∑<sub>j</sub> adds over all training examples. Suppose a second example is the question <q>Where are office hours held?</q>, and the system gives its right answer a probability of 0.5. <span class="mine">my number</span> The total loss over the two examples is then 0.378 + 0.693 = 1.071.</p>
+
+  <p>The same number also comes out another way. The two questions do not depend on each other, so in the chain rule the probability of the second answer does not change with the first. The probability that both answers are right is then 0.685 × 0.5 = 0.3425, and −ln 0.3425 = 1.071, because the rule of ln turns a product into a sum. So making the total loss small means making the probability of the whole training data being right large.</p>
+
+  <p>Training makes −ln p small instead of making p large, but the best parameters stay the same, because ln is also an increasing function. The larger p is, the smaller −ln p is, so both have the same best point. The advantage of −ln is that products turn into sums and no tiny numbers appear.</p>
+
+  <h4 class="sub" id="rates">A rate: how much the loss changes</h4>
+
+  <p>Step 4 gave the meaning of the gradient: which way to change each parameter so that the loss goes down. That direction comes from a <b class="term">rate</b>. Change the input a little, say by 0.01, see how much the loss changed, and divide that change by 0.01. First look at this on the loss −ln p itself:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">p</th><th class="numh">Change in loss when p rises by 0.01</th><th class="numh">Change ÷ 0.01</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td class="num">0.10</td><td class="num">−0.0953</td><td class="num">−9.53</td></tr>
+      <tr><td class="num">0.50</td><td class="num">−0.0198</td><td class="num">−1.98</td></tr>
+      <tr><td class="num">0.90</td><td class="num">−0.0110</td><td class="num">−1.10</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Take an even smaller change than 0.01, and these rates settle at −10, −2 and −1.11, that is, −1 ÷ p. <b>The rate is largest for an answer with a small probability, so that is where training pushes hardest.</b> In lesson 1, p went from 0.10 to 0.12 and the loss fell by 0.183. The rate over that whole step is −0.183 ÷ 0.02 = −9.15, which lies between the rate −10 near 0.10 and the rate −8.33 near 0.12.</p>
+
+  <h4 class="sub" id="joint">Jointly train: one loss, rates for both models</h4>
+
+  <p>The loss of 0.378 from step 5 depends on four numbers: the retriever's two scores, 1.0 and 0.0, and the generator's two probabilities, 0.9 and 0.1. Raise each one by 0.01 in turn, keeping the other three fixed: <span class="mine">my arithmetic</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>What rose by 0.01</th><th class="numh">Change in loss</th><th class="numh">Change ÷ 0.01</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Retriever: the queue log's score</td><td class="num">−0.00229</td><td class="num">−0.229</td></tr>
+      <tr><td>Retriever: the forum post's score</td><td class="num">+0.00230</td><td class="num">+0.230</td></tr>
+      <tr class="hi"><td>Generator: 0.9 with the queue log</td><td class="num">−0.01062</td><td class="num">−1.062</td></tr>
+      <tr><td>Generator: 0.1 with the forum post</td><td class="num">−0.00392</td><td class="num">−0.392</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The retriever's two rates say the loss falls when the queue log's score rises, and rises when the forum post's score rises. Together they make −0.229 + 0.230 = 0.001, nearly 0, because if both scores rise equally, the softmax weights do not change.</p>
+
+  <p>Both of the generator's rates are negative, so whichever passage it is, a higher probability for the right answer lowers the loss. The queue log's rate is the larger one: 1.062 ÷ 0.392 = 2.71, close to 0.731 ÷ 0.269 = 2.72. So each of the generator's probabilities counts as much as its passage's weight.</p>
+
+  <p><b>A single loss gives both models their direction, and that is what “jointly train” on the slide means.</b> In real models these four numbers are themselves produced by hundreds of millions of parameters. Each parameter has a rate like these, and the list of all these rates is the gradient. Training nudges every parameter a little against its rate.</p>
+
+  <p>These rates appear with the symbols ∂ and ∇ in <a href="12-dpr-dense-en.html#nabla">lesson 12</a>. The rule for which passage's score goes up and which goes down is in <a href="05-rag-model-dense-en.html#training">lesson 5</a>. The paper says three more things about training: <span class="mine">from the paper</span></p>
+  <ul class="plain">
+    <li>The training data holds only pairs of a question and an answer, (x<sub>j</sub>, y<sub>j</sub>). Which passage is right is written nowhere in the data.</li>
+    <li>The paper changes the parameters in small steps using the gradient, with a method called Adam.</li>
+    <li>The passage encoder BERT<sub>d</sub> and the index stay fixed. Training changes only the parameters of BERT<sub>q</sub> and of the generator BART, because changing the passage encoder would mean rebuilding the index.</li>
+  </ul>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are Stanford's three slides, unchanged, each followed by its formula enlarged. Under each slide are a few questions. Think of the answer first, then open it. If a symbol stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image to open it at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG, with the retriever, the generator and the RAG formula" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p16-formula.png"><img src="img/slide-p16-formula.png" alt="The formula from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: Deep Dive into RAG, and below it the formula, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the RAG formula slide</p>
+    <ol class="plain">
+      <li>
+        <p>Under the ∑ it says z∈top−K, and there is ≈ instead of an equals sign. What do the two mean, and how far off was the ≈ in our example?</p>
+        <details><summary>Show the answer</summary>
+          <p>The ∑ runs only over the retriever's top-K passages, and ∈ means “belongs to”. The other passages are not added, hence the ≈. Over the top 2 the sum was 0.685, and adding the Homework 1 announcement gives 0.632, a gap of 0.053. (Steps 2 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>The generator writes the answer <q>one token at a time</q>. How does p(y|x, z) become a single number then?</p>
+        <details><summary>Show the answer</summary>
+          <p>By the chain rule. Take each token's probability, given the question, the passage and the earlier tokens, and multiply them all. The paper writes this as ∏ p<sub>θ</sub>(y<sub>i</sub> | x, z, y<sub>1:i−1</sub>), for example 0.21 × 0.31 × 0.71 = 0.046. (Steps 1 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>The bottom of the slide mentions RAG-Sequence and RAG-Token. Which of the two does the formula above belong to?</p>
+        <details><summary>Show the answer</summary>
+          <p>RAG-Sequence. There one passage produces the whole answer, so p(y|x, z) is the product over all the answer's tokens, and the weighted sum over passages comes after. <span class="mine">from the paper</span> RAG-Token can use a different passage for each token, and its formula is in <a href="05-rag-model-dense-en.html#seq-token">lesson 5</a>.</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p17.png"><img src="img/slide-p17.png" alt="Stanford slide: the retriever, the generator, and the line about training both together" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p17-loss.png"><img src="img/slide-p17-loss.png" alt="The training line from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: the same two lines, with the training loss in a third line. Below, that line enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the training slide</p>
+    <ol class="plain">
+      <li>
+        <p>Where does each word of “negative marginal log-likelihood” sit in ∑<sub>j</sub> −log p(y<sub>j</sub>|x<sub>j</sub>)?</p>
+        <details><summary>Show the answer</summary>
+          <p>The likelihood is p(y<sub>j</sub>|x<sub>j</sub>), the probability of the right answer. Marginal means this probability is a sum over passages. Log is its ln, negative is the minus in front, and ∑<sub>j</sub> adds over all examples. Over two examples this was 0.378 + 0.693 = 1.071. (Steps 4 and 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>Why can't this loss be split into a separate loss for each passage?</p>
+        <details><summary>Show the answer</summary>
+          <p>Because the log is applied to the whole sum, and ln(a + b) does not split. −ln(0.658 + 0.027) = 0.378, while the separate −ln values add up to 4.031. (Step 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>What does “jointly train” look like in our numbers?</p>
+        <details><summary>Show the answer</summary>
+          <p>The same loss has a rate for the retriever's scores and for the generator's probabilities. Raise the queue log's score by 0.01 and the loss falls by 0.00229. Raise the generator's 0.9 to 0.91 and it falls by 0.01062. In the paper the passage encoder and the index stay fixed, while the query encoder and the generator change. (Step 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p18.png"><img src="img/slide-p18.png" alt="Stanford slide: Retriever: DPR, the softmax formula and the top-k line" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p18-formula.png"><img src="img/slide-p18-formula.png" alt="The formula from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p18-topk.png"><img src="img/slide-p18-topk.png" alt="The top-k line from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: Retriever: DPR, and below it the formula and the top-k line, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the retriever slide</p>
+    <ol class="plain">
+      <li>
+        <p>Which division is hidden behind ∝? What was that number in the example from step 5?</p>
+        <details><summary>Show the answer</summary>
+          <p>Division by Z, the sum of all the exps, which is called the normalizer. In step 5, Z = 2.718 + 1 = 3.718, and the queue log's weight was 2.718 ÷ 3.718 = 0.731. (Steps 3 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>What do the bold 𝐝 and 𝐪, the ⊤, and the small d and q in BERT<sub>d</sub> and BERT<sub>q</sub> tell you?</p>
+        <details><summary>Show the answer</summary>
+          <p>Bold means a vector. ⊤ turns a column vector into a row, and a row times a column is the dot product: [0.9, 0.1] and [0.8, 0.2] give 0.74. BERT<sub>d</sub> is the encoder for passages and BERT<sub>q</sub> the one for questions, so these are two separate encoders. (Step 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Why is there no need to run softmax over all passages to find top-k(p(·|x)), and why is this search called MIPS?</p>
+        <details><summary>Show the answer</summary>
+          <p>exp is an increasing function, and the division by Z is the same for all passages, so the weights come in the same order as the dot products. Finding the passages with the k largest dot products is therefore enough, and another name for the dot product is the inner product. (Step 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>p(A|B) means “the chance of A, given B”, and it is different from p(B|A). By the chain rule, the probability of a whole answer is the product of each token's conditional probability.</li>
+    <li>The RAG formula is marginalization over the top-K passages. The ≈ is close only when the passages left out have small weights.</li>
+    <li>Softmax builds weights with exp and the normalizer Z, and keeps the order, so MIPS is enough for the top k. The loss is −ln of a sum, which does not split, so a single loss gives both the retriever and the generator their rates.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-conditional">Conditional probability, p(A|B)</dt><dd>The probability of A when B is known. Read “|” as “given”. For example, p(full | Tuesday) = 16 ÷ 20 = 0.80.</dd>
+    <dt id="w-chain">Chain rule (for probabilities)</dt><dd>p(A and B) = p(A) × p(B|A). With many steps, multiply them all. For example, p(Tuesday) × p(full | Tuesday) = 0.5 × 0.8 = 0.40. The chain rule for rates in lesson 12 is a different rule.</dd>
+    <dt id="w-prod">∏ (capital pi)</dt><dd>Multiply everything over the range written below it. For example, for three tokens, 0.21 × 0.31 × 0.71 = 0.046.</dd>
+    <dt id="w-marginal">Marginalization</dt><dd>Each case's weight times the probability within that case, added up over all cases. For example, 0.5 × 0.8 + 0.5 × 0.1 = 0.45.</dd>
+    <dt id="w-approx">≈</dt><dd>Approximately equal. The RAG formula adds up only the top-K passages, so the sum is only approximately equal.</dd>
+    <dt id="w-exp">exp and e</dt><dd>exp(s) = e<sup>s</sup>, where e is about 2.718. Always above 0, and e<sup>a+1</sup> = e<sup>a</sup> × e. For example, exp(1) = 2.718, exp(0) = 1, exp(−1) = 0.368.</dd>
+    <dt id="w-softmax">Softmax</dt><dd>The exp of each score, divided by the sum of all the exps. It turns scores into probabilities. For example, 2.0, 1.0, 0.1 become 0.659, 0.242, 0.099.</dd>
+    <dt id="w-propto">∝</dt><dd>Is proportional to. At the end, divide everything by one number so that the total is 1. For example, exps 2.718 and 1 become 0.731 and 0.269.</dd>
+    <dt id="w-transpose">d<sup>⊤</sup>q</dt><dd>A way of writing the dot product of vectors d and q. For example, the office hours page [0.9, 0.1] and the question [0.8, 0.2] give 0.74.</dd>
+    <dt id="w-ln">Natural log, ln</dt><dd>The power you raise e to in order to get x. ln(e<sup>x</sup>) = x, and ln(a × b) = ln a + ln b. For example, ln(0.1) = −2.303.</dd>
+    <dt id="w-loss">Loss</dt><dd>A number for how wrong the model is. Training makes it small. For example, if the right answer has probability 0.5, the loss is −ln 0.5 = 0.693.</dd>
+    <dt id="w-likelihood">Likelihood</dt><dd>The probability the model gave the correct data. For example, if it gave the right answer 0.12, the likelihood is 0.12.</dd>
+    <dt id="w-nll">Negative log-likelihood</dt><dd>−ln p(right answer). The most common loss. For example, at p = 0.12, −ln 0.12 = 2.120.</dd>
+    <dt id="w-gradient">Gradient</dt><dd>The calculation of which way, and how much, to change each parameter so that the loss goes down. For example, in lesson 1 training moved the parameters in the direction that raised Thursday's probability from 0.10 to 0.12 and lowered the loss from 2.303 to 2.120.</dd>
+      <dt id="w-normalizer">Normalizer, Z</dt><dd>In softmax, the sum of all the exps. Dividing by it makes the weights add up to 1, and it is the division hidden behind ∝. For example, for exps 2.718 and 1, Z = 3.718.</dd>
+    <dt id="w-colvec">Column vector and ⊤</dt><dd>A column vector has its numbers written one above the other, and ⊤ (transpose) turns it into a row. A row times a column is the dot product. For example, the row [0.9, 0.1] times the column [0.8, 0.2] = 0.74.</dd>
+    <dt id="w-increasing">Increasing function</dt><dd>A function where a larger input always gives a larger output, so the order is kept. exp and ln are such functions. For example, scores 1.56 and 0.74 give weights 0.499 and 0.220, in the same order.</dd>
+    <dt id="w-nmll">Negative marginal log-likelihood</dt><dd>−ln of the right answer's probability, when that probability comes from marginalization over passages, added up over all examples. RAG's training loss. For example, over two examples 0.378 + 0.693 = 1.071.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="03-vectors-dense-en.html">Previous: Lesson 3</a>
+    <a href="05-rag-model-dense-en.html">Next: Lesson 5, The RAG model</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Paper: Lewis et al., 2020, “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var ins = [1, 2, 3].map(function (i) { return document.getElementById("s" + i); });
+  var outs = [1, 2, 3].map(function (i) { return document.getElementById("so" + i); });
+  var body = document.getElementById("smw-body");
+  var bars = document.getElementById("smw-bars");
+  var names = ["A", "B", "C"];
+  var SUM = "Sum";
+  function render() {
+    var s = ins.map(function (x) { return Number(x.value); });
+    outs.forEach(function (o, i) { o.textContent = s[i].toFixed(1); });
+    var e = s.map(Math.exp);
+    var tot = e[0] + e[1] + e[2];
+    var p = e.map(function (x) { return x / tot; });
+    var best = p.indexOf(Math.max.apply(null, p));
+    body.innerHTML = s.map(function (v, i) {
+      return '<tr class="' + (i === best ? "hi" : "") + '"><td>Passage ' + names[i] + '</td><td class="num">' + v.toFixed(1) + '</td><td class="num">' + e[i].toFixed(3) + '</td><td class="num">' + p[i].toFixed(3) + "</td></tr>";
+    }).join("") + '<tr class="total"><td>' + SUM + '</td><td></td><td class="num">' + e.reduce(function (a, x) { return a + Math.round(x * 1000) / 1000; }, 0).toFixed(3) + '</td><td class="num">' + (p[0] + p[1] + p[2]).toFixed(3) + "</td></tr>";
+    bars.innerHTML = p.map(function (v, i) {
+      return '<span>Passage ' + names[i] + '</span><div class="bar' + (i === best ? " win" : "") + '"><span style="width:' + (v * 100) + '%"></span></div><span class="val">' + v.toFixed(3) + "</span>";
+    }).join("");
+    var key = s.map(function (v) { return String(v); }).join(",");
+    document.querySelectorAll("#smw .btns button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.s === key ? "true" : "false"); });
+  }
+  ins.forEach(function (x) { x.addEventListener("input", render); });
+  document.querySelectorAll("#smw .btns button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var v = b.dataset.s.split(",");
+      ins.forEach(function (x, i) { x.value = v[i]; });
+      render();
+    });
+  });
+  render();
+})();
+</script>
+</body>
+</html>

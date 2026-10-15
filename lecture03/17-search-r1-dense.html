@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Training data में सिर्फ़ सही जवाब था, search के steps नहीं। Model को कब और क्या search करना है, ये सिर्फ़ आख़िरी जवाब के reward से सीखना है, और आख़िर में Stanford की Search-R1 slides खुद पढ़नी हैं।">
+<title>Lesson 17: Search-R1 (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .trace { font-family: var(--mono); font-size: 14px; line-height: 1.6; background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; margin: 0 0 14px; overflow-wrap: anywhere; }
+  .trace .tg { color: var(--accent); font-weight: 700; }
+  .trace div + div { margin-top: 8px; }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 17 / 18 · <a href="17-search-r1.html">आसान</a> · <b>गहरा</b> · <a href="17-search-r1-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 17 · गहरा version</p>
+  <h1>Search-R1: कब और क्या search करें, ये सीखना</h1>
+  <p class="lede"><b>Search-R1 एक LLM को reinforcement learning से train करता है। Training के बाद LLM खुद तय करता है कि कब search करनी है, क्या search करनी है, और कब रुकना है।</b> इस training को हर सवाल का सिर्फ़ सही जवाब चाहिए, search के steps नहीं।</p>
+  <p class="lede"><a href="06-rag-pipeline-dense.html#modular">Lesson 6</a> का <button class="def" data-w="w-multihop">multi-hop</button> सवाल फिर लीजिए: <q>Who is older, Jed Hoyer or John William Henry II?</q> Lecture के trace में model ने 3 searches कीं, और सही जवाब दिया। लेकिन training data में इस सवाल के साथ सिर्फ़ जवाब लिखा है: John William Henry II। पहली query क्या हो, कितनी searches हों, और कब रुकें, ये कहीं नहीं लिखा।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 11 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 11 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#rl">सिर्फ़ आख़िरी जवाब से सीखना</a><span class="can">बता पाएँगे कि search steps के labels के बिना training कैसे चलती है।</span></li>
+      <li><a href="#format">Search भी text है: चार tags और lecture का trace</a><span class="can">Stanford का trace पढ़ पाएँगे, और उसमें बिना सबूत वाला कदम पहचान पाएँगे।</span></li>
+      <li><a href="#ppo-grpo">GRPO: हर reward को उसी सवाल के group से मिलाना</a><span class="can">औसत, standard deviation और advantage हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#ppo">PPO का value model, और KL penalty</a><span class="can">Stanford की PPO और GRPO वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#results">Search-R1, एक बार ढूँढने वाली RAG से कितना आगे है</a><span class="can">Paper का मुख्य नतीजा पढ़ पाएँगे, और बता पाएँगे कि lesson 18 की ज़रूरत क्यों है।</span></li>
+      <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#objective">Paper का लक्ष्य: औसत reward और KL</a><span class="can">Paper का objective पढ़ पाएँगे, और KL divergence हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#clip">Probability ratio और clipping</a><span class="can">किसी token का term clip के साथ और बिना निकाल पाएँगे, positive और negative advantage पर।</span></li>
+      <li><a href="#mask">Retrieved tokens का mask</a><span class="can">बता पाएँगे कि training किन tokens से सीखती है, और mask हटाने पर क्या होता है।</span></li>
+      <li><a href="#advsource">Advantage कहाँ से आता है</a><span class="can">GAE और 5 rollouts वाला GRPO advantage हाथ से निकाल पाएँगे, और paper के दोनों formulas पढ़ पाएँगे।</span></li>
+      <li><a href="#paper">Paper का setup, और table की हर row</a><span class="can">Slide की table की हर row और paper के experiments समझा पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">Search-R1 की तीनों Stanford slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="01-how-llms-answer-dense.html#next-token">Lesson 1</a> (probability, next-token prediction), <a href="04-probability-tools-dense.html#loss">Lesson 4</a> (ln, loss), <a href="05-rag-model-dense.html">Lesson 5</a> (Exact Match), <a href="06-rag-pipeline-dense.html#modular">Lesson 6</a> (multi-hop) और <a href="16-agentic-rag-dense.html#agent">Lesson 16</a> (agent, action)। पड़ाव 6 से आगे <a href="12-dpr-dense.html">Lesson 12</a> (DPR का Wikipedia) और <a href="13-metrics-dense.html">Lesson 13</a> (𝟙[शर्त]) भी काम आते हैं। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="rl">
+  <h3><span class="cn">1</span>सिर्फ़ आख़िरी जवाब से सीखना: rollout, reward और policy</h3>
+
+  <p><b>Reinforcement learning (RL) में model एक सवाल पर कई कोशिशें करता है, और हर कोशिश के आख़िर में उसे एक number मिलता है। फिर training उन कोशिशों के tokens की probability बढ़ाती है, जिनका number अच्छा रहा।</b> Lesson 4 की <button class="def" data-w="w-training">training</button> इससे अलग थी। वहाँ data में सही output लिखा होता था, और training उसी output की <button class="def" data-w="w-probability">probability</button> बढ़ाती थी। Search के फ़ैसलों का कोई एक सही output नहीं है, क्योंकि Hoyer वाले सवाल पर 2 searches भी काफ़ी हो सकती हैं, और 3 भी।</p>
+
+  <p>लेकिन आख़िरी जवाब हर बार check हो सकता है, और RL इसी पर टिका है। RL के तीन शब्द आगे हर जगह आएँगे:</p>
+  <dl class="words">
+    <dt>Rollout</dt><dd>एक सवाल पर शुरू से आख़िरी जवाब तक की एक पूरी कोशिश: सोचना, searches, लौटे passages और जवाब। इसे trajectory भी कहते हैं।</dd>
+    <dt>Reward</dt><dd>Rollout के आख़िर में मिला number। Search-R1 में जवाब सही जवाब से हूबहू मिले, तो 1, नहीं तो 0। ये lesson 5 वाला <button class="def" data-w="w-em">Exact Match</button> है। <span class="mine">paper से</span></dd>
+    <dt>Policy</dt><dd>जो हर कदम पर फ़ैसला लेता है। यहाँ LLM ही policy है, क्योंकि अगला token, यानी सोचना, search करना या जवाब देना, वही चुनता है।</dd>
+  </dl>
+
+  <p>एक सवाल पर अलग-अलग rollouts तभी बनते हैं, जब model हर बार एक ही रास्ता न ले। इसलिए model हर token <button class="def" data-w="w-ntp">probability के हिसाब से random</button> चुनता है। जैसे पहले &lt;think&gt; के बाद model &lt;search&gt; को 0.6 probability दे, और सीधे &lt;answer&gt; को 0.4। तब 100 rollouts में करीब 60 search से शुरू होंगे, और करीब 40 सीधे जवाब देंगे। <span class="mine">probabilities मेरी बनाई</span></p>
+
+  <p>अब Hoyer वाले सवाल पर 4 rollouts देखिए। <span class="mine">ये चार rollouts मेरा example हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Rollout</th><th>क्या किया</th><th>आख़िरी जवाब</th><th class="numh">Reward</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>o<sub>1</sub></td><td>दोनों की जन्म-तारीख search की</td><td>John William Henry II</td><td class="num">1</td></tr>
+      <tr><td>o<sub>2</sub></td><td>बिना search, अंदाज़ा</td><td>Jed Hoyer</td><td class="num">0</td></tr>
+      <tr><td>o<sub>3</sub></td><td>एक search, फिर अंदाज़ा</td><td>Jed Hoyer</td><td class="num">0</td></tr>
+      <tr class="hi"><td>o<sub>4</sub></td><td>दोनों की जन्म-तारीख search की</td><td>John William Henry II</td><td class="num">1</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Training o<sub>1</sub> और o<sub>4</sub> के tokens की probability बढ़ाती है, और इन tokens में दोनों तारीखें search करने वाले फ़ैसले भी हैं। o<sub>2</sub> और o<sub>3</sub> के tokens की probability घटती है, जिनमें बिना search अंदाज़ा लगाना भी है। ये बढ़ाना और घटाना ठीक-ठीक कैसे होता है, ये पड़ाव 3 में आता है। हज़ारों सवालों के बाद model ऐसे सवालों पर दोनों तारीखें ढूँढना सीखता है। <b>किसी ने search steps का label नहीं लिखा, सिर्फ़ आख़िरी जवाब check हुआ।</b></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>मान लीजिए model हर बार सबसे ऊँची probability वाला token लेता है। तब 4 rollouts कितने अलग होंगे, और training को उनसे क्या मिलेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>चारों एक जैसे होंगे, क्योंकि हर कदम पर वही token जीतेगा, जैसे पहले कदम पर 0.6 वाला &lt;search&gt;। तब चारों को एक ही reward मिलेगा, और तुलना के लिए कुछ नहीं बचेगा। RL को अलग-अलग कोशिशें चाहिए, और वो random चुनने से आती हैं।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="format">
+  <h3><span class="cn">2</span>Search भी text है: चार tags और lecture का trace</h3>
+
+  <p><b>Search-R1 में model search को भी text की तरह लिखता है, और system उस text को पहचानकर असली search engine चलाता है।</b> <b class="term">Search-R1</b> इसके लिए 4 tags रखता है। Tag text के दोनों ओर लगा एक निशान है, जैसे &lt;search&gt; और &lt;/search&gt;।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Tag</th><th>कौन लिखता है</th><th>अंदर क्या है</th></tr></thead>
+    <tbody>
+      <tr><td>&lt;think&gt;</td><td>Model</td><td>सोचना: अब तक क्या पता है, और क्या कम है</td></tr>
+      <tr><td>&lt;search&gt;</td><td>Model</td><td>Query</td></tr>
+      <tr><td>&lt;information&gt;</td><td>System</td><td>Search engine के top results। Model इन्हें नहीं लिखता।</td></tr>
+      <tr class="hi"><td>&lt;answer&gt;</td><td>Model</td><td>आख़िरी जवाब। Reward इसी पर लगता है।</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Model जैसे ही &lt;/search&gt; लिखता है, system query निकालकर search engine से top 3 passages लाता है। <span class="mine">3 paper से</span> System इन्हें &lt;information&gt; tags में रखकर text के आगे जोड़ता है, और model वहीं से आगे लिखता है। ये तब तक चलता है, जब तक model &lt;answer&gt; न लिख दे। Model को हर सवाल के साथ एक छोटी instruction मिलती है, जो ये चारों tags समझाती है। वो पड़ाव 4 की slide पर नीचे छपी है।</p>
+
+  <p>इस तरह <button class="def" data-w="w-agent">agent</button> के तीनों फ़ैसले tokens बन गए। &lt;search&gt; लिखना ढूँढने का फ़ैसला है, उसके अंदर की query दूसरा फ़ैसला, और &lt;answer&gt; लिखना रुकने का फ़ैसला। Search engine यहाँ <button class="def" data-w="w-action">tool</button> है, और &lt;information&gt; उसका <button class="def" data-w="w-observation">observation</button>।</p>
+
+  <p>नीचे lecture का trace है। ये Search-R1 से train हुए model का एक rollout है, थोड़ा छोटा करके।</p>
+
+  <p class="callout"><b>पहले अंदाज़ा लगाइए:</b> Model 3 बार search करता है, और जवाब सही है। क्या उसके &lt;think&gt; में लिखी हर तारीख किसी &lt;information&gt; से आई?</p>
+
+  <div class="trace">
+    <div><span class="tg">&lt;think&gt;</span> I need to determine if Jed Hoyer or John William Henry II is older. I'll search for their ages. <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;search&gt;</span> Jed Hoyer or John William Henry II <span class="tg">&lt;/search&gt;</span></div>
+    <div><span class="tg">&lt;information&gt;</span> Doc 1 (Title: "Jed Hoyer") … Wesleyan University … Red Sox at 28 … married Merrill Muckerman in June 2010 … <span class="tg">&lt;/information&gt;</span></div>
+    <div><span class="tg">&lt;think&gt;</span> I found out that Jed Hoyer is a person. Now I need to find his age … <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;search&gt;</span> John William Henry II <span class="tg">&lt;/search&gt;</span></div>
+    <div><span class="tg">&lt;information&gt;</span> Doc 1 (Title: "John W. Henry") … John William Henry II was born on September 13, 1949 in Quincy, Illinois … <span class="tg">&lt;/information&gt;</span></div>
+    <div><span class="tg">&lt;think&gt;</span> I found out that John William Henry II was born on September 13, 1949. Now I need to find Jed Hoyer's birth year to compare. <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;search&gt;</span> Jed Hoyer birth year <span class="tg">&lt;/search&gt;</span></div>
+    <div><span class="tg">&lt;information&gt;</span> Doc 1 (Title: "Jed Hoyer") … Wesleyan University … Red Sox at 28 … married Merrill Muckerman in June 2010 … <span class="tg">&lt;/information&gt;</span></div>
+    <div><span class="tg">&lt;think&gt;</span> I found out that Jed Hoyer was born on December 7, 1973. Now I can compare his birth year to John William Henry II's birth year. <span class="tg">&lt;/think&gt;</span></div>
+    <div><span class="tg">&lt;answer&gt;</span> John William Henry II <span class="tg">&lt;/answer&gt;</span></div>
+  </div>
+
+  <figure class="slide">
+    <a href="img/slide-p59.png"><img src="img/slide-p59.png" alt="Stanford slide: Jed Hoyer वाले सवाल पर Search-R1 का trace" loading="lazy"></a>
+    <figcaption>Stanford की slide: यही trace, पूरा। Ground Truth सही जवाब है। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <h4 class="sub" id="unsupported">सही जवाब, लेकिन एक तारीख बिना सबूत</h4>
+
+  <p>जवाब सही है, इसलिए इस rollout का reward 1 है। अब तीसरी search देखिए। उसका नतीजा वही document है, जो पहली search में आया था, और उसमें Jed Hoyer की जन्म-तारीख नहीं है। फिर भी अगले &lt;think&gt; में model लिखता है: <q>I found out that Jed Hoyer was born on December 7, 1973.</q></p>
+
+  <p>Retrieved text में ये तारीख नहीं है, तो model ने उसे अपनी <button class="def" data-w="w-parametric">parametric knowledge</button> से लिखा, यानी अपने parameters में बसी जानकारी से। तारीख शायद सही भी हो। दिक्कत ये है कि trace उसे <q>I found out</q> लिखकर search का नतीजा बताता है। <b>Reward सिर्फ़ आख़िरी जवाब देखता है, इसलिए ऐसा बिना सबूत वाला कदम भी 1 पाता है, और training उसे भी मज़बूत करती है।</b></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>&lt;information&gt; के अंदर का text search engine ने लिखा, model ने नहीं। o<sub>4</sub> का reward 1 है। Training में उस text के tokens की probability भी बढ़नी चाहिए या नहीं?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>नहीं। वो text model का फ़ैसला नहीं है। उसकी probability बढ़ाने से model सीखेगा कि search के नतीजे खुद लिख दे, यानी उन्हें गढ़ दे। इसलिए paper इन tokens को training के हिसाब से बाहर रखता है। <span class="mine">paper से</span></p>
+    </details>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="ppo-grpo">
+  <h3><span class="cn">3</span>GRPO: हर reward को उसी सवाल के group से मिलाना</h3>
+
+  <p><b>GRPO हर rollout के reward की तुलना उसी सवाल के rollouts के औसत से करता है। Training इसी फ़र्क के हिसाब से probability बदलती है।</b> ये तुलना क्यों चाहिए, ये सबसे सीधा तरीका आज़माकर दिखता है। सीधा तरीका ये है कि हर rollout को उसके reward जितना धक्का मिले। धक्के का मतलब है कि training उस rollout के tokens की probability कितनी बढ़ाती है। <span class="mine">मेरा example</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>सवाल</th><th class="numh">4 rollouts के rewards</th><th>Reward जितना धक्का</th></tr></thead>
+    <tbody>
+      <tr><td>आसान</td><td class="num">1, 1, 1, 1</td><td>चारों को 1, कुल 4</td></tr>
+      <tr class="hi"><td>मुश्किल</td><td class="num">0, 0, 0, 1</td><td>सिर्फ़ o<sub>4</sub> को 1, कुल 1</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>आसान सवाल पर model पहले से हर बार सही है, फिर भी उसे कुल 4 का धक्का मिला। मुश्किल सवाल पर अकेला सही rollout ही असली सबक है, और उसे सिर्फ़ 1 मिला। तीन गलत rollouts की probability घटी भी नहीं, क्योंकि 0 का धक्का कुछ नहीं बदलता।</p>
+
+  <p>इसलिए GRPO हर reward से उसी सवाल का औसत घटाता है। एक सवाल के सारे rollouts को <b class="term">group</b> कहते हैं, और उनकी गिनती को G, यहाँ 4। मुश्किल सवाल पर औसत (0 + 0 + 0 + 1) ÷ 4 = 0.25 है। तो o<sub>4</sub> का फ़र्क 1 − 0.25 = +0.75 है, और बाकी तीन का 0 − 0.25 = −0.25। आसान सवाल पर औसत 1 है, इसलिए चारों का फ़र्क 0 है, और कुछ नहीं बदलता।</p>
+
+  <p>फ़र्क का size हर सवाल पर अलग होता है, इसलिए GRPO उसे group के फैलाव से भाग देता है। फैलाव का नाप <b class="term">standard deviation</b> है, और ये 4 steps में निकलता है:</p>
+  <ol class="plain">
+    <li>हर reward का औसत से फ़र्क लीजिए: +0.75, −0.25, −0.25, −0.25। इनका जोड़ हमेशा 0 होता है, इसलिए इनका सीधा औसत फैलाव नहीं नाप सकता।</li>
+    <li>हर फ़र्क का square लीजिए, यानी उसे खुद से गुणा कीजिए: 0.5625, 0.0625, 0.0625, 0.0625। Square से minus हट जाता है, इसलिए ऊपर और नीचे वाले फ़र्क आपस में नहीं कटते।</li>
+    <li>Squares का औसत लीजिए: (0.5625 + 0.0625 + 0.0625 + 0.0625) ÷ 4 = 0.75 ÷ 4 = 0.1875।</li>
+    <li>इसका square root लीजिए, ताकि step 2 का square वापस खुल जाए: √0.1875 = 0.433। जाँच: 0.433 × 0.433 = 0.1875।</li>
+  </ol>
+  <p>अब हर फ़र्क को 0.433 से भाग दीजिए। o<sub>4</sub> का <b class="term">advantage</b> 0.75 ÷ 0.433 = +1.73 है, और बाकी तीन का −0.25 ÷ 0.433 = −0.58। Advantage बताता है कि rollout उम्मीद से कितना बेहतर या बुरा रहा। Positive advantage पर training उस rollout के tokens की probability बढ़ाती है, और negative पर घटाती है।</p>
+
+  <p>यही हिसाब symbols में ऐसे लिखते हैं:</p>
+  <div class="formula">A<sub><i>i</i></sub> = (r<sub><i>i</i></sub> − mean(r<sub>1</sub>, …, r<sub>G</sub>)) ÷ std(r<sub>1</sub>, …, r<sub>G</sub>)</div>
+  <p>यहाँ r<sub><i>i</i></sub> rollout i का reward है, जैसे o<sub>4</sub> के लिए 1। mean group का औसत है (0.25), std standard deviation (0.433), और A<sub><i>i</i></sub> advantage (+1.73)। GRPO का पूरा नाम group relative policy optimization है। सारे rewards बराबर हों, तो std 0 है, और हर advantage 0 मान लेते हैं, क्योंकि उस सवाल से सीखने को कुछ नहीं।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">Rewards</th><th class="numh">औसत</th><th class="numh">Std</th><th class="numh">Advantages</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0, 0, 0, 1</td><td class="num">0.25</td><td class="num">0.433</td><td class="num">−0.58, −0.58, −0.58, +1.73</td></tr>
+      <tr><td class="num">1, 1, 1, 0</td><td class="num">0.75</td><td class="num">0.433</td><td class="num">+0.58, +0.58, +0.58, −1.73</td></tr>
+      <tr><td class="num">1, 1, 1, 1</td><td class="num">1</td><td class="num">0</td><td class="num">0, 0, 0, 0</td></tr>
+      <tr class="hi"><td class="num">1, 0, 0, 1</td><td class="num">?</td><td class="num">?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">आख़िरी row आप निकालिए</p>
+    <p>ये पड़ाव 1 वाला group है। औसत, standard deviation और चारों advantages निकालिए। फिर नीचे के widget में o<sub>1</sub> पर click करके check कीजिए।</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>औसत 0.5 है। फ़र्क +0.5, −0.5, −0.5, +0.5 हैं, और चारों के squares 0.25। उनका औसत 0.25 है, और square root 0.5।</p>
+      <p>Advantages: +0.5 ÷ 0.5 = +1, फिर −1, −1, +1। सही rollouts को जितना धक्का ऊपर मिलता है, गलत rollouts को उतना ही नीचे।</p>
+    </details>
+  </div>
+
+  <div class="widget" id="gw">
+    <h4>GRPO advantage खुद निकालिए</h4>
+    <p class="hint">हर rollout पर click करके उसका reward 0 या 1 कीजिए। शुरू में मुश्किल सवाल वाला group है: 0, 0, 0, 1।</p>
+    <div class="btns" id="gw-r"></div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Rollout</th><th class="numh">Reward</th><th class="numh">Advantage</th><th>Training</th></tr></thead>
+      <tbody id="gw-body"></tbody>
+    </table></div>
+    <p class="out" id="gw-out"></p>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="ppo">
+  <h3><span class="cn">4</span>PPO का value model, और KL penalty</h3>
+
+  <p><b>PPO भी advantage से train करता है, और उसकी उम्मीद एक अलग model देता है, जिसे value model कहते हैं।</b> Value model अब तक का text पढ़कर अंदाज़ा लगाता है कि आख़िर में कितना reward मिलेगा। <b class="term">PPO</b> GRPO से पहले का आम तरीका है, और Search-R1 का paper दोनों आज़माता है।</p>
+
+  <p>मान लीजिए Hoyer वाले मुश्किल सवाल पर value model 0.25 का अंदाज़ा देता है। o<sub>4</sub> का reward 1 है, तो उसका advantage 1 − 0.25 = +0.75 है। GRPO ने यही 0.25 चार rollouts के औसत से निकाला था। <span class="mine">मेरे numbers</span> फ़र्क खर्च में है। Value model खुद एक LLM है, और उसे भी train करना पड़ता है। GRPO को ये model नहीं चाहिए, लेकिन उसे हर सवाल पर G rollouts चाहिए, और हर rollout में कई searches।</p>
+
+  <p>दोनों तरीकों में एक बचाव और है। Training model को reward की तरफ़ धकेलती है, और model अपनी पुरानी आदतों से बहुत दूर जा सकता है। इसलिए training शुरू होने से पहले वाले model की एक जमी हुई copy रखते हैं, जिसे <b class="term">reference LLM</b> कहते हैं। Training हर token पर देखती है कि नया model reference से कितनी अलग probabilities देता है, और इस दूरी पर <b class="term">KL penalty</b> लगाती है।</p>
+
+  <p>जैसे किसी जगह reference model &lt;search&gt; को 0.2 probability देता था, और नया model 0.9 देने लगा। ये 0.9 ÷ 0.2 = 4.5 गुना है, इसलिए penalty बड़ी है। Model इतना तभी बदलेगा, जब reward का फ़ायदा इस penalty से ज़्यादा हो। <span class="mine">numbers मेरे</span></p>
+
+  <figure class="slide">
+    <a href="img/slide-p60.png"><img src="img/slide-p60.png" alt="Stanford slide: PPO और GRPO, दोनों search engine के साथ, और model की instruction" loading="lazy"></a>
+    <figcaption>Stanford की slide: ऊपर PPO, बीच में GRPO, और नीचे वो instruction, जो model को हर सवाल के साथ मिलती है। GRPO में G rollouts o<sub>1</sub> से o<sub>G</sub> के rewards r<sub>1</sub> से r<sub>G</sub> हैं, और Group Computation उनसे advantages A<sub>1</sub> से A<sub>G</sub> बनाता है। Reward Model कोई trained model नहीं, बस Exact Match वाला नियम है। <span class="mine">paper से</span> पीले box trained models हैं, और हरे जमे हुए models।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>GRPO वाले diagram में Value LLM का box नहीं है। क्यों?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>GRPO को उम्मीद के लिए अलग model नहीं चाहिए। वो उम्मीद उसी सवाल के G rollouts के औसत से लेता है, जैसे पड़ाव 3 में 0.25। ये काम Group Computation वाला box करता है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="results">
+  <h3><span class="cn">5</span>Search-R1, एक बार ढूँढने वाली RAG से कितना आगे है</h3>
+
+  <p><b>Multi-hop सवालों पर Search-R1 एक बार ढूँढने वाली RAG से साफ़ आगे है।</b> Paper ने ये Qwen2.5-7B नाम के LLM पर नापा, जिसमें करीब 7 billion parameters हैं। Score Exact Match है, यानी 0 से 1 के बीच का हिस्सा। जैसे 0.433 का मतलब है कि 1,000 में से 433 जवाब हूबहू सही निकले।</p>
+
+  <p>Direct inference में model बिना search जवाब देता है, और RAG सवाल पर एक बार search करता है। Search-R1-base सिर्फ़ <button class="def" data-w="w-pretraining">pretraining</button> वाले model से शुरू हुआ। Search-R1-instruct ऐसे model से शुरू हुआ, जो instructions मानने के लिए <button class="def" data-w="w-finetuning">fine-tune</button> हो चुका था। ये numbers PPO से train हुए Search-R1 के हैं, क्योंकि paper का default PPO है। <span class="mine">paper से</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Method</th><th class="numh">HotpotQA</th><th class="numh">2wiki</th><th class="numh">Musique</th></tr></thead>
+    <tbody>
+      <tr><td>Direct inference<span class="sub">बिना search</span></td><td class="num">0.183</td><td class="num">0.250</td><td class="num">0.031</td></tr>
+      <tr><td>RAG<span class="sub">एक बार search</span></td><td class="num">0.299</td><td class="num">0.235</td><td class="num">0.058</td></tr>
+      <tr class="hi"><td>Search-R1-base</td><td class="num">0.433</td><td class="num">0.382</td><td class="num">0.196</td></tr>
+      <tr><td>Search-R1-instruct</td><td class="num">0.370</td><td class="num">0.414</td><td class="num">0.146</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>HotpotQA पर RAG 0.299 पर है, और Search-R1-base 0.433 पर, यानी 1,000 सवालों में 134 और सही जवाब। Musique पर 0.058 से 0.196, यानी तीन गुने से ज़्यादा। 2wiki पर एक बार ढूँढना नुकसान करता है: RAG 0.235 पर है, बिना search वाले 0.250 से भी नीचे। <b>जहाँ एक search काफ़ी नहीं, फ़ायदा वहीं सबसे बड़ा है।</b></p>
+
+  <p>Training के दौरान model क्या सीखता है, ये slide के दो graphs दिखाते हैं। Training के साथ train reward बढ़ता है, और हर rollout में valid searches की गिनती भी। Valid search वो है, जिसके tags ठीक थे और जिस पर system ने सच में search चलाई। <span class="mine">ये मतलब मेरी समझ है, paper के algorithm से</span> यानी model ने ज़्यादा search करना सीखा, और ये नियम किसी ने उसे नहीं लिखा।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p61.png"><img src="img/slide-p61.png" alt="Stanford slide: Search-R1 के नतीजों की table और training के दो graphs" loading="lazy"></a>
+    <figcaption>Stanford की slide: बाईं ओर नतीजों की पूरी table, और दाईं ओर training के दो graphs। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>लेकिन सबसे अच्छे numbers पर भी multi-hop के आधे से ज़्यादा सवाल गलत हैं: HotpotQA पर 1,000 में से 567। और <a href="#unsupported">बिना सबूत वाला कदम</a> भी reward पाता है, क्योंकि reward बीच के steps नहीं देखता। ऐसी गलतियाँ कहाँ-कहाँ आती हैं, ये <a href="18-failure-modes-dense.html">lesson 18</a> गिनाता है।</p>
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 6 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले paper का लक्ष्य और KL का गणित आता है, फिर ratio और clipping, और फिर retrieved tokens का mask। उसके बाद PPO और GRPO के पूरे formulas आते हैं, फिर paper का setup और नतीजे, और आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="objective">
+  <h3><span class="cn">6</span>Paper का लक्ष्य: औसत reward ऊपर, reference से दूरी कम</h3>
+
+  <p><b>Paper training का लक्ष्य एक formula में लिखता है। Rollouts का औसत reward जितना हो सके ऊँचा हो, और नया model reference से ज़्यादा दूर न जाए।</b> Formula ये है: <span class="mine">paper से</span></p>
+  <div class="formula">max<sub>π<sub>θ</sub></sub> 𝔼<sub>x∼𝒟, y∼π<sub>θ</sub>(·|x; R)</sub> [ r<sub>φ</sub>(x, y) ] − β 𝔻<sub>KL</sub>[ π<sub>θ</sub>(y|x; R) ‖ π<sub>ref</sub>(y|x; R) ]</div>
+  <p>नीचे की table हर symbol को हमारे example से जोड़ती है:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>मतलब</th><th>हमारे example में</th></tr></thead>
+    <tbody>
+      <tr><td>π<sub>θ</sub></td><td>Policy LLM। π (pi) policy का आम निशान है, और <button class="def" data-w="w-eta-theta">θ</button> उसके parameters।</td><td>Search-R1 से train हो रहा LLM</td></tr>
+      <tr><td>x ∼ 𝒟</td><td>Dataset 𝒟 से random निकाला एक सवाल x। ∼ का मतलब है <q>इसमें से random निकाला</q>।</td><td>Hoyer वाला सवाल</td></tr>
+      <tr><td>y ∼ π<sub>θ</sub>(·|x; R)</td><td>Policy का बनाया rollout, जिसमें search engine R के लौटाए passages भी हैं</td><td>o<sub>1</sub> से o<sub>4</sub></td></tr>
+      <tr><td>r<sub>φ</sub>(x, y)</td><td>Reward: आख़िरी जवाब और सही जवाब का Exact Match। Paper कोई trained reward model नहीं रखता।</td><td>o<sub>4</sub> का 1, o<sub>2</sub> का 0</td></tr>
+      <tr><td>𝔼[ · ]</td><td>Expected value, यानी बहुत सारे rollouts पर औसत। नीचे आता है।</td><td>(1 + 0 + 0 + 1) ÷ 4 = 0.5</td></tr>
+      <tr><td>π<sub>ref</sub></td><td>Reference LLM, training से पहले की जमी हुई copy</td><td>पड़ाव 4 वाली copy</td></tr>
+      <tr><td>𝔻<sub>KL</sub>[ · ‖ · ]</td><td>KL divergence, दोनों models की probabilities की दूरी। नीचे आता है।</td><td>1.146</td></tr>
+      <tr><td>β</td><td>KL कितना भारी गिना जाए, ये तय करने वाला number, यानी एक <button class="def" data-w="w-hyperparam">hyperparameter</button></td><td>Paper में 0.001</td></tr>
+      <tr><td>max<sub>π<sub>θ</sub></sub></td><td>Training θ को ऐसे बदलती है, कि पूरा expression बड़ा हो</td><td>–</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4 class="sub" id="expect">Expected value: probability से तौला हुआ औसत</h4>
+
+  <p><b>Expected value हर नतीजे को उसकी probability से गुणा करके जोड़ता है।</b> मान लीजिए Hoyer वाले सवाल पर policy 0.6 probability से search करती है, और ऐसे हर rollout का reward 1 है। बाकी 0.4 बार वो सीधे जवाब देती है, और reward 0 पाती है। तब 𝔼[r] = 0.6 × 1 + 0.4 × 0 = 0.6 है। <span class="mine">numbers मेरे</span></p>
+
+  <p>Training ये probabilities पहले से नहीं जानती, इसलिए वो rollouts बनाकर उनका औसत लेती है। पड़ाव 1 के चार rollouts से अंदाज़ा (1 + 0 + 0 + 1) ÷ 4 = 0.5 है। Rollouts जितने ज़्यादा हों, ये औसत 𝔼[r] के उतना पास आता है। Slide के graphs वाला train reward भी training के rollouts पर ऐसा ही औसत है। <span class="mine">ये मेरी समझ है, paper train reward की परिभाषा नहीं लिखता</span></p>
+
+  <h4 class="sub" id="kldiv">KL divergence: log-ratio का औसत</h4>
+
+  <p><b>KL divergence नापता है कि नया model अपने फ़ैसलों को reference model से कितनी अलग probabilities देता है।</b> ये नाप उन फ़ैसलों पर औसत है, जो नया model सच में लेता है। पड़ाव 4 का example लीजिए, जहाँ एक जगह पर दो ही options हैं। Reference &lt;search&gt; को 0.2 और &lt;answer&gt; को 0.8 देता है, और नया model 0.9 और 0.1। KL तीन steps में निकलता है:</p>
+  <ol class="plain">
+    <li>हर option का ratio लीजिए, यानी नई probability ÷ reference की probability: &lt;search&gt; के लिए 0.9 ÷ 0.2 = 4.5, और &lt;answer&gt; के लिए 0.1 ÷ 0.8 = 0.125।</li>
+    <li>हर ratio का <button class="def" data-w="w-ln">ln</button> लीजिए। ln बताता है कि e को किस power तक उठाएँ, और ln(a ÷ b) = ln a − ln b। इसलिए ln 4.5 = ln 0.9 − ln 0.2 = −0.105 − (−1.609) = 1.504। इसी तरह ln 0.125 = −2.079।</li>
+    <li>इन्हें नए model की probabilities से तौलकर जोड़िए: 0.9 × 1.504 + 0.1 × (−2.079) = 1.354 − 0.208 = 1.146।</li>
+  </ol>
+  <div class="formula">𝔻<sub>KL</sub>(π ‖ π<sub>ref</sub>) = ∑<sub>y</sub> π(y) · ln <span class="frac"><span>π(y)</span><span>π<sub>ref</sub>(y)</span></span></div>
+  <p>यहाँ π(y) नए model की probabilities हैं (0.9 और 0.1), और ln वाला हिस्सा step 2 के log-ratios (1.504 और −2.079)। <button class="def" data-w="w-sigma">∑</button> दोनों options पर जोड़ता है, और नतीजा 1.146 है। ये ऊपर वाला 𝔼 ही है: log-ratio का औसत, नए model की अपनी probabilities से तौला हुआ।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>नया model: &lt;search&gt;, &lt;answer&gt;</th><th class="numh">KL</th></tr></thead>
+    <tbody>
+      <tr><td>0.2, 0.8 (reference जैसा)</td><td class="num">0</td></tr>
+      <tr><td>0.25, 0.75<span class="sub">0.25 × 0.223 + 0.75 × (−0.065) = 0.056 − 0.049</span></td><td class="num">0.007</td></tr>
+      <tr class="hi"><td>0.9, 0.1</td><td class="num">1.146</td></tr>
+    </tbody>
+  </table></div>
+  <p>Ratio 1 से बड़ा हो, तो ln positive है, और 1 से छोटा हो, तो negative। Negative ln वाले option को कम वज़न मिलता है, क्योंकि नया model उसे कम probability देता है। इसलिए KL कभी 0 से नीचे नहीं जाता, और 0 सिर्फ़ तब होता है, जब दोनों models बराबर हों। <b>छोटे बदलाव पर KL बहुत छोटा रहता है, और बड़े बदलाव पर तेज़ी से बढ़ता है: 0.007 से 1.146।</b></p>
+
+  <p>Paper में β = 0.001 है, इसलिए 1.146 वाली दूरी भी सिर्फ़ 0.001 × 1.146 = 0.001146 घटाती है, जबकि सही जवाब का reward 1 है। <span class="mine">β paper से, हिसाब मेरा</span> Paper KL भी सिर्फ़ model के लिखे tokens पर गिनता है, पड़ाव 8 वाले mask के साथ। <span class="mine">paper से</span></p>
+
+  <p>PPO और GRPO इस penalty को अलग जगह जोड़ते हैं। PPO उसे reward के अंदर जोड़ता है, यानी Exact Match का 1 या 0 और reference से KL मिलकर r बनाते हैं। Slide के PPO diagram में यही ⊕ है। GRPO KL को सीधे training के लक्ष्य में जोड़ता है, और slide पर reference LLM से निकली KL वाली line यही है। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="clip">
+  <h3><span class="cn">7</span>Probability ratio और clipping: एक update में कितना बदलें</h3>
+
+  <p><b>Probability ratio बताता है कि किसी token की probability अब, rollout बनाने वाले model के मुकाबले, कितने गुना है।</b> Clipping इस ratio को एक तय हद के अंदर रखता है, ताकि एक update में model बहुत न बदले। Ratio की ज़रूरत इसलिए है, क्योंकि rollouts महँगे हैं: हर rollout में model कई सौ tokens लिखता है, और बीच में searches चलती हैं।</p>
+
+  <p>इसलिए training rollouts के एक batch को एक से ज़्यादा updates में इस्तेमाल करती है। Paper में batch 512 का है, और हर update 256 के mini-batch पर होता है। <span class="mine">paper से</span> यानी rollouts के हर batch से 2 updates निकलते हैं। <span class="mine">मेरा हिसाब</span> पहले update के बाद model बदल चुका है, लेकिन rollouts अब भी पुराने model के बनाए हैं।</p>
+
+  <p>Rollouts बनाने वाले model को π<sub>old</sub> लिखते हैं, और अभी train हो रहे model को π<sub>θ</sub>। Ratio = π<sub>θ</sub>(token) ÷ π<sub>old</sub>(token)। पहले update पर दोनों एक ही model हैं, इसलिए हर ratio ठीक 1 है। Training का लक्ष्य हर लिखे token पर ratio × A को बड़ा करना है।</p>
+
+  <p>अब पड़ाव 3 का o<sub>4</sub> लीजिए, जिसका advantage +1.73 है। उसमें दूसरी search से पहले वाले &lt;search&gt; token को π<sub>old</sub> ने 0.5 probability दी थी। <span class="mine">मेरा number</span> पहले update के बाद ये 0.55 हो जाए, तो ratio 0.55 ÷ 0.5 = 1.1 है, और term 1.1 × 1.73 = 1.903। Ratio बढ़ता रहे, तो term भी बढ़ता रहता, और एक ही batch से model बहुत आगे निकल जाता।</p>
+
+  <p>इसलिए PPO ratio को काटता है, और इसे <b class="term">clipping</b> कहते हैं। clip(ratio, 1 − ε, 1 + ε) तीन नियमों से चलता है:</p>
+  <ul class="plain">
+    <li>Ratio 1 − ε से नीचे हो, तो 1 − ε लीजिए।</li>
+    <li>Ratio 1 + ε से ऊपर हो, तो 1 + ε लीजिए।</li>
+    <li>Ratio बीच में हो, तो उसे जैसा है, वैसा रखिए।</li>
+  </ul>
+  <p>Paper में ε = 0.2 है, यानी ratio 0.8 से 1.2 के बीच रहता है, और ε भी एक hyperparameter है। <span class="mine">paper से</span> हर token का term ये है:</p>
+  <div class="formula">term = min( ratio × A, clip(ratio, 1 − ε, 1 + ε) × A )</div>
+  <p>min दोनों में से छोटा number चुनता है। o<sub>4</sub> के token की probability 0.75 हो जाए, तो हिसाब चार steps में होता है:</p>
+  <ol class="plain">
+    <li>Ratio: 0.75 ÷ 0.5 = 1.5।</li>
+    <li>बिना clip: 1.5 × 1.73 = 2.595।</li>
+    <li>Clip के साथ ratio 1.2 पर रुकता है: 1.2 × 1.73 = 2.076।</li>
+    <li>min(2.595, 2.076) = 2.076। Ratio 1.2 से ऊपर जाए, तो भी ये number नहीं बदलता। इसलिए इस update में training को token और ऊपर धकेलने से कुछ नहीं मिलता, और ऊपर की हद 0.5 × 1.2 = 0.6 है।</li>
+  </ol>
+
+  <p>Negative advantage पर यही रोक नीचे की तरफ़ लगती है। o<sub>2</sub> ने बिना search सीधे &lt;answer&gt; लिखा था, और उसका advantage −0.58 है। मान लीजिए π<sub>old</sub> ने उस &lt;answer&gt; token को 0.5 दिया था, और अब वो 0.3 है। <span class="mine">मेरे numbers</span></p>
+  <p>Ratio 0.6 है, और 0.6 × (−0.58) = −0.348। Clip ratio को 0.8 पर रोकता है: 0.8 × (−0.58) = −0.464। min(−0.348, −0.464) = −0.464, जो clip वाला term है, इसलिए token को और नीचे धकेलने से कुछ नहीं मिलता। नीचे की हद 0.5 × 0.8 = 0.4 है।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">Ratio</th><th class="numh">A = +1.73</th><th class="numh">A = −0.58</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0.6</td><td class="num">1.038</td><td class="num">−0.464<span class="sub">clip वाला</span></td></tr>
+      <tr><td class="num">1.0</td><td class="num">1.73</td><td class="num">−0.58</td></tr>
+      <tr><td class="num">1.1</td><td class="num">1.903</td><td class="num">−0.638</td></tr>
+      <tr class="hi"><td class="num">1.5</td><td class="num">2.076<span class="sub">clip वाला</span></td><td class="num">−0.87</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Clipping सिर्फ़ उस तरफ़ रोकता है, जिधर training पहले से जा रही थी।</b> Positive advantage पर ratio 1.2 के ऊपर रुकता है, और negative पर 0.8 के नीचे। Token गलत तरफ़ गया हो, तो min बिना clip वाला term चुनता है, और training उसे पूरे ज़ोर से वापस खींचती है। जैसे o<sub>4</sub> के token का ratio 0.6 हो, तो term 0.6 × 1.73 = 1.038 है, और ratio बढ़ने पर term बढ़ता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>o<sub>2</sub> के &lt;answer&gt; token की probability 0.5 से उल्टी तरफ़ बढ़कर 0.7 हो गई। Term कितना है, और क्या training उसे नीचे खींचेगी?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Ratio 0.7 ÷ 0.5 = 1.4 है। बिना clip 1.4 × (−0.58) = −0.812, और clip के साथ 1.2 × (−0.58) = −0.696। min(−0.812, −0.696) = −0.812, यानी बिना clip वाला term। Ratio घटने पर ये term बढ़ता है, इसलिए training token को पूरे ज़ोर से नीचे खींचती है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="mask">
+  <h3><span class="cn">8</span>Retrieved tokens का mask: training किन tokens से सीखती है</h3>
+
+  <p><b>Search-R1 training का हिसाब सिर्फ़ उन tokens पर करता है, जो model ने खुद लिखे। &lt;information&gt; के अंदर के tokens हिसाब से बाहर रहते हैं, और इसे retrieved token masking कहते हैं।</b> इसके लिए paper हर token y<sub>t</sub> पर एक निशान I(y<sub>t</sub>) लगाता है। Token model ने लिखा हो, तो I(y<sub>t</sub>) = 1, और search engine से आया हो, तो 0। ये lesson 13 वाले <button class="def" data-w="w-indicator">𝟙[शर्त]</button> जैसा ही है। <span class="mine">paper से</span></p>
+
+  <p>फिर एक rollout के सारे terms ऐसे मिलते हैं:</p>
+  <div class="formula"><span class="frac"><span>1</span><span>∑<sub><i>t</i></sub> I(y<sub><i>t</i></sub>)</span></span> ∑<sub><i>t</i>: I(y<sub><i>t</i></sub>) = 1</sub> term<sub><i>t</i></sub></div>
+  <p>नीचे का ∑ गिनता है कि model ने कितने tokens लिखे, और ऊपर वाला ∑ सिर्फ़ उन्हीं tokens के terms जोड़ता है। यानी ये model के अपने tokens पर औसत है, और term<sub><i>t</i></sub> पड़ाव 7 वाला min है।</p>
+
+  <p>Slide के trace पर गिनकर देखिए। Model के लिखे हिस्सों में, यानी चार &lt;think&gt;, तीन &lt;search&gt; और एक &lt;answer&gt; में, कुल 114 शब्द हैं। तीन &lt;information&gt; blocks में 105, 106 और 105, यानी 316 शब्द हैं। <span class="mine">मेरी गिनती, शब्दों में, tokens में नहीं</span> Mask के साथ training सिर्फ़ 114 पर सीखती है, जबकि बाकी 316 text का करीब तीन-चौथाई हैं।</p>
+
+  <p>पहले update पर हर ratio 1 है। तब GRPO में o<sub>4</sub> के हर लिखे token का term 1 × 1.73 = 1.73 है, और उनका औसत भी 1.73। Advantage पूरे rollout का एक ही number है, इसलिए हर लिखे token को बराबर ज़ोर मिलता है। December 7, 1973 वाले बिना सबूत tokens भी इसी 1.73 के साथ ऊपर जाते हैं।</p>
+
+  <p>Mask न हो, तो दो गलत चीज़ें होती हैं। Reward 1 वाले rollout में training John W. Henry वाले passage के tokens की probability भी बढ़ाती है, यानी model ऐसा text खुद लिखना सीखता है। Reward 0 वाले rollout में training Wikipedia से आए सही text की probability घटाती है, जबकि वो text model का फ़ैसला था ही नहीं। Paper कहता है कि mask से training ज़्यादा stable रहती है, और ये experiment दिखाता है: <span class="mine">paper से</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Dataset</th><th class="numh">Mask के साथ</th><th class="numh">बिना mask</th></tr></thead>
+    <tbody>
+      <tr><td>NQ</td><td class="num">0.480</td><td class="num">0.388</td></tr>
+      <tr><td>HotpotQA</td><td class="num">0.433</td><td class="num">0.325</td></tr>
+      <tr><td>Musique</td><td class="num">0.196</td><td class="num">0.108</td></tr>
+      <tr class="hi"><td>7 datasets का औसत</td><td class="num">0.431</td><td class="num">0.343</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Qwen2.5-7B base, PPO, Exact Match। सातों datasets पर mask वाला model आगे है।</p>
+  <p><b>Mask के बिना 7 datasets का औसत 0.431 से गिरकर 0.343 पर आता है।</b> Musique पर फ़र्क सबसे बड़ा है: 0.196 बनाम 0.108, यानी करीब 1.8 गुना।</p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="advsource">
+  <h3><span class="cn">9</span>Advantage कहाँ से आता है: PPO का value model और GAE, और GRPO का group</h3>
+
+  <h4 class="sub" id="gae">PPO: value model, GAE और हर token का अपना advantage</h4>
+
+  <p><b>PPO में value model हर token पर अंदाज़ा लगाता है कि आगे कितना reward मिलेगा। Advantage असली reward और इस अंदाज़े का फ़र्क है।</b> इसलिए एक ही rollout के अलग tokens को अलग advantage मिल सकता है। GRPO में o<sub>4</sub> के हर token को एक ही +1.73 मिला था। नीचे slide का trace है, जिसका reward 1 है, और चार जगहों पर value model के अंदाज़े हैं: <span class="mine">अंदाज़े मेरे बनाए</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Trace में कहाँ</th><th class="numh">अंदाज़ा V</th><th class="numh">1 − V</th></tr></thead>
+    <tbody>
+      <tr><td>शुरुआत, पहला &lt;think&gt;</td><td class="num">0.3</td><td class="num">0.7</td></tr>
+      <tr><td>John William Henry II की तारीख पढ़ने के बाद, तीसरी query</td><td class="num">0.6</td><td class="num">0.4</td></tr>
+      <tr><td>तीसरी search का नतीजा पढ़ने के बाद, आख़िरी &lt;think&gt;</td><td class="num">0.5</td><td class="num">0.5</td></tr>
+      <tr><td>&lt;answer&gt; से ठीक पहले</td><td class="num">0.9</td><td class="num">0.1</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Slide पर V और r से A बनाने वाला box <b class="term">GAE</b> है, यानी generalized advantage estimation। GAE हर कदम पर एक छोटा फ़र्क δ निकालता है: उस कदम का reward, जमा अगले कदम का अंदाज़ा, घटा इस कदम का अंदाज़ा। फिर वो आगे के सारे δ जोड़ता है। GAE में दो numbers और होते हैं, γ (gamma) और λ (lambda), और paper दोनों को 1 रखता है। तब GAE बस यही जोड़ है। <span class="mine">paper से</span></p>
+  <ol class="plain">
+    <li>δ<sub>1</sub> = 0 + 0.6 − 0.3 = 0.3। पहले कदम पर reward 0 है, क्योंकि reward सिर्फ़ आख़िर में मिलता है।</li>
+    <li>δ<sub>2</sub> = 0 + 0.5 − 0.6 = −0.1। तीसरी search का नतीजा काम का नहीं था, इसलिए अंदाज़ा गिरा।</li>
+    <li>δ<sub>3</sub> = 0 + 0.9 − 0.5 = 0.4।</li>
+    <li>δ<sub>4</sub> = 1 + 0 − 0.9 = 0.1। आख़िरी कदम पर reward 1 है, और उसके बाद कुछ नहीं, इसलिए अगला अंदाज़ा 0 है।</li>
+    <li>शुरुआत का advantage = 0.3 − 0.1 + 0.4 + 0.1 = 0.7, यानी 1 − 0.3। बीच के अंदाज़े +0.6 और −0.6 की तरह आपस में कट जाते हैं।</li>
+  </ol>
+  <p>इसलिए γ = λ = 1 पर हर token का advantage reward − V है, जैसे तीसरी query पर 1 − 0.6 = 0.4। γ या λ 1 से छोटे हों, तो दूर के δ को कम वज़न मिलता है, और ये सीधा रूप नहीं बचता। असली reward में हर token पर KL वाला छोटा हिस्सा भी जुड़ता है, जो इस example में नहीं है।</p>
+
+  <p>Value model भी train होता है, इसलिए slide पर उसका box पीला है, और GAE से उस तक एक arrow लौटता है। Training के शुरू के steps में उसके अंदाज़े अभी ठीक नहीं होते। Paper के मुताबिक इसी वजह से PPO, GRPO से धीमे सीखना शुरू करता है। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="grpo5">GRPO: paper वाला 5 rollouts का group</h4>
+
+  <p>Paper GRPO में हर सवाल पर 5 rollouts बनाता है, यानी G = 5। <span class="mine">paper से</span> मान लीजिए Hoyer वाले सवाल पर rewards 1, 0, 1, 0, 0 आए। <span class="mine">मेरे numbers</span> Advantage पड़ाव 3 के तरीके से पाँच steps में निकलता है:</p>
+  <ol class="plain">
+    <li>औसत: (1 + 0 + 1 + 0 + 0) ÷ 5 = 0.4।</li>
+    <li>औसत से फ़र्क: +0.6, −0.4, +0.6, −0.4, −0.4।</li>
+    <li>Squares: 0.36, 0.16, 0.36, 0.16, 0.16, जिनका जोड़ 1.2 है।</li>
+    <li>Squares का औसत 1.2 ÷ 5 = 0.24 है, और √0.24 = 0.490। जाँच: 0.49 × 0.49 = 0.2401।</li>
+    <li>Advantages: सही rollouts का 0.6 ÷ 0.490 = +1.22, और गलत का −0.4 ÷ 0.490 = −0.82।</li>
+  </ol>
+  <p>यहाँ standard deviation में G से भाग दिया है, जैसे पड़ाव 3 में। कुछ implementations G − 1 से भाग देते हैं: तब std √(1.2 ÷ 4) = 0.548 है, और advantages +1.10 और −0.73। Signs और क्रम वही रहते हैं, और paper अपने formula में ये detail नहीं लिखता।</p>
+
+  <h4 class="sub" id="formulas">Paper के दोनों पूरे formulas</h4>
+
+  <p>अब आप GRPO वाला पूरा formula पढ़ सकते हैं। Ratio को मैंने छोटे में ρ लिखा है, और paper उसकी जगह पूरा भाग लिखता है: <span class="mine">paper से</span></p>
+  <div class="formula">ρ<sub><i>i,t</i></sub> = π<sub>θ</sub>(y<sub><i>i,t</i></sub> | x, y<sub><i>i,&lt;t</i></sub>; R) ÷ π<sub>old</sub>(y<sub><i>i,t</i></sub> | x, y<sub><i>i,&lt;t</i></sub>; R)</div>
+  <div class="formula">J<sub>GRPO</sub>(θ) = 𝔼 [ <span class="frac"><span>1</span><span>G</span></span> ∑<sub><i>i</i>=1</sub><sup>G</sup> <span class="frac"><span>1</span><span>∑<sub><i>t</i></sub> I(y<sub><i>i,t</i></sub>)</span></span> ∑<sub><i>t</i>: I(y<sub><i>i,t</i></sub>)=1</sub> min( ρ<sub><i>i,t</i></sub> Â<sub><i>i,t</i></sub>, clip(ρ<sub><i>i,t</i></sub>, 1 − ε, 1 + ε) Â<sub><i>i,t</i></sub> ) − β 𝔻<sub>KL</sub>[π<sub>θ</sub> ‖ π<sub>ref</sub>] ]</div>
+  <ul class="plain">
+    <li>(1 ÷ G) ∑<sub><i>i</i></sub>: G = 5 rollouts का औसत, इसी पड़ाव से।</li>
+    <li>(1 ÷ ∑<sub><i>t</i></sub> I) ∑<sub><i>t</i>: I=1</sub>: model के अपने tokens पर औसत, जैसे trace के 114 शब्द (पड़ाव 8)।</li>
+    <li>y<sub><i>i,&lt;t</i></sub> और R: token t से पहले का सारा text और search engine, क्योंकि हर token की probability इन्हीं को देखकर बनती है।</li>
+    <li>ρ<sub><i>i,t</i></sub>, clip और ε = 0.2: पड़ाव 7, जैसे ratio 1.1।</li>
+    <li>Â<sub><i>i,t</i></sub>: advantage, जो GRPO में rollout के हर token पर एक ही है, जैसे +1.22।</li>
+    <li>β 𝔻<sub>KL</sub>: पड़ाव 6, β = 0.001।</li>
+  </ul>
+  <p>PPO वाला formula यही है, बस उसमें G वाला औसत और KL वाला हिस्सा नहीं है: <span class="mine">paper से</span></p>
+  <div class="formula">J<sub>PPO</sub>(θ) = 𝔼 [ <span class="frac"><span>1</span><span>∑<sub><i>t</i></sub> I(y<sub><i>t</i></sub>)</span></span> ∑<sub><i>t</i>: I(y<sub><i>t</i></sub>)=1</sub> min( ρ<sub><i>t</i></sub> A<sub><i>t</i></sub>, clip(ρ<sub><i>t</i></sub>, 1 − ε, 1 + ε) A<sub><i>t</i></sub> ) ]</div>
+  <p>PPO को तुलना के लिए group नहीं चाहिए, इसलिए G वाला औसत नहीं है। A<sub><i>t</i></sub> GAE से आता है, और token के हिसाब से बदलता है। KL यहाँ नहीं दिखता, क्योंकि PPO उसे reward के अंदर जोड़ चुका है। दोनों formulas में training J को बड़ा करती है। Lesson 4 की training loss छोटा करती थी, और −J को loss मानें, तो दोनों एक ही बात हैं। इसीलिए paper पड़ाव 8 वाले mask को loss masking कहता है।</p>
+
+  <h4 class="sub" id="ppovsgrpo">Paper में PPO बनाम GRPO</h4>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Model</th><th class="numh">PPO</th><th class="numh">GRPO</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Qwen2.5-7B base</td><td class="num">0.431</td><td class="num">0.350</td></tr>
+      <tr><td>Qwen2.5-7B instruct</td><td class="num">0.385</td><td class="num">0.396</td></tr>
+      <tr><td>Qwen2.5-3B base</td><td class="num">0.303</td><td class="num">0.312</td></tr>
+      <tr><td>Qwen2.5-3B instruct</td><td class="num">0.325</td><td class="num">0.336</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">7 datasets का औसत Exact Match। <span class="mine">paper से</span></p>
+  <p>Paper के तीन नतीजे हैं। GRPO जल्दी सीखता है, क्योंकि उसे value model के ठीक होने का इंतज़ार नहीं करना पड़ता। PPO ज़्यादा stable है, जबकि GRPO में लंबी training के बाद train reward अचानक गिर जाता है, जिसे paper reward collapse कहता है। आख़िरी train reward दोनों का करीब बराबर है, और paper PPO को default रखता है। <span class="mine">paper से</span></p>
+
+  <p>Paper ने group size भी बदलकर देखा: 1, 3 और 5। Size 1 पर तुलना के लिए group नहीं बचता, और paper के मुताबिक तब GRPO पुराना REINFORCE तरीका बन जाता है। 7 datasets का औसत size 1 पर 0.410, size 3 पर 0.363 और size 5 पर 0.350 है। Paper के मुताबिक बड़ा group जल्दी सीखता है, लेकिन collapse का खतरा बढ़ाता है, और size 1 नए datasets पर सबसे अच्छा रहा। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="paper">
+  <h3><span class="cn">10</span>Paper का setup, और slide की table की हर row</h3>
+
+  <p>हमारे example में 4 rollouts और हाथ से बने numbers थे। Paper में mechanism वही है, बस पैमाना बड़ा है: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>चीज़</th><th>हमारा example</th><th>Search-R1 paper में</th></tr></thead>
+    <tbody>
+      <tr><td>Policy LLM</td><td>–</td><td>Qwen2.5-3B और 7B, दोनों के base और instruct</td></tr>
+      <tr><td>Search engine</td><td>–</td><td>E5 retriever, 2018 का Wikipedia dump, वही जो <a href="12-dpr-dense.html">lesson 12</a> के DPR ने लिया</td></tr>
+      <tr><td>हर search पर passages</td><td>–</td><td>Top 3</td></tr>
+      <tr><td>Training data</td><td>Hoyer वाला सवाल</td><td>NQ और HotpotQA के training sets, मिलाकर</td></tr>
+      <tr><td>Reward</td><td>Exact Match</td><td>Exact Match, बिना format reward और बिना trained reward model</td></tr>
+      <tr><td>GRPO group, G</td><td>4</td><td>5</td></tr>
+      <tr><td>एक rollout में actions</td><td>3 searches + 1 answer</td><td>ज़्यादा से ज़्यादा 4</td></tr>
+      <tr><td>Random चुनना</td><td>0.6 और 0.4</td><td>Temperature 1.0, यानी model की अपनी probabilities जस की तस</td></tr>
+      <tr><td>β, ε</td><td>–</td><td>0.001 और 0.2</td></tr>
+      <tr><td>Training</td><td>–</td><td>500 steps, batch 512, 8 H100 GPUs</td></tr>
+      <tr><td>लंबाई की हद</td><td>–</td><td>जवाब 500 tokens, और लौटा text 500 tokens</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Rollout के दौरान system हर action के बाद देखता है कि model ने क्या लिखा। &lt;search&gt; मिला, तो search चलती है, और &lt;answer&gt; मिला, तो rollout ख़त्म होता है। दोनों में से कुछ न मिले, तो system text में <q>My action is not correct. Let me rethink.</q> जोड़ देता है। <span class="mine">paper से</span> Slide के trace में 3 searches और 1 answer हैं, यानी ठीक 4 actions, जो paper की हद है। <span class="mine">ये बात मेरी गिनती है</span></p>
+
+  <p>Instruction भी जानबूझकर छोटी है। Paper लिखता है कि उसने सिर्फ़ format तय किया। कब search करनी है या कैसे सोचना है, ये उसने नहीं बताया, ताकि RL का सिखाया हुआ साफ़ दिखे। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="rows">Slide की table की हर row</h4>
+
+  <p>Table में † वाले datasets, NQ और HotpotQA, के training sets पर model train हुआ। ⋆ वाले datasets training में नहीं थे, इसलिए वहाँ model नए सवालों पर परखा गया। <span class="mine">paper से</span> Rows चार किस्म की हैं:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Method</th><th>क्या करता है</th><th class="numh">HotpotQA</th></tr></thead>
+    <tbody>
+      <tr><td>Direct inference</td><td>बिना search, सीधा जवाब</td><td class="num">0.183</td></tr>
+      <tr><td>CoT</td><td>Chain-of-thought: जवाब से पहले कदम-दर-कदम सोचना, बिना search</td><td class="num">0.092</td></tr>
+      <tr><td>RAG</td><td>सवाल पर एक बार search, top 3 passages</td><td class="num">0.299</td></tr>
+      <tr><td>IRCoT</td><td>Prompt से हर सोच के कदम के बाद फिर search</td><td class="num">0.133</td></tr>
+      <tr><td>Search-o1</td><td>Prompt से search करवाने वाला एक और तरीका, बिना training</td><td class="num">0.187</td></tr>
+      <tr><td>SFT</td><td>सवाल-जवाब जोड़ों पर fine-tuning, बिना search</td><td class="num">0.217</td></tr>
+      <tr><td>R1-base, R1-instruct</td><td>DeepSeek-R1 नाम के model वाली RL training, सिर्फ़ think और answer के साथ, बिना search</td><td class="num">0.242, 0.237</td></tr>
+      <tr><td>Rejection Sampling</td><td>Instruct model से हर सवाल पर 5 rollouts, search के साथ, और सिर्फ़ सही वालों पर fine-tuning</td><td class="num">0.331</td></tr>
+      <tr class="hi"><td>Search-R1-base</td><td>Search के साथ RL, PPO</td><td class="num">0.433</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">HotpotQA का Exact Match, Qwen2.5-7B। बिना training वाले तरीकों, यानी Direct inference, CoT, RAG, IRCoT और Search-o1, में instruct model है, क्योंकि paper के मुताबिक base model instructions नहीं मानता। <span class="mine">paper से</span></p>
+
+  <ul class="plain">
+    <li>R1 और Search-R1 में फ़र्क सिर्फ़ search का है। NQ पर R1-base 0.297 पर है, और Search-R1-base 0.480 पर, यानी search से 0.183 का फ़ायदा।</li>
+    <li>Rejection Sampling पड़ाव 3 के सीधे तरीके जैसा है: वो सिर्फ़ reward 1 वाले rollouts से सीखता है, और गलत rollouts को नीचे नहीं धकेलता। Search format दोनों का एक है, फिर भी 7 datasets का औसत 0.348 से 0.431 हो जाता है। <span class="mine">ये तुलना मेरी है, numbers paper से</span></li>
+    <li>7B पर CoT सीधे जवाब से भी नीचे है, जैसे NQ पर 0.048 बनाम 0.134। Paper इसकी वजह नहीं लिखता।</li>
+  </ul>
+
+  <p>Paper का दावा है कि 7B पर Search-R1 सबसे अच्छे baseline से औसतन 24% आगे है। ये 7 datasets के औसत से निकलता है, जिनमें Bamboogle भी है, जो slide पर नहीं दिखता। Search-R1-base का औसत 0.431 है, और सबसे अच्छे baseline Rejection Sampling का 0.348। 0.431 ÷ 0.348 = 1.24, यानी 24%। <span class="mine">हिसाब मेरा, numbers paper से</span> RAG के मुकाबले औसत 0.304 से 0.431 है। 3B पर फ़ायदा कम है, और paper के मुताबिक बड़ा model search बेहतर सीखता है।</p>
+
+  <h4 class="sub" id="experiments">Paper के बाकी experiments</h4>
+
+  <ul class="plain">
+    <li><b>हर search पर कितने passages:</b> 7 datasets का औसत top 1 पर 0.375, top 3 पर 0.431 और top 5 पर 0.400 है। Paper के मुताबिक 1 passage में अक्सर जवाब नहीं होता, और 5 में बेकार passages ज़्यादा आते हैं। <span class="mine">paper से</span></li>
+    <li><b>Base बनाम instruct:</b> Instruct model ऊँचे train reward से शुरू होता है, और जल्दी सीखता है। Training के आख़िर तक दोनों का train reward करीब बराबर हो जाता है। <span class="mine">paper से</span></li>
+    <li><b>जवाब की लंबाई:</b> पहले करीब 100 steps में लंबाई घटती है, और train reward थोड़ा बढ़ता है, क्योंकि model फ़ालतू शब्द छोड़ता है। उसके बाद दोनों बढ़ते हैं, क्योंकि model ज़्यादा search करता है, और लौटे passages text को लंबा करते हैं। <span class="mine">paper से</span></li>
+  </ul>
+
+  <p>Paper Hoyer वाले trace को सफल case गिनता है, और लिखता है कि पहली query ख़ास मतलब वाली नहीं थी। <span class="mine">paper से</span> Paper के failure cases भी दिखाते हैं कि सही passage मिलना काफ़ी नहीं है। एक case में लौटा document साफ़ लिखता है कि Weezer के पहले album को The Blue Album कहते हैं। फिर भी model जवाब में Weezer लिखता है, और reward 0 पाता है।</p>
+</article>
+
+<!-- 11 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">11</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे Stanford की Search-R1 वाली तीनों slides हैं, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई symbol अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p59.png"><img src="img/slide-p59.png" alt="Stanford slide: Search-R1 का trace, Jed Hoyer वाले सवाल पर" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p59-top.png"><img src="img/slide-p59-top.png" alt="उसी trace का पहला हिस्सा, पहली दो searches, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p59-bottom.png"><img src="img/slide-p59-bottom.png" alt="उसी trace का दूसरा हिस्सा, तीसरी search और जवाब, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की trace वाली slide, और नीचे उसका trace दो हिस्सों में, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Trace वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Slide के नीचे लिखा है: <q>Search-R1 optimizes LLM reasoning trajectories with multi-turn search interactions</q>। इस trace में trajectory और multi-turn क्या हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Trajectory पूरा rollout है, पहले &lt;think&gt; से &lt;answer&gt; तक। Multi-turn का मतलब है कि model और search engine बारी-बारी लिखते हैं, यहाँ 3 बार। Optimize का मतलब है कि training अच्छे advantage वाले rollouts के लिखे tokens की probability बढ़ाती है। (पड़ाव 1, 2 और 3)</p>
+        </details>
+      </li>
+      <li>
+        <p>इस trace में कितने actions हैं, और paper की हद से इसका क्या रिश्ता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>3 searches और 1 answer, यानी 4 actions। Paper एक rollout में ज़्यादा से ज़्यादा 4 actions देता है, इसलिए ये trace ठीक हद पर ख़त्म हुआ। (पड़ाव 10)</p>
+        </details>
+      </li>
+      <li>
+        <p>Training इस trace के कितने शब्दों से सीखती है, और December 7, 1973 वाले शब्दों का क्या होता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>430 में से सिर्फ़ model के लिखे 114 शब्दों से, क्योंकि 316 retrieved शब्द mask होते हैं। December 7, 1973 model ने लिखा है, इसलिए वो हिसाब में है। Reward 1 है, तो उसकी probability भी बढ़ती है। (पड़ाव 2 और 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p60.png"><img src="img/slide-p60.png" alt="Stanford slide: PPO और GRPO, search engine के साथ, और instruction" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p60-ppo.png"><img src="img/slide-p60-ppo.png" alt="उसी slide का PPO वाला diagram, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p60-grpo.png"><img src="img/slide-p60-grpo.png" alt="उसी slide का GRPO वाला diagram, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p60-prompt.png"><img src="img/slide-p60-prompt.png" alt="उसी slide की instruction, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की PPO और GRPO वाली slide, और नीचे PPO का diagram, GRPO का diagram और instruction, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">PPO और GRPO वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>PPO वाले diagram में ⊕ किन दो चीज़ों को जोड़ता है? GRPO में वही चीज़ कहाँ है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Reward Model का Exact Match और Reference LLM से निकली KL penalty, और दोनों मिलकर r बनाते हैं। GRPO में KL reward में नहीं जुड़ता। वो Reference LLM से सीधे policy के update तक जाता है, यानी training के लक्ष्य में। (पड़ाव 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>PPO में v और r से A कौन बनाता है? इस paper की settings पर A का हिसाब कैसा है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>GAE बनाता है। Paper γ और λ को 1 रखता है, इसलिए हर token का A = reward − V है, जैसे trace की शुरुआत में 1 − 0.3 = 0.7। Value LLM पीला है, क्योंकि वो भी train होता है। (पड़ाव 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>Instruction model को क्या करने को कहती है, और क्या नहीं बताती?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>वो सिर्फ़ format बताती है: नई जानकारी पर पहले &lt;think&gt;, कमी हो तो &lt;search&gt;, और जवाब &lt;answer&gt; में। कब search करनी है, कितनी बार, और query कैसी हो, ये वो नहीं बताती। ये बातें model reward से सीखता है। (पड़ाव 2 और 10)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p61.png"><img src="img/slide-p61.png" alt="Stanford slide: नतीजों की table और training के दो graphs" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p61-table.png"><img src="img/slide-p61-table.png" alt="उसी slide की table, बड़ी करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p61-length.png"><img src="img/slide-p61-length.png" alt="उसी slide का ऊपर वाला graph: जवाब की लंबाई और train reward" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p61-search.png"><img src="img/slide-p61-search.png" alt="उसी slide का नीचे वाला graph: valid searches और train reward" loading="lazy"></a>
+    <figcaption>Stanford की नतीजों वाली slide, और नीचे उसकी table और दोनों graphs, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">नतीजों वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>NQ और HotpotQA पर † क्यों है, और बाकी datasets पर ⋆ क्यों?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Model NQ और HotpotQA के training sets पर train हुआ, इसलिए वो in-domain हैं। ⋆ वाले datasets training में नहीं थे, और उन पर model नए किस्म के सवालों पर परखा गया। (पड़ाव 10)</p>
+        </details>
+      </li>
+      <li>
+        <p>Search-R1 के अलावा कौन सी row search format भी लेती है और training भी करती है? HotpotQA पर वो कितनी पीछे है, और क्यों?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Rejection Sampling, 0.331 बनाम 0.433। वो सिर्फ़ सही rollouts पर fine-tune करता है, जबकि Search-R1 advantage से सही को ऊपर और गलत को नीचे धकेलता है। (पड़ाव 3 और 10)</p>
+        </details>
+      </li>
+      <li>
+        <p>ऊपर वाले graph में पहले करीब 100 steps तक जवाब की लंबाई और train reward कैसे चलते हैं, और उसके बाद क्या होता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>शुरू में लंबाई घटती है, और reward थोड़ा बढ़ता है, क्योंकि model फ़ालतू शब्द छोड़ता है। उसके बाद दोनों बढ़ते हैं, क्योंकि model ज़्यादा search करता है, और लौटे passages text लंबा करते हैं। नीचे वाला graph यही दिखाता है: valid searches भी साथ बढ़ती हैं। (पड़ाव 5 और 10)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Search के steps पर labels नहीं चाहिए। Policy, यानी LLM, एक सवाल पर कई rollouts बनाती है, और सिर्फ़ आख़िरी जवाब का Exact Match reward उसे सिखाता है।</li>
+    <li>GRPO advantage group के औसत और standard deviation से बनाता है। PPO उसे value model और GAE से बनाता है, जो γ = λ = 1 पर reward − V है। दोनों हर लिखे token पर min(ratio × A, clip(ratio) × A) बढ़ाते हैं, और β × KL model को reference के पास रखता है।</li>
+    <li>Retrieved tokens mask होते हैं, और mask हटाने पर 7 datasets का औसत 0.431 से 0.343 पर गिरता है। Search-R1 multi-hop पर RAG से बहुत आगे है, लेकिन reward बीच के steps नहीं देखता।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-rl">Reinforcement learning (RL)</dt><dd>कोशिशें करके, हर कोशिश के reward से सीखना। जैसे 4 rollouts में 2 का reward 1 है, तो उन दोनों के tokens की probability बढ़ती है।</dd>
+    <dt id="w-policy">Policy</dt><dd>जो हर कदम पर फ़ैसला लेता है। यहाँ LLM, जो हर बार अगला token चुनता है: सोचना, &lt;search&gt; या &lt;answer&gt;।</dd>
+    <dt id="w-rollout">Rollout (trajectory)</dt><dd>एक सवाल पर शुरू से आख़िरी जवाब तक की एक पूरी कोशिश। जैसे Hoyer वाले सवाल पर o<sub>1</sub>: दोनों तारीखें search कीं, फिर जवाब दिया।</dd>
+    <dt id="w-reward">Reward</dt><dd>Rollout के आख़िर में मिला number। जैसे जवाब हूबहू सही हो तो 1, नहीं तो 0।</dd>
+    <dt id="w-searchr1">Search-R1</dt><dd>LLM को RL से search के फ़ैसले सिखाने वाला तरीका, think, search, information और answer tags के साथ। Reward सिर्फ़ आख़िरी जवाब पर लगता है।</dd>
+    <dt id="w-advantage">Advantage</dt><dd>Rollout उम्मीद से कितना बेहतर या बुरा रहा। जैसे rewards 0, 0, 0, 1 में o<sub>4</sub> का +1.73, और बाकी तीन का −0.58।</dd>
+    <dt id="w-ppo">PPO और value model</dt><dd>RL का आम तरीका, जो आगे के reward का अंदाज़ा लगाने वाला अलग model (value model) train करता है। जैसे अंदाज़ा 0.25 और reward 1 हो, तो advantage +0.75।</dd>
+    <dt id="w-grpo">GRPO</dt><dd>Group के rewards के औसत और standard deviation से advantage। Value model नहीं चाहिए। जैसे 0, 0, 0, 1 पर औसत 0.25 और standard deviation 0.433।</dd>
+    <dt id="w-std">Standard deviation</dt><dd>Numbers के फैलाव का नाप: औसत से फ़र्कों के squares का औसत, फिर square root। जैसे 0, 0, 0, 1 पर औसत 0.25, squares 0.5625, 0.0625, 0.0625, 0.0625, उनका औसत 0.1875, और square root 0.433।</dd>
+    <dt id="w-kl">Reference LLM और KL penalty</dt><dd>Training से पहले वाले model की जमी हुई copy, और नए model को उससे दूर जाने से रोकने वाली penalty। जैसे &lt;search&gt; की probability 0.2 से 0.9 हो जाए, तो penalty बड़ी है।</dd>
+    <dt id="w-expect">Expected value, 𝔼[ · ]</dt><dd>हर नतीजे को उसकी probability से गुणा करके जोड़ना, यानी बहुत सारे rollouts पर औसत। जैसे 0.6 × 1 + 0.4 × 0 = 0.6।</dd>
+    <dt id="w-kldiv">KL divergence</dt><dd>ln(नई probability ÷ reference की probability) का औसत, नए model की probabilities से तौला हुआ। जैसे 0.2 और 0.8 से 0.9 और 0.1 पर 1.146, और 0.25 और 0.75 पर 0.007।</dd>
+    <dt id="w-ratio">Probability ratio</dt><dd>π<sub>θ</sub>(token) ÷ π<sub>old</sub>(token), यानी token की probability rollout बनाने वाले model के मुकाबले कितने गुना है। जैसे 0.55 ÷ 0.5 = 1.1।</dd>
+    <dt id="w-clip">Clipping और ε</dt><dd>Ratio को 1 − ε से 1 + ε के बीच रोकना, और फिर min से छोटा term लेना। जैसे ε = 0.2 और A = +1.73 पर ratio 1.5 का term 2.076 पर रुकता है।</dd>
+    <dt id="w-mask">Retrieved token masking</dt><dd>Training का हिसाब सिर्फ़ model के लिखे tokens पर, और &lt;information&gt; के tokens बाहर। जैसे slide के trace में 430 में से 114 शब्द। Mask हटाने पर औसत 0.431 से 0.343।</dd>
+    <dt id="w-gae">GAE</dt><dd>Generalized advantage estimation: हर कदम पर δ = reward + अगला अंदाज़ा − यह अंदाज़ा, और आगे के सारे δ का जोड़। γ = λ = 1 पर advantage = reward − V, जैसे 1 − 0.3 = 0.7।</dd>
+    <dt id="w-rejsamp">Rejection sampling</dt><dd>हर सवाल पर कई rollouts बनाना, और सिर्फ़ सही जवाब वालों पर fine-tune करना। जैसे paper में हर सवाल पर 5 rollouts, और 7 datasets का औसत 0.348।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="16-agentic-rag-dense.html">पिछला: Lesson 16</a>
+    <a href="18-failure-modes-dense.html">अगला: Lesson 18, RAG कहाँ टूटता है</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Paper: Jin et al., 2025, “Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning”। “मेरे बनाए” और “मेरा” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var r = [0, 0, 0, 1];
+  var box = document.getElementById("gw-r");
+  function render() {
+    box.innerHTML = r.map(function (v, i) { return '<button type="button" data-i="' + i + '" aria-pressed="' + (v ? "true" : "false") + '">o' + (i + 1) + ": reward " + v + "</button>"; }).join("");
+    box.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { var i = Number(b.dataset.i); r[i] = 1 - r[i]; render(); }); });
+    var m = r.reduce(function (a, b) { return a + b; }, 0) / r.length;
+    var sd = Math.sqrt(r.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / r.length);
+    document.getElementById("gw-body").innerHTML = r.map(function (v, i) {
+      var a = sd ? (v - m) / sd : 0;
+      var dir = Math.abs(a) < 1e-9 ? "कोई बदलाव नहीं" : (a > 0 ? "probability बढ़ाइए" : "probability घटाइए");
+      return "<tr><td>o" + (i + 1) + '</td><td class="num">' + v + '</td><td class="num">' + (a > 1e-9 ? "+" : "") + (Math.abs(a) < 1e-9 ? "0.00" : a.toFixed(2)) + "</td><td>" + dir + "</td></tr>";
+    }).join("");
+    document.getElementById("gw-out").innerHTML = "औसत = " + m.toFixed(2) + ", standard deviation = " + sd.toFixed(3) + (sd ? "" : "। सारे rewards बराबर हैं, इसलिए इस सवाल से सीखने को कुछ नहीं।");
+  }
+  render();
+})();
+</script>
+</body>
+</html>

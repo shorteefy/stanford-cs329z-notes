@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Query “when can I get help from a TA” और जवाब वाले office hours page में एक भी शब्द common नहीं है। Text को vectors में बदलकर उनकी तुलना करनी है, और आख़िर में Stanford की embeddings वाली slides खुद पढ़नी हैं।">
+<title>Lesson 3: Vectors और similarity (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+  .plane { display: block; width: 100%; max-width: 380px; margin: 0 auto 12px; touch-action: none; cursor: crosshair; user-select: none; }
+  .plane .grid { stroke: var(--rule); stroke-width: 1; }
+  .plane .axis { stroke: var(--muted); stroke-width: 1.2; }
+  .plane .pv { stroke: var(--muted); stroke-width: 2; }
+  .plane .pd { fill: var(--muted); }
+  .plane .qv { stroke: var(--accent); stroke-width: 3; }
+  .plane .qd { fill: var(--accent); }
+  .plane text { fill: var(--ink); font: 12px "Segoe UI", "Nirmala UI", sans-serif; }
+  .plane text.ax { fill: var(--muted); }
+  .plane text.q { fill: var(--accent); font-weight: 700; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 3 / 18 · <a href="03-vectors.html">आसान</a> · <b>गहरा</b> · <a href="03-vectors-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 3 · गहरा version</p>
+  <h1>Text को numbers में बदलना: vectors और similarity</h1>
+  <p class="lede"><b>Vector numbers की तय लंबाई वाली एक list है। Retriever हर text को vector में बदलता है, और फिर query के vector की हर passage के vector से तुलना करके score देता है।</b> इस तुलना के दो आम तरीके हैं, dot product और cosine similarity, और इस lesson में आप दोनों हाथ से निकालेंगे।</p>
+  <p class="lede">इसकी ज़रूरत <a href="02-retrieval-dense.html#retriever">lesson 2</a> के आख़िर में दिखी थी। Query <q>when can I get help from a TA</q> पर <button class="def" data-w="w-overlap">word overlap</button> ने हर passage को 0 दिया। जवाब office hours page में था: <q>Office hours… run by the TAs</q>। दोनों एक ही बात कहते हैं, लेकिन उनमें एक भी शब्द common नहीं है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 9 पड़ाव हैं। पहले 4 आसान version जैसे ही हैं, और 5 से 9 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#vector">Text की numbers वाली list</a><span class="can">हाथ से किसी passage का vector बना पाएँगे, और dimension का मतलब बता पाएँगे।</span></li>
+      <li><a href="#dot">Dot product: लंबा vector जीतता है</a><span class="can">Dot product हाथ से निकाल पाएँगे, और बता पाएँगे कि लंबा FAQ page ऊपर क्यों आता है।</span></li>
+      <li><a href="#cosine">Cosine similarity: सिर्फ़ दिशा की तुलना</a><span class="can">Length और cosine हाथ से निकाल पाएँगे, और बता पाएँगे कि normalize करने से क्या बदलता है।</span></li>
+      <li><a href="#embedding">Embedding model: हर text का vector अपने आप</a><span class="can">Embedding वाले retriever का offline और online हिस्सा बता पाएँगे, और Stanford की DPR वाली slide पढ़ पाएँगे।</span></li>
+      <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="5"><a href="#angle">Cosine और कोण: दिशा का एक number</a><span class="can">दिखा पाएँगे कि cosine कोण का cosine है, और −1 से 1 के बीच क्यों रहता है।</span></li>
+      <li><a href="#metrics">Dot product, cosine और दूरी</a><span class="can">तीनों से passages का क्रम निकाल पाएँगे, और बता पाएँगे कि DPR ने dot product क्यों चुना।</span></li>
+      <li><a href="#matrix">Index एक matrix है</a><span class="can">Matrix-vector गुणा और transpose हाथ से कर पाएँगे, और slide का E<sub>Q</sub>(q)<sup>⊤</sup>E<sub>P</sub>(p) पढ़ पाएँगे।</span></li>
+      <li><a href="#kinds">Stanford की table: पाँच तरह के embeddings</a><span class="can">Table की हर row समझा पाएँगे, और बता पाएँगे कि एक vector में rare code क्यों दब जाता है।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">इस lesson की तीनों Stanford slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="02-retrieval-dense.html#retriever">Lesson 2</a> (query, passage, score, top-K, word overlap)। पड़ाव 5 से आगे कुछ शब्द बाद के lessons के हैं, जैसे lesson 10 की दूरी और lesson 11 का BM25। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="vector">
+  <h3><span class="cn">1</span>Text की numbers वाली list</h3>
+
+  <p><b>Vector numbers की तय लंबाई वाली list है, जैसे [0.9, 0.1]।</b> List में कितने numbers हैं, उसे vector का <b class="term">dimension</b> कहते हैं। [0.9, 0.1] का dimension 2 है, और [3, 0, 1, 2] का 4। Retriever को हर passage के लिए एक score चाहिए, और numbers की तुलना आसान है, इसलिए वो हर text को vector में बदलता है।</p>
+
+  <p>2 numbers वाले vector को plane पर एक तीर की तरह खींच सकते हैं: पहला number x-axis पर, और दूसरा y-axis पर। Origin (0, 0) से उस point तक का तीर ही vector है, और तीर की दिशा vector की दिशा है।</p>
+
+  <p>अब हर passage को हाथ से दो सवालों पर नापिए, और हर जवाब 0 से 2 के बीच दीजिए। पहला number बताता है कि passage मदद या office hours के बारे में कितना है। दूसरा number बताता है कि वो deadlines के बारे में कितना है। Lesson 2 के corpus से तीन passages लीजिए। साथ में एक नया passage जोड़िए: course का लंबा FAQ page, जिसमें office hours और deadlines, दोनों की बहुत बातें हैं। <span class="mine">vectors मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Text</th><th class="mono">Vector</th></tr></thead>
+    <tbody>
+      <tr><td>Office hours page</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>Syllabus: milestone की तारीख</td><td class="mono">[0.1, 0.9]</td></tr>
+      <tr><td>Project page: proposal की तारीख</td><td class="mono">[0.2, 0.8]</td></tr>
+      <tr><td>Course FAQ, लंबा page</td><td class="mono">[1.6, 1.4]</td></tr>
+      <tr class="hi"><td>Query: when can I get help from a TA</td><td class="mono">[0.8, 0.2]</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Query और office hours page में एक भी common शब्द नहीं है, फिर भी उनके vectors पास-पास हैं: [0.8, 0.2] और [0.9, 0.1]। ये numbers उन दो सवालों के जवाब हैं, और दोनों texts के जवाब लगभग एक जैसे हैं। <b>इसलिए vector वो मेल पकड़ सकता है, जो शब्द गिनने में छूट जाता है।</b></p>
+
+  <p>असली systems में dimensions के ऐसे नाम नहीं होते, और dimension सैकड़ों में होता है, जैसे BERT-base के vectors में 768। <span class="mine">paper से</span> यहाँ 2 numbers हैं, ताकि आप vectors को plane पर देख सकें। आगे का हर हिसाब 768 numbers पर भी इसी तरह चलता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Passage <q>Extra office hours on Zoom this Friday</q> को इन्हीं दो सवालों पर नापिए। करीब कौन सा vector बनेगा, और वो table के किस passage के पास होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>ये passage पूरी तरह office hours के बारे में है, और इसमें कोई deadline नहीं है। तो करीब [0.9, 0.0] जैसा vector बनेगा, जो office hours page [0.9, 0.1] के बिल्कुल पास है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="dot">
+  <h3><span class="cn">2</span>Dot product: लंबा vector जीतता है</h3>
+
+  <p><b>Dot product दो vectors से एक number बनाता है: एक ही जगह वाले numbers का गुणा कीजिए, फिर सारे गुणा जोड़ दीजिए।</b> Query [0.8, 0.2] और office hours page [0.9, 0.1] के लिए ये 0.8 × 0.9 + 0.2 × 0.1 = 0.72 + 0.02 = 0.74 है। Dot product का दूसरा नाम <b class="term">inner product</b> है, और Stanford की slides यही नाम लेती हैं।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>FAQ page [1.6, 1.4] की दिशा query से उतनी नहीं मिलती, जितनी office hours page की। फिर भी उसका dot product 0.74 से कम होगा, या ज़्यादा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>ज़्यादा: 0.8 × 1.6 + 0.2 × 1.4 = 1.28 + 0.28 = 1.56। नीचे की table में बाकी passages भी हैं।</p>
+    </details>
+  </div>
+
+  <div class="tscroll"><table class="t" style="margin-top:22px">
+    <thead><tr><th>Passage</th><th>हिसाब</th><th class="numh">Dot product</th></tr></thead>
+    <tbody>
+      <tr><td>Office hours page<span class="sub mono">[0.9, 0.1]</span></td><td>0.8 × 0.9 + 0.2 × 0.1 = 0.72 + 0.02</td><td class="num">0.74</td></tr>
+      <tr><td>Syllabus<span class="sub mono">[0.1, 0.9]</span></td><td>0.8 × 0.1 + 0.2 × 0.9 = 0.08 + 0.18</td><td class="num">0.26</td></tr>
+      <tr><td>Project page<span class="sub mono">[0.2, 0.8]</span></td><td>0.8 × 0.2 + 0.2 × 0.8 = 0.16 + 0.16</td><td class="num">0.32</td></tr>
+      <tr class="hi"><td>FAQ page<span class="sub mono">[1.6, 1.4]</span></td><td>0.8 × 1.6 + 0.2 × 1.4 = 1.28 + 0.28</td><td class="num">1.56</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>सबसे ऊपर FAQ page है, क्योंकि उसके दोनों numbers बड़े हैं। FAQ page का vector [0.8, 0.7] का ठीक दोगुना है। [0.8, 0.7] से query का dot product 0.64 + 0.14 = 0.78 है, और FAQ page का 1.56 = 2 × 0.78।</p>
+
+  <p>किसी vector को दोगुना करने पर ऐसा हर बार होता है। Dot product के हर गुणा में एक number उसी vector से आता है। वो number दोगुना हुआ, तो हर गुणा दोगुना हुआ, और उनका जोड़ भी। <b>मतलब dot product दिशा के साथ तीर की लंबाई भी नापता है, और लंबा vector सिर्फ़ लंबाई की वजह से ऊपर आ सकता है।</b></p>
+
+  <p>यही हिसाब symbols में ऐसे लिखते हैं:</p>
+  <div class="formula"><i>a</i> · <i>b</i> = <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i> = 1 … <i>d</i></span></span> <i>a</i><sub><i>i</i></sub> <i>b</i><sub><i>i</i></sub></div>
+  <p><b class="term">∑</b> (sigma) का मतलब है कि नीचे लिखी range के हर i के लिए जोड़ते जाइए, यहाँ i = 1 से dimension d = 2 तक। a<sub>i</sub> query का i-वाँ number है, और b<sub>i</sub> office hours page का। तो a · b = a<sub>1</sub>b<sub>1</sub> + a<sub>2</sub>b<sub>2</sub> = 0.8 × 0.9 + 0.2 × 0.1 = 0.74।</p>
+
+  <p>Dot product तेज़ है, सिर्फ़ d गुणा और d जोड़, और <a href="05-rag-model-dense.html#parts">lesson 5</a> और <a href="12-dpr-dense.html#biencoder">lesson 12</a> के retrievers यही score लेते हैं। उसकी हद ऊपर दिख गई: लंबे vector वाला passage ऊपर आ सकता है, चाहे उसकी दिशा उतनी न मिले।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="cosine">
+  <h3><span class="cn">3</span>Cosine similarity: सिर्फ़ दिशा की तुलना</h3>
+
+  <p><b>Cosine similarity दो vectors की सिर्फ़ दिशा की तुलना करता है, उनकी लंबाई की नहीं।</b> इसके लिए वो dot product को दोनों vectors की लंबाई के गुणा से भाग देता है। तो पहले लंबाई निकालना सीखिए।</p>
+
+  <h4 class="sub" id="len">Vector की length</h4>
+
+  <p>Vector की <b class="term">length</b> उसके तीर की लंबाई है। Plane पर query का तीर एक right triangle की सबसे लंबी side है, जिसकी बाकी दो sides 0.8 और 0.2 लंबी हैं। इसलिए Pythagoras से length √(0.8² + 0.2²) है। मतलब हर number का square लीजिए, सबको जोड़िए, फिर square root लीजिए:</p>
+  <ol class="plain">
+    <li>Squares: 0.8 × 0.8 = 0.64, और 0.2 × 0.2 = 0.04।</li>
+    <li>जोड़: 0.64 + 0.04 = 0.68।</li>
+    <li>Square root: √0.68 = 0.82। Square root वो number है, जिसे खुद से गुणा करने पर अंदर वाला number मिले। जाँच: 0.8246 × 0.8246 = 0.680।</li>
+  </ol>
+  <div class="formula">|<i>a</i>| = √( <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i></span></span> <i>a</i><sub><i>i</i></sub><sup>2</sup> )</div>
+  <p>Office hours page की length इसी तरह √(0.81 + 0.01) = √0.82 = 0.91 है।</p>
+
+  <h4 class="sub" id="cos">Dot product ÷ दोनों lengths</h4>
+
+  <p>अब dot product को दोनों lengths के गुणा से भाग दीजिए। Query और office hours page के लिए ये 0.74 ÷ (0.82 × 0.91) = 0.99 है। इस number को <b class="term">cosine similarity</b> कहते हैं।</p>
+  <div class="formula">cos(<i>a</i>, <i>b</i>) = <span class="frac"><span><i>a</i> · <i>b</i></span><span>|<i>a</i>| × |<i>b</i>|</span></span></div>
+
+  <p>नाम cosine इसलिए है, क्योंकि ये number दोनों तीरों के बीच के कोण (angle) का cosine है। एक ही दिशा वाले तीरों पर ये 1 है, 90° पर 0, और उल्टी दिशा में −1। Query और office hours page के बीच करीब 8° का कोण है, और cos 8° = 0.99।</p>
+
+  <p>वही query, जिसकी length 0.82 है, अब हर passage से:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Dot product</th><th class="numh">Length</th><th class="numh">Cosine</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page<span class="sub mono">[0.9, 0.1]</span></td><td class="num">0.74</td><td class="num">0.91</td><td class="num">0.99<span class="sub mono">0.74 ÷ (0.82 × 0.91)</span></td></tr>
+      <tr><td>FAQ page<span class="sub mono">[1.6, 1.4]</span></td><td class="num">1.56</td><td class="num">2.13</td><td class="num">0.89<span class="sub mono">1.56 ÷ (0.82 × 2.13)</span></td></tr>
+      <tr><td>Project page<span class="sub mono">[0.2, 0.8]</span></td><td class="num">0.32</td><td class="num">0.82</td><td class="num">0.47<span class="sub mono">0.32 ÷ (0.82 × 0.82)</span></td></tr>
+      <tr><td>Syllabus<span class="sub mono">[0.1, 0.9]</span></td><td class="num">0.26</td><td class="num">?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Lengths 2 decimal तक rounded हैं। Cosine पूरे numbers से निकला है, इसलिए हाथ के हिसाब में आख़िरी अंक थोड़ा अलग आ सकता है।</p>
+
+  <div class="recall">
+    <p class="rl">Syllabus वाली row आप निकालिए</p>
+    <p>Syllabus = [0.1, 0.9], और query से उसका dot product 0.26 है। Syllabus की length और cosine कितने हैं?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Length = √(0.01 + 0.81) = √0.82 = 0.91। Cosine = 0.26 ÷ (0.82 × 0.91) = <b>0.35</b>। ये सबसे नीचे है, क्योंकि syllabus deadlines के बारे में है, और query मदद के बारे में।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Cosine में office hours page सबसे ऊपर आया, और FAQ page दूसरी जगह पर गिर गया। FAQ page का vector [0.8, 0.7] का दोगुना है, इसलिए उसकी length भी दोगुनी है: 1.063 की जगह 2.126। Dot product भी दोगुना हुआ था, और भाग में ये 2 कट जाता है। <b>तो cosine पर vector की length का कोई असर नहीं होता, और लंबे page का फ़ायदा चला जाता है।</b></p>
+
+  <h4 class="sub" id="unit">Normalize: length 1 वाले vectors</h4>
+
+  <p>एक shortcut भी है। हर vector के हर number को उसकी length से भाग दीजिए, तो उसकी length 1 हो जाती है, और दिशा वही रहती है। इसे <b class="term">normalize</b> करना कहते हैं। Query normalize करने पर [0.8 ÷ 0.8246, 0.2 ÷ 0.8246] = [0.970, 0.243] बनता है, और office hours page [0.994, 0.110]।</p>
+
+  <p>Normalize किए vectors का dot product सीधे cosine है, क्योंकि अब नीचे की दोनों lengths 1 हैं: 0.970 × 0.994 + 0.243 × 0.110 = 0.964 + 0.027 = 0.991। <b>इसलिए अगर index के सारे vectors normalize किए हुए हों, तो dot product और cosine एक ही score देते हैं।</b></p>
+
+  <div class="widget" id="vw">
+    <h4>Query का तीर खींचिए</h4>
+    <p class="hint">Plane पर click कीजिए या खींचिए, तो query का तीर वहाँ चला जाता है। Milestone वाली query पर dot product से FAQ page ऊपर आता है, और cosine से syllabus।</p>
+    <svg class="plane" id="vw-svg" viewBox="0 0 340 340" role="img" aria-label="Query और passages के vectors"></svg>
+    <div class="btns" id="vw-m">
+      <button type="button" data-m="cos">Cosine से sort</button>
+      <button type="button" data-m="dot">Dot product से sort</button>
+      <button type="button" data-p="0.8,0.2">Query: help from a TA</button>
+      <button type="button" data-p="0.1,0.9">Query: milestone due</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="num mono hide-sm">Vector</th><th class="num">Dot product</th><th class="num">Cosine</th></tr></thead>
+      <tbody id="vw-body"></tbody>
+    </table></div>
+    <p class="out" id="vw-out"></p>
+  </div>
+
+  <p>Cosine की भी एक हद है: वो length को पूरी तरह छोड़ देता है, और कभी length में भी काम की बात होती है। दो vectors से similarity का number बनाने के तरीके को <b class="term">similarity metric</b> कहते हैं। कौन सा metric लेना है, ये इस पर टिका है कि vectors बनाने वाले model की training किस metric के साथ हुई।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="embedding">
+  <h3><span class="cn">4</span>Embedding model: हर text का vector अपने आप</h3>
+
+  <p>ऊपर के vectors हाथ से बने, दो सवाल पूछकर। Lesson 2 की company के 60,000 passages के लिए ये हाथ से नहीं हो सकता, और दो सवाल किसी text की हर बात नहीं पकड़ते। इसलिए ऐसा program चाहिए, जो किसी भी text को अपने आप vector दे।</p>
+
+  <p><b>Embedding किसी text का वो vector है, जो एक trained model बनाता है, ताकि मिलती-जुलती बात वाले texts के vectors की दिशा भी मिलती-जुलती हो।</b> Text पढ़कर embedding बनाने वाले model को <b class="term">embedding model</b> या <b class="term">encoder</b> कहते हैं। Encoder भी lesson 1 वाले <button class="def" data-w="w-parameters">parameters</button> से बना है।</p>
+
+  <p>Training encoder को ऐसे text जोड़े दिखाती है, जिनकी बात मिलती है, और ऐसे भी, जिनकी नहीं मिलती। फिर वो parameters को इस तरह बदलती है कि पहली तरह के जोड़ों का score बढ़े, और दूसरी तरह के जोड़ों का घटे। ये training पूरी <a href="12-dpr-dense.html#contrastive">lesson 12</a> में है।</p>
+
+  <p>अब TA वाली query पर लौटिए। Encoder से query का embedding बनाइए, और lesson 2 के passages से cosine निकालिए। नतीजा कुछ ऐसा हो सकता है: <span class="mine">numbers मेरे बनाए हैं, किसी असली model के नहीं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Common शब्द</th><th class="numh">Cosine</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page<span class="sub">Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs.</span></td><td class="num">0</td><td class="num">0.78</td></tr>
+      <tr><td>Queue log<span class="sub">… Tuesday 4pm office hour averaged 14 students waiting …</span></td><td class="num">0</td><td class="num">0.61</td></tr>
+      <tr><td>Homework 1 की announcement<span class="sub">Homework 1 will be released on Oct 5.</span></td><td class="num">0</td><td class="num">0.22</td></tr>
+      <tr><td>Syllabus<span class="sub">Grading. The project milestone is due Week 6 …</span></td><td class="num">0</td><td class="num">0.15</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Query और office hours page में एक भी common शब्द नहीं है, फिर भी office hours page 0.78 के साथ सबसे ऊपर है। <b>Lesson 2 का retriever जहाँ हर passage को 0 देता था, embedding वाला retriever वहाँ सही passage ऊपर लाता है।</b></p>
+
+  <h4 class="sub" id="flow">Offline और online</h4>
+
+  <p>Embedding वाला retriever दो हिस्सों में चलता है। <b class="term">Offline</b>, यानी query आने से पहले, encoder हर passage का embedding एक बार बनाता है। पहले से बनाकर रखे इन embeddings की list को <b class="term">index</b> कहते हैं। <b class="term">Online</b>, यानी हर query पर, encoder सिर्फ़ query का embedding बनाता है। फिर index के हर embedding से उसका cosine या dot product निकलता है, और सबसे ऊँचे scores वाले K passages लौटते हैं।</p>
+
+  <p>Stanford की DPR वाली slide यही दो हिस्से दिखाती है। <a href="12-dpr-dense.html#biencoder">Lesson 12</a> के DPR में दो अलग encoders हैं: E<sub>P</sub> passages के लिए, और E<sub>Q</sub> query के लिए। Slide के box में लिखा E<sub>Q</sub>(q)<sup>⊤</sup> E<sub>P</sub>(p) दोनों vectors का dot product है, और <button class="def" data-w="w-transpose">⊤</button> उसे लिखने का एक तरीका है।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p43.png"><img src="img/slide-p43.png" alt="Stanford slide: DPR का offline और online हिस्सा" loading="lazy"></a>
+    <figcaption>Stanford की slide: DPR का offline हिस्सा ऊपर, और online हिस्सा नीचे। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>Embedding वाले retriever की दो हदें आगे आएँगी। पहली, वो हूबहू मिलने वाली चीज़ें चूक सकता है: error code E-4012 और E-4021 वाले passages के embeddings लगभग एक जैसे हो सकते हैं। इसका हल <a href="14-hybrid-rerank-dense.html#hybrid">lesson 14</a> में है। दूसरी, हर query पर index के हर embedding से तुलना होती है, यानी 60,000 passages पर 60,000 cosine। करोड़ों passages पर ये धीमा है, और इसका हल <a href="10-vector-search-dense.html#ann">lesson 10</a> में है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Corpus में नया passage जुड़े, तो embedding वाले retriever में क्या करना होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Encoder सिर्फ़ उस passage का embedding बनाता है, और आप उसे index में जोड़ देते हैं। बाकी index वैसा ही रहता है। हर query पर तब भी सिर्फ़ query का embedding नया बनता है।</p>
+    </details>
+  </div>
+
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 4 पड़ाव आसान version जैसे ही हैं। आगे के 5 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले cosine और कोण का गणित आता है, फिर dot product, cosine और दूरी का रिश्ता, और DPR का चुनाव। उसके बाद index एक matrix की तरह आता है, और फिर Stanford की table के पाँच तरह के embeddings। आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 5 -->
+<article class="concept" id="angle">
+  <h3><span class="cn">5</span>Cosine और कोण: दिशा का एक number</h3>
+
+  <p><b>Cosine similarity सच में दोनों तीरों के बीच के कोण का cosine है, इसलिए वो हमेशा −1 और 1 के बीच रहता है।</b> पड़ाव 3 में ये बात सिर्फ़ कही गई थी। ये पड़ाव उसे school के दो नियमों से numbers पर दिखाता है।</p>
+
+  <h4 class="sub" id="unitarrow">Length 1 वाले तीर के numbers</h4>
+
+  <p>School का पहला नियम right triangle का है। किसी कोण का cos उसके पास वाली side ÷ सबसे लंबी side है, और sin सामने वाली side ÷ सबसे लंबी side। अब length 1 का एक तीर लीजिए, जो x-axis से A कोण पर है। उसकी सबसे लंबी side 1 है, इसलिए उसके दो numbers सीधे cos A और sin A हैं।</p>
+
+  <p>पड़ाव 3 में normalize की हुई query [0.970, 0.243] थी, यानी length 1 का तीर। उसका पहला number cos A है, और cos 14.0° = 0.970, इसलिए query का तीर x-axis से 14.0° पर है। इसी तरह office hours page [0.994, 0.110] का तीर 6.3° पर है। दोनों तीरों के बीच का कोण 14.0° − 6.3° = 7.7° है। <span class="mine">हिसाब मेरा</span></p>
+
+  <h4 class="sub" id="cosab">cos(A − B) का नियम</h4>
+
+  <p>School का दूसरा नियम दो कोणों के फ़र्क का है:</p>
+  <div class="formula">cos(A − B) = cos A · cos B + sin A · sin B</div>
+  <p>दाईं तरफ़ ठीक दो length 1 वाले तीरों का dot product है: पहले numbers का गुणा, और दूसरे numbers का गुणा, फिर जोड़। हमारे numbers पर:</p>
+  <ol class="plain">
+    <li>Query: cos A = 0.970 और sin A = 0.243। Office hours page: cos B = 0.994 और sin B = 0.110।</li>
+    <li>Dot product: 0.970 × 0.994 + 0.243 × 0.110 = 0.964 + 0.027 = 0.991।</li>
+    <li>कोण का cosine: cos 7.7° = 0.991। जाँच: दोनों बराबर हैं।</li>
+  </ol>
+  <p><b>मतलब normalize किए vectors का dot product उनके बीच के कोण का cosine है, और पड़ाव 3 में ये dot product ही cosine similarity था।</b> नीचे की table चारों passages के कोण दिखाती है, और हर row में cos वही आता है जो पड़ाव 3 की table में था:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">x-axis से कोण</th><th class="numh">Query से कोण</th><th class="numh">cos</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page</td><td class="num">6.3°</td><td class="num">7.7°</td><td class="num">0.99</td></tr>
+      <tr><td>FAQ page</td><td class="num">41.2°</td><td class="num">27.1°</td><td class="num">0.89</td></tr>
+      <tr><td>Project page</td><td class="num">76.0°</td><td class="num">61.9°</td><td class="num">0.47</td></tr>
+      <tr><td>Syllabus</td><td class="num">83.7°</td><td class="num">69.6°</td><td class="num">0.35</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Query x-axis से 14.0° पर है। कोण पूरे numbers से निकले हैं, इसलिए rounded कोणों को घटाने पर आख़िरी अंक थोड़ा अलग आ सकता है। जैसे FAQ page के लिए 41.19° − 14.04° = 27.15°, और cos 27.15° = 0.89।</p>
+
+  <p>तीन आसान cases से ये नियम खुद check कीजिए। [1, 0] और [1, 1] का dot product 1 है, और lengths 1 और √2 = 1.414 हैं, इसलिए cosine 1 ÷ 1.414 = 0.707 है। Plane पर [1, 1] वाला तीर ठीक 45° पर है, और cos 45° = 0.707। [1, 0] और [0, 1] का dot product 0 है, यानी कोण 90° है। [0.8, 0.2] और [−0.8, −0.2] का cosine −0.68 ÷ 0.68 = −1 है, यानी कोण 180° है।</p>
+
+  <h4 class="sub" id="bound">Dot product कभी दोनों lengths के गुणा से बड़ा नहीं होता</h4>
+
+  <p>किसी भी कोण का cos −1 और 1 के बीच होता है। इसलिए cosine = a · b ÷ (|a| × |b|) भी इसी range में रहता है, और इसका मतलब है कि a · b कभी |a| × |b| से बड़ा नहीं होता। FAQ page पर देखिए: dot product 1.56 है, और 0.82 × 2.13 = 1.75, यानी 1.56 छोटा है। ये नियम 768 dimensions में भी सच है, जहाँ तीर खींच नहीं सकते, और वहाँ यही formula कोण का मतलब तय करता है।</p>
+
+  <p>दोनों बराबर सिर्फ़ तब होते हैं, जब दोनों तीर एक ही दिशा में हों। जैसे [0.4, 0.1] query का ठीक आधा है: dot product 0.32 + 0.02 = 0.34 है, और 0.8246 × 0.4123 = 0.34 भी, इसलिए cosine 1.00 है। Dot product में ये छोटा vector office hours page (0.74) से नीचे रहता, लेकिन cosine में सबसे ऊपर है। <span class="mine">मेरा example</span></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>हमारे सारे vectors के numbers 0 या उससे बड़े हैं। तब किसी भी जोड़े का cosine 0 से कम हो सकता है क्या? असली embeddings में क्या होता है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>नहीं हो सकता। दोनों vectors के सारे numbers 0 या उससे बड़े हों, तो हर गुणा भी 0 या उससे बड़ा है, इसलिए dot product और cosine भी। Plane पर सारे तीर पहले हिस्से में हैं, और उनके बीच का कोण 90° से बड़ा नहीं हो सकता। असली embeddings के numbers negative भी होते हैं, इसलिए वहाँ cosine 0 से कम भी हो सकता है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 6 -->
+<article class="concept" id="metrics">
+  <h3><span class="cn">6</span>Dot product, cosine और दूरी: कब एक जैसे, कब अलग</h3>
+
+  <p><b>दूरी, dot product और cosine एक ही हिसाब से जुड़े हैं: normalize किए vectors पर तीनों एक ही क्रम देते हैं।</b> बाकी vectors पर उनका क्रम अलग हो सकता है। <button class="def" data-w="w-distance">दूरी</button> दो vectors के फ़र्क वाले vector की length है। Office hours page − query = [0.9 − 0.8, 0.1 − 0.2] = [0.1, −0.1], और उसकी length √(0.01 + 0.01) = √0.02 = 0.14 है। दूरी जितनी छोटी, passage उतना पास।</p>
+
+  <p>तीनों तरीकों से हमारे चारों passages का क्रम देखिए: <span class="mine">हिसाब मेरा</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Dot product</th><th class="numh">Cosine</th><th class="numh">दूरी</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page</td><td class="num">0.74<span class="sub">दूसरा</span></td><td class="num">0.99<span class="sub">पहला</span></td><td class="num">0.14<span class="sub">पहला</span></td></tr>
+      <tr><td>FAQ page</td><td class="num">1.56<span class="sub">पहला</span></td><td class="num">0.89<span class="sub">दूसरा</span></td><td class="num">1.44<span class="sub">चौथा</span></td></tr>
+      <tr><td>Project page</td><td class="num">0.32<span class="sub">तीसरा</span></td><td class="num">0.47<span class="sub">तीसरा</span></td><td class="num">0.85<span class="sub">दूसरा</span></td></tr>
+      <tr><td>Syllabus</td><td class="num">0.26<span class="sub">चौथा</span></td><td class="num">0.35<span class="sub">चौथा</span></td><td class="num">0.99<span class="sub">तीसरा</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>FAQ page dot product में पहला है, cosine में दूसरा, और दूरी में आख़िरी। तीनों का रिश्ता एक formula से निकलता है, और उसके लिए school का एक नियम चाहिए: (x − y)² = x² + y² − 2xy। जैसे (0.9 − 0.8)² = 0.81 + 0.64 − 1.44 = 0.01।</p>
+
+  <h4 class="sub" id="expand">दूरी के square को खोलना</h4>
+
+  <p>दूरी का square फ़र्क वाले vector के हर number के square का जोड़ है। हर number पर ऊपर वाला नियम लगाइए, और फिर सबको जोड़िए। x² वाले हिस्से जुड़कर |a|² बनते हैं, y² वाले |b|², और xy वाले a · b:</p>
+  <div class="formula">|<i>a</i> − <i>b</i>|<sup>2</sup> = |<i>a</i>|<sup>2</sup> + |<i>b</i>|<sup>2</sup> − 2 <i>a</i> · <i>b</i></div>
+  <ol class="plain">
+    <li>Office hours page: 0.68 + 0.82 − 2 × 0.74 = 1.50 − 1.48 = 0.02, और √0.02 = 0.14। जाँच: ऊपर भी 0.14 आया था।</li>
+    <li>FAQ page: 0.68 + 4.52 − 2 × 1.56 = 5.20 − 3.12 = 2.08, और √2.08 = 1.44।</li>
+  </ol>
+  <p>FAQ page का |b|² = 4.52 बहुत बड़ा है, इसलिए उसका बड़ा dot product भी दूरी को छोटा नहीं कर पाता। मतलब dot product length का फ़ायदा देता है, दूरी length पर नुकसान देती है, और cosine length को छोड़ देता है।</p>
+
+  <p>अब दोनों vectors normalize कीजिए। तब |a|² = |b|² = 1, और formula बनता है 2 − 2 cos। Office hours page के लिए 2 − 2 × 0.991 = 0.018, और FAQ page के लिए 2 − 2 × 0.890 = 0.220। Cosine जितना बड़ा, दूरी उतनी छोटी, इसलिए तीनों तरीके एक ही क्रम देते हैं। <b>मतलब normalize किए vectors पर कौन सा तरीका लें, इससे क्रम नहीं बदलता।</b></p>
+
+  <p>DPR paper भी यही कहता है: unit vectors, यानी length 1 वाले vectors, पर cosine और inner product एक ही चीज़ हैं। साथ में वो कहता है कि ज़्यादातर ऐसे similarity functions L2 दूरी के ही बदले हुए रूप हैं। <span class="mine">paper से</span> L2 दूरी इसी दूरी का नाम है।</p>
+
+  <h4 class="sub" id="dprchoice">DPR ने dot product क्यों चुना</h4>
+
+  <p>DPR paper similarity function की एक शर्त रखता है: वो <b class="term">decomposable</b> हो। मतलब score सवाल के vector और passage के vector से निकले, और passage का vector सवाल देखे बिना बने। तभी पड़ाव 4 वाला offline index बन सकता है। Dot product, cosine और दूरी, तीनों इस शर्त पर खरे हैं। जो model सवाल और passage को साथ पढ़ता है, वो decomposable नहीं है, और <a href="14-hybrid-rerank-dense.html#cross">lesson 14</a> का <button class="def" data-w="w-crossenc">cross-encoder</button> ऐसा ही है। <span class="mine">paper से</span></p>
+
+  <p>Paper ने dot product के साथ cosine और L2 दूरी भी आज़माई। एक जगह वो कहता है कि दूसरे functions लगभग बराबर रहे। Experiments वाले हिस्से में वो साफ़ लिखता है कि L2 dot product के लगभग बराबर रहा, और दोनों cosine से बेहतर रहे। NQ के dev set पर top-20 accuracy dot product के साथ 78.1% है, और L2 के साथ 76.1%। Cosine के numbers paper नहीं देता। <span class="mine">paper से</span> इसलिए DPR ने सबसे सीधा dot product रखा।</p>
+
+  <p>दूसरे models cosine के साथ train होते हैं। Sentence-BERT अपने vectors की तुलना cosine से करता है, और E5 का score cosine ÷ 0.01 है। <span class="mine">paper से</span></p>
+
+  <p>E5 में 0.99 वाला जोड़ा 99 बनता है, और 0.89 वाला 89। हर score एक ही number से भाग होता है, इसलिए क्रम वही रहता है, जैसे पड़ाव 2 में दोगुना करने पर रहा था। <b>नियम ये है कि जिस metric के साथ model train हुआ, retrieval में वही metric लीजिए।</b></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="matrix">
+  <h3><span class="cn">7</span>Index एक matrix है: सारे scores एक गुणा में</h3>
+
+  <p>Stanford की slide कहती है कि retrieval को हर chunk का <q>fixed-dimension</q> vector चाहिए। Dimension तय होना इसलिए ज़रूरी है, क्योंकि dot product numbers को जगह के हिसाब से जोड़ता है। [0.8, 0.2] और [0.9, 0.1, 0.5] का dot product नहीं बनता, क्योंकि तीसरे number का कोई जोड़ीदार नहीं है। इसलिए FAQ page लंबा है, फिर भी उसके vector में 2 ही numbers हैं, और DPR में हर passage के vector में 768।</p>
+
+  <p><b>Matrix numbers की एक table है, जिसमें rows और columns होते हैं।</b> सारे passage vectors को एक के नीचे एक रखिए, तो index एक matrix P बन जाता है। उसकी हर row एक passage है, और हर column एक dimension। हमारा index 4 rows और 2 columns का है, जिसे 4 × 2 matrix कहते हैं:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Row, यानी passage</th><th class="numh">Column 1</th><th class="numh">Column 2</th><th class="numh">Query [0.8, 0.2] से dot product</th></tr></thead>
+    <tbody>
+      <tr><td>Office hours page</td><td class="num">0.9</td><td class="num">0.1</td><td class="num">0.74</td></tr>
+      <tr><td>Syllabus</td><td class="num">0.1</td><td class="num">0.9</td><td class="num">0.26</td></tr>
+      <tr><td>Project page</td><td class="num">0.2</td><td class="num">0.8</td><td class="num">0.32</td></tr>
+      <tr class="hi"><td>FAQ page</td><td class="num">1.6</td><td class="num">1.4</td><td class="num">1.56</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>आख़िरी column ही <b class="term">matrix-vector गुणा</b> P q है। उसका नियम ये है: matrix की हर row का vector q से dot product लीजिए, और नतीजों को एक के नीचे एक लिखिए। 4 × 2 matrix और 2 numbers वाले vector से 4 numbers निकलते हैं, यानी [0.74, 0.26, 0.32, 1.56]। Matrix के columns और vector के numbers की गिनती बराबर होनी चाहिए, और fixed dimension वाली शर्त यही है।</p>
+
+  <h4 class="sub" id="transpose">Transpose और slide का E<sub>Q</sub>(q)<sup>⊤</sup>E<sub>P</sub>(p)</h4>
+
+  <p>Matrix की भाषा में vector को अक्सर एक column की तरह लिखते हैं, यानी 2 rows और 1 column वाली matrix। <b class="term">Transpose</b>, जिसे ⊤ लिखते हैं, rows को columns बना देता है, इसलिए column वाला vector एक row बन जाता है। Row (1 × 2) गुणा column (2 × 1) का नतीजा 1 × 1 है, यानी एक number, और ये number ठीक dot product है:</p>
+  <div class="formula">[0.8 &nbsp;0.2] × <span class="frac"><span>0.9</span><span>0.1</span></span> = 0.8 × 0.9 + 0.2 × 0.1 = 0.74</div>
+  <p>Stanford की DPR slide पर लिखा E<sub>Q</sub>(q)<sup>⊤</sup>E<sub>P</sub>(p) यही है: query encoder का vector row बनता है, और passage encoder का vector column रहता है। <a href="04-probability-tools-dense.html">Lesson 4</a> इसी को <button class="def" data-w="w-transpose">d<sup>⊤</sup>q</button> लिखता है।</p>
+
+  <p>Index के हर row को पहले normalize कर दीजिए, और query को भी। तब यही एक गुणा चारों cosines देता है: [0.99, 0.35, 0.47, 0.89]। <a href="12-dpr-dense.html#matrix">Lesson 12</a> पूरे batch के लिए यही विचार दो matrices के गुणा से लगाता है।</p>
+
+  <p>असली पैमाने पर DPR के index में करीब 2.1 करोड़ rows और 768 columns हैं। <span class="mine">paper से</span> एक query पर ये matrix-vector गुणा 2.1 करोड़ dot products है, यानी 2.1 करोड़ × 768 = करीब 1,613 करोड़ गुणा। इसे तेज़ करने के तरीके <a href="10-vector-search-dense.html#bruteforce">lesson 10</a> में हैं।</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="kinds">
+  <h3><span class="cn">8</span>Stanford की table: पाँच तरह के embeddings</h3>
+
+  <p><b>Stanford की embeddings वाली table पाँच तरह के embeddings गिनाती है, और उनका फ़र्क इस बात में है कि एक vector किस चीज़ का है।</b> इनमें से retrieval सीधे passage वाले embeddings लेता है, क्योंकि index में हर chunk का एक vector चाहिए। बाकी किस्में दिखाती हैं कि एक vector किसी शब्द, token, image या node का भी हो सकता है। <a href="07-chunking-dense.html#kinds">Lesson 7</a> इन्हें chunking के साथ फिर से लेता है।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किस्म</th><th>Examples</th><th>एक vector किसका</th></tr></thead>
+    <tbody>
+      <tr><td><button class="def" data-w="w-static">Static word</button></td><td>word2vec, GloVe</td><td>एक word type</td></tr>
+      <tr><td><button class="def" data-w="w-contextual">Contextual</button></td><td>BERT, RoBERTa</td><td>Context में एक token</td></tr>
+      <tr class="hi"><td><button class="def" data-w="w-passageemb">Passage</button></td><td>Sentence-BERT, DPR, E5</td><td>एक chunk</td></tr>
+      <tr><td><button class="def" data-w="w-multimodal">Multimodal</button></td><td>CLIP</td><td>Text या image, एक shared space में</td></tr>
+      <tr><td><button class="def" data-w="w-graphemb">Graph</button></td><td>node2vec, GNN encoders</td><td>एक node या relation</td></tr>
+    </tbody>
+  </table></div>
+
+  <ul class="plain">
+    <li><b>Static word।</b> हर <button class="def" data-w="w-wordtype">word type</button> का एक ही vector होता है, sentence कोई भी हो। <q>Late days may not be applied</q> और <q>late afternoon office hours</q> में late को एक ही vector मिलता है। word2vec paper ने दिखाया कि vector(King) − vector(Man) + vector(Woman) के सबसे पास vector(Queen) है। <span class="mine">paper से</span></li>
+    <li><b>Contextual।</b> हर token का vector उसके आस-पास के शब्दों से बनता है, इसलिए दोनों late को अलग vectors मिलते हैं। BERT-base हर token का 768 numbers वाला vector देता है। DPR पूरे passage के लिए [CLS] नाम के एक खास token का vector लेता है, जो हर text की शुरुआत में जुड़ता है। <span class="mine">paper से</span></li>
+    <li><b>Passage।</b> पूरे chunk का एक vector, यानी इस lesson वाला embedding। Sentence-BERT token vectors का औसत लेता है, जिसे <button class="def" data-w="w-pooling">mean pooling</button> कहते हैं। E5 एक ही encoder से query और passage दोनों पढ़ता है, और फ़र्क बताने के लिए text के आगे <q>query:</q> या <q>passage:</q> जोड़ता है। <span class="mine">paper से</span></li>
+    <li><b>Multimodal।</b> Text और image, दोनों के vectors एक ही space में बनते हैं, ताकि उनका cosine निकल सके। Whiteboard पर लिखे office hours की photo और text <q>office hours schedule</q> के vectors पास आ सकते हैं। CLIP internet से इकट्ठा 40 करोड़ (image, text) जोड़ों पर train हुआ, और image और text की तुलना cosine से करता है। <span class="mine">paper से</span></li>
+    <li><b>Graph।</b> किसी network के node या relation का vector, जैसे course के graph में TA, office hours और उनके बीच का runs वाला relation। node2vec graph पर random तरीके से चलकर nodes की lists बनाता है, और उन्हें sentences की तरह word2vec वाले Skip-gram तरीके से सीखता है। <span class="mine">paper से</span> GNN encoders भी हर node का vector बनाते हैं।</li>
+  </ul>
+
+  <h4 class="sub" id="sbert">हर chunk का एक vector क्यों</h4>
+
+  <p>Sentence-BERT paper इसका सबसे साफ़ हिसाब देता है। मान लीजिए 10,000 sentences में से सबसे मिलता-जुलता जोड़ा ढूँढना है, और model हर जोड़े को साथ पढ़ता है, जैसे BERT। तब जोड़ों की गिनती 10,000 × 9,999 ÷ 2 = 4,99,95,000 है, यानी करीब 5 करोड़। Paper के मुताबिक एक V100 GPU पर इसमें करीब 65 घंटे लगते हैं। <span class="mine">paper से</span></p>
+
+  <p>हर sentence का एक vector हो, तो model सिर्फ़ 10,000 बार चलता है। Paper में इसमें करीब 5 seconds लगे, और फिर सारे cosine करीब 0.01 second में निकले। <span class="mine">paper से</span> <b>इसीलिए retrieval हर chunk का vector offline बनाकर रखता है, और query पर सिर्फ़ dot products या cosines निकालता है।</b></p>
+
+  <h4 class="sub" id="literals">एक vector में rare error code क्यों दब जाता है</h4>
+
+  <p>एक chunk का एक vector तेज़ है, लेकिन उसकी कीमत भी है। मान लीजिए passage का vector उसके 20 tokens के vectors का औसत है, यानी mean pooling। तब हर token औसत में सिर्फ़ 1/20 हिस्सा जोड़ता है। अब दो passages लीजिए, जो एक token छोड़कर एक जैसे हैं: एक में E-4012 लिखा है, और दूसरे में E-4021। <span class="mine">numbers मेरे बनाए हैं</span></p>
+  <ol class="plain">
+    <li>बाकी 19 tokens का औसत [0.5, 0.5] मानिए। E-4012 का vector [1, 0] है, और E-4021 का [0, 1], यानी दोनों codes का cosine 0 है।</li>
+    <li>पहला passage: (19 × [0.5, 0.5] + [1, 0]) ÷ 20 = [10.5, 9.5] ÷ 20 = [0.525, 0.475]।</li>
+    <li>दूसरा passage: इसी तरह [0.475, 0.525]।</li>
+    <li>Cosine: (0.525 × 0.475 + 0.475 × 0.525) ÷ (0.525² + 0.475²) = 0.49875 ÷ 0.50125 = 0.995।</li>
+  </ol>
+  <p>दोनों codes बिल्कुल अलग दिशा में थे, फिर भी passages का cosine 0.995 है। इसलिए query <q>E-4012 upload failed</q> दोनों passages को लगभग बराबर score देगी। <a href="11-bm25-dense.html#bm25">Lesson 11</a> का BM25 ऐसे rare code को ऊँचा <button class="def" data-w="w-idf">IDF</button> देता है, इसलिए वो सही passage पकड़ लेता है।</p>
+
+  <p>DPR paper में इसका असली example है। सवाल <q>Who plays Thoros of Myr in Game of Thrones?</q> पर BM25 का पहला passage वो है, जिसमें Thoros of Myr हूबहू लिखा है, और साथ में उसे निभाने वाले actor का नाम। DPR का पहला passage एक Norwegian actor के बारे में है, जिसने Thor Heyerdahl का role किया था। Paper का अंदाज़ा है कि DPR के vector में कम दिखने वाले खास phrases के लिए जगह कम पड़ती है। <span class="mine">paper से</span></p>
+
+  <p>उल्टा example भी उसी paper में है। सवाल <q>What is the body of water between England and Ireland?</q> पर DPR Irish Sea वाला passage लाता है, जबकि BM25 एक cycling वाला passage, जिसमें England और Ireland कई बार लिखे हैं। <span class="mine">paper से</span> Stanford की hybrid search वाली slide का पहला point यही है। BM25 अलग शब्दों में कही बात चूकता है, और dense retrieval rare <button class="def" data-w="w-literal">literals</button> चूकता है। इसलिए <a href="14-hybrid-rerank-dense.html#hybrid">lesson 14</a> दोनों retrievers चलाकर उनकी lists मिलाता है।</p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">9</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे इस lesson की तीन Stanford slides हैं, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई symbol अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p23.png"><img src="img/slide-p23.png" alt="Stanford slide: What Makes A Good Retriever? Embeddings, पाँच तरह के embeddings की table" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p23-table.png"><img src="img/slide-p23-table.png" alt="उसी slide की table, बड़ी करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p23-metric.png"><img src="img/slide-p23-metric.png" alt="उसी slide की आख़िरी line, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: What Makes A Good Retriever? Embeddings। नीचे उसकी table और आख़िरी line, बड़ी करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Embeddings वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Static word वाली row और passage वाली row में एक vector किसका है? Late वाले example से फ़र्क बताइए।</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Static word में हर word type का एक vector है, इसलिए दोनों sentences में late का vector एक है। Passage वाली row में पूरे chunk का एक vector है, और retrieval का index यही vectors रखता है। (पड़ाव 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>आख़िरी line कहती है कि हर chunk का vector fixed-dimension हो। लंबे FAQ page के vector में कितने numbers हैं, और ये शर्त क्यों ज़रूरी है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>हमारे example में 2, और DPR में 768, chunk कितना भी लंबा हो। Dot product numbers को जगह के हिसाब से जोड़ता है। Index की matrix में उतने ही columns चाहिए, जितने query के vector में numbers हैं। (पड़ाव 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Line में <q>cosine or inner product</q> है। हमारी TA वाली query पर दोनों में से कौन सा passage सबसे ऊपर आता है, और normalize करने पर क्या होगा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Inner product में FAQ page 1.56 के साथ, और cosine में office hours page 0.99 के साथ। Normalize किए vectors पर दोनों एक ही score देते हैं, इसलिए दोनों में office hours page ऊपर आता है। (पड़ाव 3 और 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p43.png"><img src="img/slide-p43.png" alt="Stanford slide: DPR का offline और online हिस्सा" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p43-dot.png"><img src="img/slide-p43-dot.png" alt="उसी slide का vector index, dot product और top-k वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: DPR, dense passage retrieval। नीचे उसका vector index, dot product और top-k वाला हिस्सा, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">DPR वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Dot product वाले box का E<sub>Q</sub>(q)<sup>⊤</sup>E<sub>P</sub>(p) हमारी query और office hours page के numbers से लिखिए।</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Query का vector row बनता है, और passage का vector column: [0.8 0.2] × [0.9, 0.1] वाला column = 0.8 × 0.9 + 0.2 × 0.1 = 0.74। (पड़ाव 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Vector index में क्या रखा है, और उससे dot product वाले box तक आने वाला तीर एक query पर क्या करता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Index सारे passage vectors की matrix है, जो offline बनी। Query आने पर एक matrix-vector गुणा सारे scores देता है: [0.74, 0.26, 0.32, 1.56]। Top-k इन्हीं में से सबसे बड़े k scores हैं, यानी k = 2 पर FAQ page और office hours page। (पड़ाव 4 और 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Slide score के लिए dot product लिखती है। DPR paper ने cosine या दूरी क्यों नहीं ली?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>तीनों decomposable हैं, इसलिए तीनों से offline index बन सकता था। Paper के experiments में L2 dot product के लगभग बराबर रहा, और दोनों cosine से बेहतर। NQ dev पर top-20 dot product के साथ 78.1% था, और L2 के साथ 76.1%, इसलिए सबसे सीधा dot product रहा। (पड़ाव 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p49.png"><img src="img/slide-p49.png" alt="Stanford slide: Hybrid Search and Reciprocal Rank Fusion" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p49-bullet.png"><img src="img/slide-p49-bullet.png" alt="उसी slide का पहला point, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p49-rrf.png"><img src="img/slide-p49-rrf.png" alt="उसी slide का RRF formula, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Hybrid Search and Reciprocal Rank Fusion। नीचे उसका पहला point और formula, बड़े करके। Hybrid search और RRF पूरे lesson 14 में आते हैं।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Hybrid search वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>पहला point कहता है कि dense retrieval rare literals चूकता है। E-4012 वाले example में दोनों passages का cosine कितना आया, और क्यों?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>0.995। Passage का vector 20 tokens का औसत था, इसलिए code वाला token उसमें सिर्फ़ 1/20 हिस्सा जोड़ता है। इसी वजह से दोनों codes का फ़र्क औसत में लगभग दब जाता है। (पड़ाव 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>उसी point का दूसरा हिस्सा: BM25 misses paraphrase। इस lesson की कौन सी query इसका example है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>TA वाली query। उसमें और office hours page में एक भी common शब्द नहीं है, इसलिए शब्दों पर चलने वाला score हर passage को 0 देता है। Embedding वाले retriever ने office hours page को 0.78 के साथ ऊपर रखा। (पड़ाव 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>Slide कहती है: merge positions instead of raw scores। BM25 और cosine के scores सीधे क्यों नहीं जोड़ सकते? Formula में k = 60 पर, किसी list में पहली जगह वाले passage को कितना मिलता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>दोनों के पैमाने अलग हैं। Cosine कभी 1 से ऊपर नहीं जाता, जबकि lesson 11 में BM25 ने forum post को 2.749 दिया था। Dot product की भी कोई छत नहीं है। पहली जगह वाले passage को 1 ÷ (60 + 1) = 0.0164 मिलता है। RRF का पूरा हिसाब lesson 14 में है। (पड़ाव 5 और 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Vector numbers की तय लंबाई वाली list है, और दो vectors की तुलना dot product या cosine similarity से होती है। Cosine दोनों तीरों के बीच के कोण का cosine है, इसलिए वो −1 और 1 के बीच रहता है।</li>
+    <li>Dot product लंबे vector को फ़ायदा देता है, जैसे FAQ page को 1.56। Cosine length को छोड़ देता है, और दूरी लंबे vector को नुकसान देती है। Normalize किए vectors पर तीनों एक ही क्रम देते हैं, और DPR ने dot product रखा।</li>
+    <li>Index एक matrix है, और एक matrix-vector गुणा हर passage का score देता है। हर chunk का एक vector search को तेज़ बनाता है, लेकिन उसमें rare error code दब सकता है। इसलिए lesson 14 BM25 और dense retrieval को मिलाता है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-vector">Vector</dt><dd>तय लंबाई वाली numbers की list, जैसे [0.9, 0.1]। 2 numbers हों, तो plane पर एक तीर।</dd>
+    <dt id="w-dimension">Dimension</dt><dd>Vector में कितने numbers हैं। जैसे [0.9, 0.1] का dimension 2 है, और BERT-base के vectors का 768।</dd>
+    <dt id="w-dot">Dot product (inner product)</dt><dd>एक ही जगह वाले numbers का गुणा, फिर सबका जोड़। जैसे [0.8, 0.2] और [0.9, 0.1]: 0.72 + 0.02 = 0.74।</dd>
+    <dt id="w-sigma">∑ (sigma)</dt><dd>नीचे लिखी range पर जोड़ते जाइए। जैसे i = 1 से 2 तक a<sub>i</sub>b<sub>i</sub> का जोड़, यानी a<sub>1</sub>b<sub>1</sub> + a<sub>2</sub>b<sub>2</sub>।</dd>
+    <dt id="w-length">Length</dt><dd>तीर की लंबाई: हर number का square, उनका जोड़, फिर square root। जैसे [0.8, 0.2] की length √(0.64 + 0.04) = 0.82।</dd>
+    <dt id="w-cosine">Cosine similarity</dt><dd>Dot product ÷ दोनों lengths का गुणा। सिर्फ़ दिशा देखता है, −1 से 1 के बीच। जैसे 0.74 ÷ (0.82 × 0.91) = 0.99।</dd>
+    <dt id="w-normalize">Normalize</dt><dd>Vector के हर number को उसकी length से भाग देकर length 1 बनाना। दिशा वही रहती है। जैसे [0.8, 0.2] ÷ 0.82 = [0.97, 0.24]।</dd>
+    <dt id="w-embedding">Embedding</dt><dd>Trained model से बना text का vector। मिलती-जुलती बात वाले texts की दिशा मिलती-जुलती होती है, जैसे “help from a TA” और “run by the TAs”।</dd>
+    <dt id="w-encoder">Embedding model (encoder)</dt><dd>Text पढ़कर तय लंबाई का embedding बनाने वाला model। जैसे query को [0.8, 0.2] जैसा vector देना।</dd>
+    <dt id="w-index">Index</dt><dd>Passages के पहले से बनाकर रखे embeddings की list। जैसे 60,000 passages के 60,000 vectors।</dd>
+    <dt id="w-offline">Offline और online</dt><dd>Offline: query आने से पहले, एक बार, जैसे passages के embeddings बनाना। Online: हर query पर, जैसे query का embedding।</dd>
+    <dt id="w-matrix">Matrix और matrix-vector गुणा</dt><dd>Rows और columns वाली numbers की table, और उसकी हर row का किसी vector से dot product। जैसे हमारा 4 × 2 index गुणा query [0.8, 0.2] = [0.74, 0.26, 0.32, 1.56]।</dd>
+    <dt id="w-decomposable">Decomposable similarity</dt><dd>ऐसा score, जो सवाल के vector और passage के vector से निकले, और passage का vector सवाल देखे बिना बने। तभी offline index बन सकता है। जैसे dot product, cosine और दूरी।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="02-retrieval-dense.html">पिछला: Lesson 2</a>
+    <a href="04-probability-tools-dense.html">अगला: Lesson 4, Probability के औज़ार</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Papers: Karpukhin et al., 2020, “Dense Passage Retrieval for Open-Domain Question Answering”। Reimers और Gurevych, 2019, “Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks”। Wang et al., 2022, “Text Embeddings by Weakly-Supervised Contrastive Pre-training” (E5)। Radford et al., 2021, “Learning Transferable Visual Models From Natural Language Supervision” (CLIP)। Mikolov et al., 2013, “Efficient Estimation of Word Representations in Vector Space” (word2vec)। Grover और Leskovec, 2016, “node2vec: Scalable Feature Learning for Networks”। “मेरे बनाए”, “मेरा example” और “हिसाब मेरा” वाले numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें papers में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var P = [
+    { name: "Office hours page", label: "Office hours", v: [0.9, 0.1], dx: 7, dy: -7, a: "start" },
+    { name: "Syllabus", label: "Syllabus", v: [0.1, 0.9], dx: 8, dy: -8, a: "start" },
+    { name: "Project page", label: "Project", v: [0.2, 0.8], dx: 8, dy: 4, a: "start" },
+    { name: "FAQ page", label: "FAQ", v: [1.6, 1.4], dx: 7, dy: -6, a: "start" }
+  ];
+  var T = { axX: "पहला number: मदद / office hours", axY: "दूसरा number: deadlines", len: "length", end: "।", cos: "Cosine", dot: "Dot product", top: " से सबसे ऊपर: " };
+  var q = [0.8, 0.2];
+  var metric = "cos";
+  var svg = document.getElementById("vw-svg");
+  var body = document.getElementById("vw-body");
+  var out = document.getElementById("vw-out");
+  var NS = "http://www.w3.org/2000/svg";
+  var OX = 56, OY = 296, S = 125, MAX = 2;
+
+  function px(v) { return [OX + v[0] * S, OY - v[1] * S]; }
+  function el(tag, attrs, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1]; }
+  function len(a) { return Math.sqrt(dot(a, a)); }
+  function r2(x) { return (Math.round(x * 100 + 1e-9) / 100).toFixed(2); }
+
+  function draw() {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    for (var g = 0; g <= MAX + 1e-9; g += 0.5) {
+      var a = px([g, 0]), b = px([g, MAX]);
+      svg.appendChild(el("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1], "class": "grid" }));
+      var c = px([0, g]), d = px([MAX, g]);
+      svg.appendChild(el("line", { x1: c[0], y1: c[1], x2: d[0], y2: d[1], "class": "grid" }));
+      svg.appendChild(el("text", { x: a[0], y: OY + 16, "text-anchor": "middle", "class": "ax" }, g.toFixed(1)));
+      svg.appendChild(el("text", { x: OX - 8, y: c[1] + 4, "text-anchor": "end", "class": "ax" }, g.toFixed(1)));
+    }
+    var o = px([0, 0]);
+    svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: px([MAX, 0])[0], y2: o[1], "class": "axis" }));
+    svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: o[0], y2: px([0, MAX])[1], "class": "axis" }));
+    svg.appendChild(el("text", { x: px([MAX, 0])[0], y: OY + 32, "text-anchor": "end", "class": "ax" }, T.axX));
+    svg.appendChild(el("text", { x: 12, y: px([0, 1])[1], "text-anchor": "middle", "class": "ax", transform: "rotate(-90 12 " + px([0, 1])[1] + ")" }, T.axY));
+    P.forEach(function (p) {
+      var t = px(p.v);
+      svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: t[0], y2: t[1], "class": "pv" }));
+      svg.appendChild(el("circle", { cx: t[0], cy: t[1], r: 4, "class": "pd" }));
+      svg.appendChild(el("text", { x: t[0] + p.dx, y: t[1] + p.dy, "text-anchor": p.a }, p.label));
+    });
+    var tq = px(q);
+    svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: tq[0], y2: tq[1], "class": "qv" }));
+    svg.appendChild(el("circle", { cx: tq[0], cy: tq[1], r: 6, "class": "qd" }));
+    svg.appendChild(el("text", { x: tq[0] - 10, y: tq[1] - 10, "text-anchor": "end", "class": "q" }, "query"));
+  }
+
+  function table() {
+    var rows = P.map(function (p) {
+      var d = dot(q, p.v);
+      return { p: p, dot: d, cos: d / (len(q) * len(p.v)) };
+    });
+    rows.sort(function (a, b) { return b[metric] - a[metric]; });
+    body.innerHTML = rows.map(function (r, i) {
+      return '<tr class="' + (i === 0 ? "hi" : "") + '"><td>' + r.p.name + '</td><td class="num mono hide-sm">[' + r.p.v[0] + ", " + r.p.v[1] + ']</td><td class="num">' +
+        r2(r.dot) + '</td><td class="num">' + r2(r.cos) + "</td></tr>";
+    }).join("");
+    out.innerHTML = "Query vector: <b>[" + q[0].toFixed(2) + ", " + q[1].toFixed(2) + "]</b>, " + T.len + " " + r2(len(q)) + T.end + " " +
+      (metric === "cos" ? T.cos : T.dot) + T.top + "<b>" + rows[0].p.name + "</b>" + T.end;
+    document.querySelectorAll("#vw-m button[data-m]").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.dataset.m === metric ? "true" : "false");
+    });
+  }
+
+  function render() { draw(); table(); }
+
+  function setFromEvent(ev) {
+    var pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    var p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    var x = (p.x - OX) / S, y = (OY - p.y) / S;
+    x = Math.min(MAX, Math.max(0.05, x));
+    y = Math.min(MAX, Math.max(0.05, y));
+    q = [Math.round(x * 20) / 20, Math.round(y * 20) / 20];
+    render();
+  }
+  var dragging = false;
+  svg.addEventListener("pointerdown", function (e) { dragging = true; svg.setPointerCapture(e.pointerId); setFromEvent(e); });
+  svg.addEventListener("pointermove", function (e) { if (dragging) setFromEvent(e); });
+  svg.addEventListener("pointerup", function () { dragging = false; });
+  svg.addEventListener("pointercancel", function () { dragging = false; });
+
+  document.querySelectorAll("#vw-m button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (b.dataset.m) metric = b.dataset.m;
+      if (b.dataset.p) q = b.dataset.p.split(",").map(Number);
+      render();
+    });
+  });
+  render();
+})();
+</script>
+</body>
+</html>

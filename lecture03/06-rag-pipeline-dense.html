@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="API वाले LLM को आप train नहीं कर सकते, इसलिए lesson 2 की दोनों गलतियाँ लौट आती हैं। उन्हें LLM से पहले के steps में सुधारना है, और आख़िर में Stanford की दोनों slides खुद पढ़नी हैं।">
+<title>Lesson 6: RAG pipeline (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  figure.slide.narrow img { max-width: 340px; margin: 0 auto; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 6 / 18 · <a href="06-rag-pipeline.html">आसान</a> · <b>गहरा</b> · <a href="06-rag-pipeline-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 6 · गहरा version</p>
+  <h1>RAG pipeline: Naive, Advanced और Modular</h1>
+  <p class="lede"><b>RAG pipeline steps की एक line है: query से retrieval, retrieval से prompt, और prompt से LLM का जवाब। LLM को आप बदल नहीं सकते, इसलिए जवाब सुधारने के लिए आप उससे पहले के steps बदलते हैं।</b> Stanford की slide ऐसी pipeline के तीन रूप दिखाती है: Naive, Advanced और Modular RAG।</p>
+  <p class="lede">इसकी ज़रूरत <a href="05-rag-model-dense.html#training">lesson 5</a> के आख़िर में दिखी थी। वहाँ retriever और generator साथ में train होते थे। लेकिन API से लिए LLM के parameters आप नहीं बदल सकते, जैसे GPT या Gemini के। तब <a href="02-retrieval-dense.html#recall-ceiling">lesson 2</a> की दोनों गलतियाँ लौट आती हैं। <q>when can I get help from a TA</q> पर retriever एक भी passage नहीं लौटाता। <q>which office hour is least crowded</q> पर पुराना forum post queue log के बराबर score पाता है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 10 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 10 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#frozen">Frozen LLM और pipeline</a><span class="can">बता पाएँगे कि API वाले LLM के साथ lesson 5 की training क्यों नहीं चलती।</span></li>
+      <li><a href="#naive">Naive RAG: indexing time और query time</a><span class="can">हर query का खर्च गिन पाएँगे, और slide का Naive RAG वाला हिस्सा पढ़ पाएँगे।</span></li>
+      <li><a href="#pre">Pre-retrieval: retrieval से पहले query सुधारना</a><span class="can">Query expansion के बाद के scores हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#post">Post-retrieval: लौटी list सुधारना</a><span class="can">बता पाएँगे कि rerank छूटा passage क्यों नहीं लाता, और slide का Advanced RAG वाला हिस्सा पढ़ पाएँगे।</span></li>
+      <li><a href="#modular">Modular RAG: modules और patterns</a><span class="can">दो बार ढूँढने वाले pattern का हिसाब हाथ से कर पाएँगे, और slide का Modular RAG वाला हिस्सा पढ़ पाएँगे।</span></li>
+      <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#survey">Survey में Naive और Advanced RAG</a><span class="can">Precision निकाल पाएँगे, और sets से साबित कर पाएँगे कि expansion score नहीं घटाता और rerank passage नहीं जोड़ता।</span></li>
+      <li><a href="#modules">Modular RAG के सारे modules</a><span class="can">Slide के दसों modules का काम हमारे corpus पर बता पाएँगे।</span></li>
+      <li><a href="#dsp">DSP का paper, और relative gain</a><span class="can">Demonstrations अपने आप बनने का तरीका और relative gain का हिसाब समझा पाएँगे।</span></li>
+      <li><a href="#iterretgen">ITER-RETGEN: formula, नतीजे और chances का गुणा</a><span class="can">Formula के हर symbol को अपने numbers से जोड़ पाएँगे, और कई searches का chance निकाल पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">इस lesson की दोनों Stanford slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="02-retrieval-dense.html#retriever">Lesson 2</a> (retriever, word overlap, stopwords, recall ceiling), <a href="03-vectors-dense.html#embedding">Lesson 3</a> (embedding, index) और <a href="05-rag-model-dense.html#parts">Lesson 5</a> (RAG model, concatenate, Exact Match)। पड़ाव 9 में <a href="04-probability-tools-dense.html#chain">Lesson 4</a> (conditional probability, chain rule) भी काम आता है। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="frozen">
+  <h3><span class="cn">1</span>Frozen LLM: आप सिर्फ़ prompt बदल सकते हैं</h3>
+
+  <p><b>Frozen LLM वो LLM है, जिसके parameters आप नहीं बदल सकते। आप उसे सिर्फ़ prompt भेजते हैं, और जवाब पाते हैं।</b> API वाले LLM के <button class="def" data-w="w-parameters">parameters</button> company के server पर हैं, इसलिए आपके लिए वो frozen है।</p>
+
+  <p>Lesson 5 का RAG इस हालत में train नहीं हो सकता। वहाँ <button class="def" data-w="w-e2e">end-to-end training</button> एक ही loss से retriever और generator, दोनों के parameters बदलती थी। Frozen LLM के parameters बदल ही नहीं सकते, इसलिए ये रास्ता बंद है।</p>
+
+  <p>तो बदलने को वो सब बचता है, जो LLM तक पहुँचने से पहले होता है: query, retriever और prompt। <b class="term">Pipeline</b> steps की ऐसी line है, जिसमें हर step का output अगले step का input बनता है। जैसे retriever का output top-K passages हैं, और वही passages prompt का input बनते हैं।</p>
+
+  <p>Pipeline में top-K passages एक ही prompt में जाते हैं। Lesson 5 में हर passage के साथ generator अलग से चलता था, और फिर वज़न वाला जोड़ होता था। यहाँ LLM को कुछ ऐसा prompt मिलता है: <span class="mine">मेरा example</span></p>
+  <div class="sentence">Answer using only the passages below. Cite passage IDs.<br>[P3] Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<br>[P2] Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs.<br>Question: Which office hour is least crowded, and where is it?</div>
+
+  <p>LLM खुद तय करता है कि कौन सी बात किस passage से ले: Thursday 9am queue log से, और Zoom office hours page से। [P3] और [P2] lesson 2 के corpus वाले ID हैं, ताकि जवाब citation दे सके।</p>
+
+  <p><b>इस आज़ादी की कीमत ये है कि LLM अपनी गलती से कुछ नहीं सीखता, और retriever को उस गलती का पता ही नहीं चलता।</b> यानी lesson 2 वाली हालत लौट आई, जिसमें retriever और reader अलग-अलग बने थे। इसलिए हर step को अलग से अच्छा बनाना पड़ता है, और बाकी lesson यही steps दिखाता है।</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="naive">
+  <h3><span class="cn">2</span>Naive RAG: indexing time और query time</h3>
+
+  <p><b>Naive RAG सबसे सीधी pipeline है: पहले से बना index, और फिर हर query पर retrieval, prompt और frozen LLM।</b> बीच में कोई extra step नहीं है, इसलिए इसे naive, यानी सीधा-सादा, कहते हैं। इसके steps उन्हीं दो हिस्सों में बँटते हैं, जो lesson 3 में <button class="def" data-w="w-offline">offline और online</button> थे।</p>
+
+  <p>Pipeline की भाषा में इन दो हिस्सों को <b class="term">indexing time और query time</b> कहते हैं। Indexing time के steps एक बार चलते हैं: documents को passages में तोड़िए, हर passage का <button class="def" data-w="w-embedding">embedding</button> बनाइए, और सबको <button class="def" data-w="w-index">index</button> में रखिए। Embedding वो vector है, जो encoder किसी text से बनाता है।</p>
+
+  <figure>
+    <div class="flow">
+      <div class="node"><b>Documents</b><span class="ex">2,000 documents</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Passages में तोड़िए</b><span class="ex">60,000 passages</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Index</b><span class="ex">60,000 embeddings, एक बार</span></div>
+    </div>
+    <figcaption>Indexing time: ये line एक बार चलती है। Numbers lesson 2 की company से हैं: 2,000 documents × 30 paragraphs = 60,000 passages। <span class="mine">मेरा example</span></figcaption>
+  </figure>
+
+  <p>Query time के steps हर query पर चलते हैं:</p>
+
+  <figure>
+    <div class="flow">
+      <div class="node"><b>Query</b><span class="ex">1 embedding</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Retrieve</b><span class="ex">60,000 dot products, top-5</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Prompt</b><span class="ex">5 × 500 tokens + सवाल</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Frozen LLM</b><span class="ex">Read, 1 call</span></div>
+    </div>
+    <figcaption>Query time: ये line हर query पर चलती है। <span class="mine">मेरा example</span></figcaption>
+  </figure>
+
+  <p>यानी हर query पर 1 embedding, 60,000 <button class="def" data-w="w-dot">dot products</button> और 1 LLM call लगती है। Prompt में passages के 5 × 500 = 2,500 tokens जाते हैं। Query time के दो मुख्य steps के नाम Retrieve और Read हैं। Read में LLM passages पढ़कर जवाब लिखता है, lesson 2 के <button class="def" data-w="w-reader">reader</button> की तरह।</p>
+
+  <figure class="slide narrow">
+    <a href="img/slide-p21-naive.png"><img src="img/slide-p21-naive.png" alt="Stanford slide का Naive RAG वाला हिस्सा" loading="lazy"></a>
+    <figcaption>Stanford की slide का बायाँ हिस्सा: Naive RAG। Documents से Indexing तक indexing time है, और Query से Output तक query time। Frozen LLM के आगे बर्फ़ का निशान है। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>अब शुरू वाले दोनों सवाल इस pipeline पर चलाइए। Retriever के लिए lesson 2 का <button class="def" data-w="w-overlap">word overlap</button> लेते हैं, क्योंकि उसका हर score आप हाथ से गिन सकते हैं। Word overlap गिनता है कि query के कितने शब्द passage में भी हैं, और गिनने से पहले which और is जैसे <button class="def" data-w="w-stopwords">stopwords</button> हटाता है।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query</th><th>Retriever ने क्या लौटाया</th><th>K = 2 पर LLM को क्या मिला</th></tr></thead>
+    <tbody>
+      <tr><td>when can I get help from a TA</td><td>कुछ नहीं, हर passage का score 0।</td><td>कुछ नहीं। Office hours page, जिसमें जवाब है, LLM तक नहीं पहुँचा।</td></tr>
+      <tr><td>which office hour is least crowded</td><td>Queue log (2), पुराना forum post (2), office hours page (1)।</td><td>Queue log और forum post, यानी सही data के साथ 2024 की पुरानी राय।</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>दोनों गलतियाँ अलग किस्म की हैं। TA वाले सवाल पर सही passage आया ही नहीं, और यही lesson 2 की <button class="def" data-w="w-ceiling">recall ceiling</button> है। Least crowded वाले सवाल पर सही passage आया, लेकिन गलत passage भी बराबर score लेकर साथ आया, यानी ये क्रम की गलती है। <b>दोनों गलतियाँ LLM तक पहुँचने से पहले हो चुकी हैं, इसलिए LLM कितना भी अच्छा हो, वो इन्हें ठीक नहीं कर सकता।</b></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Corpus में 500 नए passages जुड़े, और एक पुराना document बदल गया। Naive RAG में कौन से steps दोबारा चलाने होंगे, और कौन से नहीं?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>सिर्फ़ indexing time के steps, और वो भी सिर्फ़ बदले हुए text के लिए। 500 नए passages के embeddings बनाकर index में जोड़िए, और बदले document के passages के embeddings दोबारा बनाइए। ऐसा न करें, तो index पुराना text लौटाता रहेगा। Query time के steps वैसे ही चलते हैं, और LLM में कुछ नहीं बदलता।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="pre">
+  <h3><span class="cn">3</span>Pre-retrieval: retrieval से पहले query सुधारना</h3>
+
+  <p><b><span class="term">Pre-retrieval</span> वो steps हैं, जो query को retriever तक भेजने से पहले सुधारते हैं।</b> Slide पर इनके तीन नाम हैं: query routing, query rewriting और query expansion। पहले TA वाले सवाल पर expansion देखिए, क्योंकि ये सवाल query के शब्दों की वजह से हारा।</p>
+
+  <p>Stopwords हटाने के बाद इस query में help और ta बचते हैं। Office hours page में TAs लिखा है, ta नहीं, और word overlap शब्दों को हूबहू मिलाता है। help किसी passage में नहीं है। यानी जवाब वाला passage corpus में है, बस query के शब्द उससे नहीं मिलते।</p>
+
+  <p><b class="term">Query expansion</b> query में उससे जुड़े शब्द जोड़ता है, ताकि वो passages के शब्दों से मिल सके। TA वाली query में office hours जोड़िए, तो retriever के पास चार शब्द हैं: help, ta, office और hours। <span class="mine">मेरा example</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>मिले शब्द</th><th class="numh">Expansion से पहले</th><th class="numh">Expansion के बाद</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page</td><td>office, hours</td><td class="num">0</td><td class="num">2</td></tr>
+      <tr><td>Queue log</td><td>office <span class="sub">इसमें hour लिखा है, hours नहीं।</span></td><td class="num">0</td><td class="num">1</td></tr>
+      <tr><td>बाकी चार passages</td><td>कोई नहीं</td><td class="num">0</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>अब office hours page सबसे ऊपर है, और LLM तक पहुँचता है। ये शब्द अक्सर एक LLM जोड़ता है, जिसे छोटा prompt मिलता है: <q>इस सवाल से जुड़े search शब्द लिखिए</q>।</p>
+
+  <p>बाकी दो steps भी query पर काम करते हैं। <b class="term">Query rewriting</b> पूरी query दोबारा लिखता है। जैसे user छोटे रूप में पूछे <q>OH timings?</q>, तो एक LLM उसे <q>CS 329Z office hours schedule</q> बना देता है। <b class="term">Query routing</b> तय करता है कि किस index में ढूँढना है। जैसे <q>when is the project milestone due</q> syllabus वाले index में जाए।</p>
+
+  <div class="widget" id="pw">
+    <h4>Pipeline के steps चालू-बंद कीजिए</h4>
+    <p class="hint">Retriever lesson 2 वाला word overlap है। Expansion query में शब्द जोड़ता है। Rerank लौटे हुए passages को दूसरे score से दोबारा sort करता है, और वो <a href="#post">अगले पड़ाव</a> में आता है। <span class="mine">rerank scores मेरे बनाए हैं</span></p>
+    <div class="btns" id="pw-q"></div>
+    <label class="switch"><input type="checkbox" id="pw-exp"> Query expansion</label>
+    <label class="switch"><input type="checkbox" id="pw-rr"> Rerank</label>
+    <div class="ctl"><label for="pw-k">K, LLM को कितने passages जाएँ</label><input id="pw-k" type="range" min="1" max="4" step="1" value="2"><output id="pw-ko">2</output></div>
+    <p class="note" id="pw-words" style="margin-bottom:10px"></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th class="num">#</th><th>Passage</th><th class="num">Overlap</th><th class="num">Rerank</th></tr></thead>
+      <tbody id="pw-body"></tbody>
+    </table></div>
+    <p class="out" id="pw-out"></p>
+  </div>
+
+  <p>इन steps की कीमत है। Rewriting और expansion के लिए अक्सर हर query पर एक extra LLM call लगती है, इसलिए जवाब धीमा और महँगा होता है। ये query का मतलब भी बदल सकते हैं: model OH को Ohio समझ ले, तो search गलत जगह जाएगी।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Widget में <q>which office hour is least crowded</q> चुनिए। Expansion इस query में <q>waiting</q> जोड़ता है। Queue log और पुराने forum post का नया score क्या होगा? फिर widget में check कीजिए।</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Query के शब्द अब office, hour, least, crowded और waiting हैं। Queue log में office, hour और waiting हैं, इसलिए score 3। Forum post में least और crowded हैं, इसलिए score 2। अब queue log अकेला सबसे ऊपर है, लेकिन K = 2 पर forum post अब भी prompt में जाता है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="post">
+  <h3><span class="cn">4</span>Post-retrieval: लौटी list सुधारना</h3>
+
+  <p><b><span class="term">Post-retrieval</span> वो steps हैं, जो retriever की लौटाई list को prompt में जाने से पहले सुधारते हैं।</b> Slide पर इनके तीन नाम हैं: rerank, summary और fusion। पहले least crowded वाले सवाल पर rerank देखिए, क्योंकि वहाँ गलती क्रम की थी।</p>
+
+  <p>Retriever ने queue log और forum post को बराबर 2 दिया। उसे नहीं दिखता कि queue log तीन हफ़्ते का data है, और forum post 2024 की एक राय।</p>
+
+  <p>Retriever तेज़ है, क्योंकि वो हर passage को मोटे तौर पर देखता है। लौटे हुए passages गिनती में कम हैं, इसलिए उन पर एक धीमा लेकिन ज़्यादा सटीक model चल सकता है। ये model query और passage को साथ पढ़कर नया score देता है, और list दोबारा sort करता है। इसे <b class="term">rerank</b> कहते हैं, और इस model को reranker। Reranker कैसे बनता है, ये <a href="14-hybrid-rerank-dense.html">lesson 14</a> में है।</p>
+
+  <p>Retriever ने तीन passages लौटाए थे, और reranker उनमें से forum post को सबसे नीचे रखता है: <span class="mine">rerank scores मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Retriever score</th><th class="numh">Reranker score</th><th>K = 2 पर LLM तक?</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log</td><td class="num">2</td><td class="num">0.92</td><td>हाँ</td></tr>
+      <tr class="hi"><td>Office hours page</td><td class="num">1</td><td class="num">0.41</td><td>हाँ</td></tr>
+      <tr><td>पुराना forum post</td><td class="num">2</td><td class="num">0.35</td><td>नहीं</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>K = 2 पर अब queue log और office hours page जाते हैं, और ये जोड़ी पूरा जवाब देती है। Queue log बताता है कि Thursday 9am में भीड़ कम है, और office hours page बताता है कि वो Zoom पर है। यही वो prompt है, जो <a href="#frozen">पड़ाव 1</a> में दिखा था।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Widget में TA वाली query चुनिए। Expansion बंद रखिए, और Rerank चालू कीजिए। क्या office hours page अब LLM तक पहुँचेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>नहीं। Retriever ने एक भी passage नहीं लौटाया, तो reranker के पास sort करने को कुछ है ही नहीं। अब Expansion भी चालू कीजिए: office hours page list में आता है, और rerank उसे सबसे ऊपर रखता है।</p>
+    </details>
+  </div>
+
+  <p><b>Reranker सिर्फ़ उन्हीं passages का क्रम बदलता है, जो retriever ने लौटाए।</b> इसलिए दोनों तरह के steps अलग गलती ठीक करते हैं। Pre-retrieval छूटे हुए passage को list में लाता है, और post-retrieval list का क्रम सुधारता है।</p>
+
+  <p>Retrieval के बाद दो और steps आते हैं। पहला <b class="term">summary</b> है: passages को prompt में डालने से पहले छोटा करना। Lesson 1 की context window में passages के लिए 7,000 tokens की जगह थी, यानी 500 tokens वाले 14 passages। हर passage 100 tokens का हो जाए, तो वही 14 passages 14 × 100 = 1,400 tokens लेते हैं। <span class="mine">मेरा example</span> खतरा ये है कि summary कोई ज़रूरी detail गिरा दे, जैसे Room 104।</p>
+
+  <p>दूसरा <b class="term">fusion</b> है: कई ranked lists को मिलाकर एक list बनाना। मान लीजिए आपने original query से भी ढूँढा, और rewrite की हुई query <q>office hours schedule</q> से भी। पहली list है queue log, forum post, office hours page। दूसरी में सिर्फ़ office hours page (2) और queue log (1) हैं। ये दोनों passages दोनों lists में हैं, इसलिए मिली हुई list में उन्हें ऊपर आना चाहिए। मिलाने का पक्का हिसाब <a href="14-hybrid-rerank-dense.html">lesson 14</a> में है।</p>
+
+  <p>Naive RAG में pre-retrieval और post-retrieval steps जोड़ने से जो pipeline बनती है, उसे <b class="term">Advanced RAG</b> कहते हैं।</p>
+
+  <figure class="slide narrow">
+    <a href="img/slide-p21-advanced.png"><img src="img/slide-p21-advanced.png" alt="Stanford slide का Advanced RAG वाला हिस्सा" loading="lazy"></a>
+    <figcaption>Stanford की slide का बीच वाला हिस्सा: Advanced RAG। नारंगी boxes नए steps हैं: Retrieval से ऊपर Pre-Retrieval के तीन steps, और नीचे Post-Retrieval के तीन।</figcaption>
+  </figure>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="modular">
+  <h3><span class="cn">5</span>Modular RAG: modules और patterns</h3>
+
+  <p><b><span class="term">Modular RAG</span> pipeline को modules में देखता है, जिन्हें आप किसी भी क्रम में जोड़ सकते हैं।</b> Module pipeline का एक हिस्सा है, जो एक काम करता है, जैसे Retrieve, Rerank या Read। Modules के एक तय क्रम को <b class="term">pattern</b> कहते हैं। जैसे Naive RAG का pattern है: Retrieve, फिर Read।</p>
+
+  <p>इसकी ज़रूरत उन सवालों पर पड़ती है, जिनके जवाब के हिस्से अलग-अलग passages में हैं। Advanced RAG भी हर सवाल पर एक ही बार ढूँढता है, इसलिए जो पहली search में नहीं आया, वो कभी नहीं आता। जिस सवाल के लिए कई बार ढूँढना पड़े, उसे <b class="term">multi-hop question</b> कहते हैं।</p>
+
+  <p>हमारे corpus में भी ऐसा सवाल है: पड़ाव 1 के prompt वाला <q>Which office hour is least crowded, and where is it?</q> इसका पहला हिस्सा queue log में है, और दूसरा office hours page में। Office hours page में जगह Thursday 9am के आगे लिखी है, इसलिए उसे ढूँढने के लिए पहले Thursday 9am पता होना चाहिए।</p>
+
+  <p>अब Retrieve, Read, Retrieve, Read वाला pattern चलाइए, जिसमें पहली Read का जवाब दूसरी search की query में जुड़ता है। K = 2 है, और retriever वही word overlap। <span class="mine">मेरा example</span></p>
+  <ol class="plain">
+    <li><b>पहली Retrieve:</b> query में office, hour, least, crowded और where बचते हैं, और where किसी passage में नहीं है। Queue log और forum post को 2-2 मिलता है, इसलिए यही दोनों लौटते हैं।</li>
+    <li><b>पहली Read:</b> मान लीजिए LLM queue log का data चुनकर लिखता है: Thursday 9am। जगह इन दोनों passages में नहीं है।</li>
+    <li><b>दूसरी Retrieve:</b> query के आगे पहला जवाब, Thursday 9am, जोड़िए। अब thursday और 9am भी गिनती में आते हैं।</li>
+    <li><b>दूसरी Read:</b> K = 2 पर queue log और office hours page मिलते हैं, यानी पड़ाव 1 वाला prompt। LLM लिखता है: Thursday 9am, Zoom पर।</li>
+  </ol>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">पहली search</th><th class="numh">दूसरी search</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log<span class="sub">office, hour, फिर thursday, 9am भी</span></td><td class="num">2</td><td class="num">4</td></tr>
+      <tr class="hi"><td>Office hours page<span class="sub">office, फिर thursday, 9am भी</span></td><td class="num">1</td><td class="num">3</td></tr>
+      <tr><td>पुराना forum post<span class="sub">least, crowded</span></td><td class="num">2</td><td class="num">2</td></tr>
+      <tr><td>Syllabus<span class="sub">दूसरी बार thursday</span></td><td class="num">0</td><td class="num">1</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>इस pattern का नाम ITER-RETGEN है। इसका paper भी पिछले जवाब और सवाल को मिलाकर अगली query बनाता है। <span class="mine">paper से</span> <b>Rerank सिर्फ़ लौटी list का क्रम बदलता है, जबकि ITER-RETGEN नई query से दोबारा ढूँढता है।</b></p>
+
+  <p>इसकी एक हद भी है। पहली Read का जवाब गलत हो, तो दूसरी search भी गलत दिशा में जाती है। जैसे LLM forum post पर भरोसा करके Wednesday लिखे, तो दूसरी query में Thursday 9am आएगा ही नहीं।</p>
+
+  <p>Lecture में एक असली multi-hop सवाल भी है: <q>Who is older, Jed Hoyer or John William Henry II?</q> Slide पर इस सवाल पर एक model का trace है, जो <a href="17-search-r1-dense.html">lesson 17</a> में पूरा आएगा। पहली search Jed Hoyer के career वाला passage लाती है, जिसमें जन्म-तारीख नहीं है। अगली search John William Henry II की है, और उसका passage बताता है: born September 13, 1949। तीसरी search Jed Hoyer birth year की है, यानी हर search इस पर टिकी है कि पिछली बार पढ़कर क्या मिला।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p59.png"><img src="img/slide-p59.png" alt="Stanford slide: Jed Hoyer वाले सवाल पर model का trace" loading="lazy"></a>
+    <figcaption>Stanford की slide: Search-R1 नाम के model का trace। &lt;search&gt; वाली lines model की searches हैं, और &lt;information&gt; वाली lines लौटे passages।</figcaption>
+  </figure>
+
+  <p>Stanford की slide चार patterns दिखाती है, जो Gao और साथियों के survey (2024) से हैं:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Pattern</th><th>Modules का क्रम</th><th>मतलब</th></tr></thead>
+    <tbody>
+      <tr><td>Naive RAG</td><td>Retrieve, Read</td><td><a href="#naive">पड़ाव 2</a> वाली सीधी pipeline</td></tr>
+      <tr><td>Advanced RAG</td><td>Rewrite, Retrieve, Rerank, Read</td><td><a href="#pre">पड़ाव 3</a> और <a href="#post">4</a> के steps जोड़कर</td></tr>
+      <tr><td>DSP</td><td>Demonstrate, Search, Predict</td><td>हल किए हुए examples, फिर ढूँढना, फिर जवाब</td></tr>
+      <tr class="hi"><td>ITER-RETGEN</td><td>Retrieve, Read, Retrieve, Read</td><td>पहली Read के जवाब से दोबारा ढूँढना</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>DSP का Demonstrate module prompt में सवाल से पहले हल किए हुए examples रखता है, जैसे <q>Q: When is the milestone due? A: Week 6, Thursday [P1]</q>। <span class="mine">मेरा example</span> ऐसे examples को <b class="term">demonstrations</b> कहते हैं, और इस तरीके को few-shot prompting। ये lesson 2 के <button class="def" data-w="w-zeroshot">zero-shot</button> से अलग है, जहाँ prompt में सिर्फ़ instruction थी।</p>
+
+  <p>Slide के modules वाले हिस्से में 10 modules हैं, और उनमें से 7 आप देख चुके हैं। बाकी तीन, यानी Search, Predict और Memory, गहरे version में आते हैं।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p21-modules.png"><img src="img/slide-p21-modules.png" alt="Stanford slide के Modular RAG हिस्से में modules" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p21-patterns.png"><img src="img/slide-p21-patterns.png" alt="Stanford slide के Modular RAG हिस्से में चार patterns" loading="lazy"></a>
+    <figcaption>Stanford की slide का दायाँ हिस्सा: Modular RAG। ऊपर modules हैं, और नीचे चार patterns। ITER-RETGEN में आख़िरी Read से पहली Retrieve तक का तीर बताता है कि ये क्रम दोबारा चलता है।</figcaption>
+  </figure>
+
+  <p>Pattern इंसान पहले से लिखता है, इसलिए ITER-RETGEN में searches की गिनती तय होती है, चाहे सवाल को 1 search चाहिए या 3। Loop कब रुके और अगली query क्या हो, ये फ़ैसले <a href="16-agentic-rag-dense.html">lesson 16</a> और <a href="17-search-r1-dense.html">17</a> में model खुद लेता है। हर extra loop एक LLM call और जोड़ता है।</p>
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 5 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले survey की नज़र से Naive और Advanced RAG है, फिर slide के सारे modules। उसके बाद DSP और ITER-RETGEN के papers हैं, और आख़िर में आप दोनों slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="survey">
+  <h3><span class="cn">6</span>Survey में Naive और Advanced RAG: तीन दिक्कतें, precision और sets</h3>
+
+  <p>Stanford की slide का diagram Gao और साथियों के एक survey से है। Survey वो paper है, जो किसी field के बहुत सारे papers पढ़कर उन्हें एक ढाँचे में रखता है। इस survey ने 100 से ज़्यादा RAG papers को तीन रूपों में बाँटा: Naive, Advanced और Modular RAG। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="threeproblems">Naive RAG के तीन stages और तीन दिक्कतें</h4>
+
+  <p>Survey Naive RAG को तीन stages में लिखता है: indexing, retrieval और generation। इसे वो Retrieve-Read ढाँचा भी कहता है। Indexing में HTML, Word और Markdown जैसे formats के documents पहले सादे text में बदलते हैं। फिर text chunks में टूटता है, और हर chunk का embedding एक vector database में जाता है। <span class="mine">paper से</span></p>
+
+  <p>Retrieval में query का embedding उसी encoder से बनता है, जिससे chunks के embeddings बने थे। ऐसा न हो, तो query और chunks के vectors अलग-अलग तरीके से बनेंगे, और उनका dot product कुछ नहीं बताएगा। Generation में query और चुने हुए chunks एक prompt में जाते हैं, ठीक पड़ाव 1 की तरह।</p>
+
+  <p>फिर survey Naive RAG की तीन दिक्कतें गिनाता है। नीचे हर दिक्कत के साथ हमारे corpus का एक example है: <span class="mine">examples मेरे बनाए</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>दिक्कत</th><th>Survey क्या कहता है</th><th>हमारे corpus में</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieval</td><td>Precision और recall, दोनों कम: गलत chunks आते हैं, और ज़रूरी chunks छूटते हैं।</td><td>K = 2 पर forum post आया, और TA वाले सवाल पर office hours page छूटा।</td></tr>
+      <tr><td>Generation</td><td>Hallucination: जवाब में ऐसी बात, जो लौटे text में नहीं है।</td><td>LLM लिखे कि Thursday 9am वाला office hour Room 104 में है, जबकि passage में Zoom है।</td></tr>
+      <tr><td>Augmentation</td><td>Passages को जोड़ना मुश्किल: एक ही बात कई passages से आए, तो जवाब में दोहराव।</td><td>Queue log और office hours page, दोनों में Tuesday 4pm और Thursday 9am हैं।</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>पहली row में precision नया शब्द है। <b>Precision बताता है कि लौटे passages में से कितना हिस्सा सही है।</b> Least crowded वाले सवाल पर K = 2 पर queue log सही है, और forum post गलत। तो precision = 1 ÷ 2 = 0.5। Recall उल्टी तरफ़ से गिनता है: ज़रूरी passages में से कितने लौटे। TA वाले सवाल पर ज़रूरी passage 1 था, और लौटा 0, तो recall = 0 ÷ 1 = 0।</p>
+
+  <p>Survey एक चौथी बात भी लिखता है: मुश्किल सवाल पर original query से एक बार ढूँढना अक्सर काफ़ी नहीं होता। <span class="mine">paper से</span> पड़ाव 5 का multi-hop सवाल यही दिक्कत है।</p>
+
+  <h4 class="sub" id="sets">Sets की भाषा में: expansion score नहीं घटाता, और rerank passage नहीं जोड़ता</h4>
+
+  <p>पड़ाव 3 और 4 की दो बातें, expansion और rerank की हद, sets की भाषा में साफ़ साबित होती हैं। <b><button class="def" data-w="w-set">Set</button> चीज़ों का एक group है, जिसमें हर चीज़ एक बार आती है।</b> इसे { } में लिखते हैं, जैसे TA वाली query के शब्दों का set Q = {help, ta}। Set में कितनी चीज़ें हैं, उसे |Q| लिखते हैं, यानी |Q| = 2।</p>
+
+  <p>दो sets में जो चीज़ें common हैं, उनका set intersection कहलाता है, और उसे ∩ से लिखते हैं। Least crowded वाली query का set है {office, hour, least, crowded}। Queue log के शब्दों से इसका intersection {office, hour} है, और उसमें 2 चीज़ें हैं। Word overlap का score यही गिनती है:</p>
+  <div class="formula">score(Q, P) = | Q ∩ P |</div>
+  <p>यहाँ Q query के शब्दों का set है, और P passage के शब्दों का। Queue log के लिए |{office, hour}| = 2, और forum post के लिए |{least, crowded}| = 2।</p>
+
+  <p>दो sets को मिलाकर एक set बनाने को union कहते हैं, और उसे ∪ से लिखते हैं। Expansion यही करता है: query के set Q में जुड़े शब्दों का set E मिलाता है। TA वाली query में Q ∪ E = {help, ta} ∪ {office, hours} = {help, ta, office, hours}। Office hours page के लिए Q ∩ P खाली था, और (Q ∪ E) ∩ P = {office, hours} है।</p>
+
+  <p>अब सबूत देखिए। जो शब्द Q ∩ P में है, वो Q में भी है और P में भी। Q का हर शब्द Q ∪ E में भी है, इसलिए वो शब्द (Q ∪ E) ∩ P में भी है। मतलब पुराने intersection की हर चीज़ नए intersection में है, और नई चीज़ें जुड़ सकती हैं:</p>
+  <div class="formula">| (Q ∪ E) ∩ P | ≥ | Q ∩ P |</div>
+  <p><b>इसलिए expansion किसी भी passage का word overlap score घटा नहीं सकता।</b> यही इसकी ताकत है, क्योंकि छूटा passage ऊपर आ सकता है। यही इसकी हद भी है, क्योंकि गलत passage का score भी नहीं घटता। <q>waiting</q> जोड़ने के बाद भी forum post 2 पर रहा।</p>
+
+  <p>Rerank के लिए लौटे passages का set R लीजिए, और ज़रूरी passages का set G। Rerank सिर्फ़ R की चीज़ों का क्रम बदलता है, इसलिए R वही रहता है, और |R ∩ G| भी। TA वाले सवाल पर R = { } है, यानी खाली set, और rerank के बाद भी खाली। <b>Rerank recall नहीं बदलता, सिर्फ़ top-K का precision बदल सकता है।</b> पड़ाव 4 में K = 2 पर पहले forum post था। Rerank के बाद office hours page आया, जो where वाले हिस्से के लिए ज़रूरी है।</p>
+
+  <h4 class="sub" id="surveymore">Survey में pre-retrieval और post-retrieval के बाकी तरीके</h4>
+
+  <p>Slide पर pre-retrieval में सिर्फ़ query के तीन steps हैं। Survey pre-retrieval में index सुधारना भी गिनता है, और हर step के कई रूप बताता है: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li><b>Index सुधारना:</b> chunks का size चुनना, sliding window, और <button class="def" data-w="w-metadata">metadata</button>, यानी chunk के साथ रखी extra जानकारी, जैसे तारीख। Survey लिखता है कि तारीख को वज़न दें, तो retriever पुरानी जानकारी से बचता है। हमारे forum post पर 2024 लिखा है, इसलिए ऐसा वज़न उसे नीचे भेजता। Chunks lesson 7 और 8 में आते हैं।</li>
+    <li><b>Expansion के रूप:</b> Multi-Query एक query से कई queries बनाकर उन्हें साथ में चलाता है। Sub-Query मुश्किल सवाल को छोटे सवालों में तोड़ता है। Chain-of-Verification में LLM बढ़ाई हुई queries को जाँचता है।</li>
+    <li><b>Query बदलने के रूप:</b> Rewrite आप पड़ाव 3 में देख चुके हैं। HyDE में LLM पहले एक मनगढ़ंत जवाब लिखता है, और उस जवाब के embedding से असली passages ढूँढता है। Step-back सवाल का एक आम रूप भी बनाता है, और दोनों से ढूँढता है। Survey का example: LLM शब्द का मतलब large language model भी हो सकता है, और कानून की एक degree भी।</li>
+    <li><b>Routing के रूप:</b> Metadata router query से नाम या keywords निकालकर chunks के metadata से filter करता है। Semantic router query के मतलब से रास्ता चुनता है।</li>
+    <li><b>Rerank:</b> नियमों से, या किसी model से। Survey एक और सलाह देता है: सबसे काम का text prompt के किनारों पर रखिए। वजह ये है कि LLM लंबे text के बीच वाले हिस्से पर कम ध्यान देता है। इसे <button class="def" data-w="w-lostmiddle">lost in the middle</button> कहते हैं, और ये lesson 18 में आता है।</li>
+    <li><b>Context छोटा करना:</b> ज़्यादा documents डालने से noise बढ़ता है। LLMLingua जैसे तरीके एक छोटे model से कम काम के tokens हटाते हैं।</li>
+  </ul>
+
+  <p>Summary वाले example में हर passage 500 से 100 tokens का हुआ, यानी 500 ÷ 100 = 5 गुना छोटा। तब 7,000 tokens की उसी जगह में 14 की जगह 7,000 ÷ 100 = 70 passages आ सकते हैं। <span class="mine">मेरा हिसाब</span> मतलब summary से या तो K बढ़ सकता है, या हर query सस्ती हो सकती है।</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="modules">
+  <h3><span class="cn">7</span>Modular RAG के सारे modules, और survey के नए patterns</h3>
+
+  <p>Slide के modules वाले हिस्से में दो घेरे हैं। अंदर वाले घेरे में RAG के चारों तरफ़ Retrieve, Rewrite, Rerank और Read हैं, यानी Advanced RAG के pattern वाले modules। बाहर वाले घेरे में Search, Routing, Predict, Demonstrate, Memory और Fusion हैं। Dashed lines बताती हैं कि modules आपस में किसी भी क्रम में जुड़ सकते हैं।</p>
+
+  <p>Retrieve और Read के boxes नारंगी किनारे वाले हैं, और बाकी नीले किनारे वाले। Patterns वाले हिस्से में भी यही रंग हैं, इसलिए नारंगी शायद Naive RAG के दो मूल modules दिखाता है। <span class="mine">ये अंदाज़ा मेरा</span> नीचे की table हर module का काम हमारे corpus पर दिखाती है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Module</th><th>काम</th><th>हमारे corpus में</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td>Index से top-K passages</td><td>Word overlap, K = 2</td></tr>
+      <tr><td>Read</td><td>Passages पढ़कर जवाब</td><td>Thursday 9am, Zoom पर</td></tr>
+      <tr><td>Rewrite</td><td>Query दोबारा लिखना</td><td>OH timings? से CS 329Z office hours schedule</td></tr>
+      <tr><td>Rerank</td><td>लौटी list दोबारा sort करना</td><td>Forum post 0.35 पर, सबसे नीचे</td></tr>
+      <tr><td>Routing</td><td>कौन सा source या रास्ता</td><td>Milestone वाला सवाल syllabus वाले index में</td></tr>
+      <tr><td>Fusion</td><td>कई lists मिलाना</td><td>दोनों lists से queue log और office hours page ऊपर</td></tr>
+      <tr><td>Demonstrate</td><td>Prompt में हल किए examples</td><td>Milestone वाला Q और A</td></tr>
+      <tr><td>Search</td><td>Search engine, database या knowledge graph में सीधे ढूँढना</td><td>Office hours एक database table में हों, तो LLM उसके लिए query लिखे</td></tr>
+      <tr><td>Predict</td><td>Retrieve की जगह LLM खुद context लिखे</td><td>LLM अपनी याद से CS 329Z के office hours लिखे</td></tr>
+      <tr><td>Memory</td><td>LLM का पहले लिखा text अगली retrieval को दिशा दे</td><td>पहली Read का Thursday 9am अगली search में</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">काम वाला column survey से है, और corpus वाले examples मेरे बनाए।</p>
+
+  <p>Survey के मुताबिक Search module LLM से code या query language भी लिखवाता है, ताकि वो database जैसे sources में ढूँढ सके। Predict module का मकसद retrieval का दोहराव और noise घटाना है। लेकिन हमारे course के office hours किसी LLM की training में नहीं थे, इसलिए यहाँ Predict गलत जवाब गढ़ेगा। Survey एक और module भी गिनाता है, Task Adapter, जो slide पर नहीं है। वो RAG को किसी खास काम के हिसाब से ढालता है। <span class="mine">paper से</span></p>
+
+  <p>Modular RAG में modules का क्रम भी बदल सकता है। Survey कुछ नए patterns गिनाता है: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li><b>Rewrite-Retrieve-Read:</b> पहले query rewrite होती है। Rewrite करने वाला model LLM के जवाबों के feedback से सीखता है।</li>
+    <li><b>Generate-Read:</b> Retrieve की जगह LLM खुद text लिखता है, यानी Predict module।</li>
+    <li><b>Recite-Read:</b> Model अपने parameters से जानकारी “सुनाता” है, और फिर उसे पढ़कर जवाब लिखता है।</li>
+    <li><b>Hybrid retrieval:</b> शब्दों वाली और vectors वाली search को मिलाना। ये lesson 14 में आता है।</li>
+    <li><b>DSP और ITER-RETGEN:</b> एक module का output दूसरे module का काम बेहतर करता है। ये दोनों slide पर हैं, और अगले दो पड़ाव इन्हीं के papers हैं।</li>
+  </ul>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="dsp">
+  <h3><span class="cn">8</span>DSP: frozen LM और retriever के बीच text का आना-जाना</h3>
+
+  <p><b>DSP, यानी Demonstrate–Search–Predict, एक program है, जो frozen LM और frozen retriever के बीच text भेज-भेजकर मुश्किल सवाल हल करता है।</b> इसे 2022 में Stanford के Khattab और साथियों ने बनाया। Paper LM यानी language model के लिए GPT-3.5 लेता है, और retriever के लिए ColBERTv2। Paper इन दोनों में से किसी को train नहीं करता। <span class="mine">paper से</span></p>
+
+  <p>Paper का पहला example ये सवाल है: <q>How many storeys are in the castle David Gregory inherited?</q> इसके लिए पहले castle का नाम चाहिए, और फिर उसकी मंज़िलें। तीन systems इस पर अलग-अलग चलते हैं: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li><b>अकेला LM:</b> Castle Gregory नाम का एक castle गढ़ लेता है, और लिखता है कि उसमें तीन मंज़िलें हैं।</li>
+    <li><b>Retrieve-then-read, यानी Naive RAG:</b> सवाल से सीधे ढूँढता है, और St. Gregory Hotel का passage पाता है। जवाब आता है: नौ मंज़िलें।</li>
+    <li><b>DSP:</b> LM पहली query लिखता है, <q>Which castle did David Gregory inherit?</q>, और passage बताता है Kinnairdy Castle। दूसरी query उसकी मंज़िलें पूछती है, और जवाब आता है: five storeys।</li>
+  </ul>
+
+  <p>DSP के तीन stages हैं, और slide पर इनके तीन modules: <span class="mine">paper से</span></p>
+  <ol class="plain">
+    <li><b>Demonstrate:</b> Program के पास कुछ सवाल-जवाब जोड़े हैं, जैसे 16, लेकिन बीच की queries का कोई label नहीं। Program इन training सवालों पर खुद Search और Predict चलाता है। जिस सवाल पर उसका जवाब सही जवाब से मिलता है, उसका पूरा रास्ता, यानी queries और passages, demonstration बन जाता है।</li>
+    <li><b>Search:</b> LM हर hop की query लिखता है, और retriever उसके passages लाता है। Multi-hop dataset HotPotQA पर hops 2 तय हैं।</li>
+    <li><b>Predict:</b> LM demonstrations और passages पढ़कर आख़िरी जवाब लिखता है।</li>
+  </ol>
+
+  <p>Demonstrate वाला step हमारे corpus पर देखिए। Training जोड़ा है: सवाल when is the project milestone due, और जवाब Week 6, Thursday 11:59pm। <span class="mine">मेरा example</span></p>
+  <ol class="plain">
+    <li>Search: query में project, milestone और due बचते हैं। Syllabus को 3 मिलता है, और project page को 2।</li>
+    <li>Predict: syllabus पढ़कर LM लिखता है Week 6, Thursday 11:59pm। ये सही जवाब से मिलता है।</li>
+    <li>इसलिए ये पूरा रास्ता, सवाल, syllabus और जवाब, एक demonstration बनता है। अगर जवाब न मिलता, तो program इस जोड़े को छोड़ देता।</li>
+  </ol>
+  <p>किसी इंसान ने बीच के steps नहीं लिखे, उन्हें program ने सही जवाब से जाँचकर चुना। इस तरह के ढीले label को paper weak supervision कहता है। पड़ाव 5 का demonstration, Week 6, Thursday [P1], ऐसे ही बन सकता है।</p>
+
+  <h4 class="sub" id="relgain">DSP के नतीजे, और relative gain का गणित</h4>
+
+  <p>Paper multi-hop dataset HotPotQA के 1,000 सवालों पर नापता है। Score <button class="def" data-w="w-em">Exact Match</button> है, यानी कितने % जवाब सही जवाब से हूबहू मिले। Lesson 5 में RAG-Sequence का NQ पर Exact Match 44.5 था। <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>System</th><th class="numh">Exact Match (%)</th></tr></thead>
+    <tbody>
+      <tr><td>अकेला LM, 16 examples के साथ</td><td class="num">28.3</td></tr>
+      <tr><td>Self-ask, सुधरे हुए prompt के साथ</td><td class="num">28.6</td></tr>
+      <tr><td>Retrieve-then-read</td><td class="num">36.9</td></tr>
+      <tr class="hi"><td>DSP</td><td class="num">51.4</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>DSP और retrieve-then-read का फ़र्क दो तरह से लिखते हैं। पहला तरीका सीधा घटाना है: 51.4 − 36.9 = 14.5। दोनों numbers % में हैं, इसलिए इस फ़र्क को 14.5 percentage points कहते हैं। Paper दूसरा तरीका लेता है, जिसे <b class="term">relative gain</b> कहते हैं: फ़र्क को पुराने number से भाग दीजिए।</p>
+  <ol class="plain">
+    <li>फ़र्क: 51.4 − 36.9 = 14.5।</li>
+    <li>पुराने number से भाग: 14.5 ÷ 36.9 = 0.393।</li>
+    <li>% में बदलने के लिए 100 से गुणा: 0.393 × 100 = 39.3, यानी करीब 39%। जाँच: 36.9 × 1.393 = 51.4।</li>
+  </ol>
+  <p>अकेले LM से यही हिसाब: (51.4 − 28.3) ÷ 28.3 = 23.1 ÷ 28.3 = 0.816, यानी करीब 82%। Self-ask से: (51.4 − 28.6) ÷ 28.6 = 0.797, यानी करीब 80%। Paper यही तीनों numbers लिखता है: 82%, 39% और 80%।</p>
+
+  <p>Relative gain पुराने number पर टिका है। एक ही 14.5 points का फ़र्क अलग-अलग पुराने numbers पर ऐसा दिखता है: <span class="mine">हिसाब मेरा</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">पुराना number</th><th class="numh">14.5 ÷ पुराना number</th><th class="numh">Relative gain</th></tr></thead>
+    <tbody>
+      <tr><td class="num">10.0</td><td class="num">1.450</td><td class="num">145%</td></tr>
+      <tr><td class="num">28.3</td><td class="num">0.512</td><td class="num">51%</td></tr>
+      <tr class="hi"><td class="num">36.9</td><td class="num">0.393</td><td class="num">39%</td></tr>
+      <tr><td class="num">50.0</td><td class="num">0.290</td><td class="num">29%</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>भाग में नीचे वाला number जितना छोटा, उतना बड़ा relative gain।</b> इसलिए कमज़ोर baseline से तुलना में % बहुत बड़ा दिख सकता है। Paper पढ़ते वक्त हमेशा दोनों असली numbers देखिए।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Paper का एक और नतीजा: Open-SQuAD पर DSP 36.6 पर है, और retrieve-then-read 33.8 पर। Percentage points में फ़र्क कितना है, और relative gain कितना?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>फ़र्क 36.6 − 33.8 = 2.8 points है। Relative gain 2.8 ÷ 33.8 = 0.083, यानी करीब 8%, और paper भी 8% लिखता है। Open-SQuAD के सवालों पर एक search अक्सर काफ़ी होती है, इसलिए वहाँ फ़र्क छोटा है। <span class="mine">ये वजह मेरी</span></p>
+    </details>
+  </div>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="iterretgen">
+  <h3><span class="cn">9</span>ITER-RETGEN: formula, नतीजे, और कई searches का गणित</h3>
+
+  <p><b>ITER-RETGEN retrieval और generation को बारी-बारी चलाता है: हर बार LLM का जवाब और सवाल मिलकर अगली search की query बनते हैं।</b> इसे 2023 में Shao और साथियों ने बनाया। पड़ाव 5 में आपने इसे हमारे corpus पर हाथ से चलाया था। अब वही हिसाब paper के formula में देखिए: <span class="mine">paper से</span></p>
+  <div class="formula">y<sub><i>t</i></sub> = M( y<sub><i>t</i></sub> | prompt( D<sub>y<sub><i>t</i>−1</sub> ‖ q</sub> , q ) ),&nbsp; ∀ 1 ≤ <i>t</i> ≤ <i>T</i></div>
+  <p>नीचे की table हर symbol को पड़ाव 5 के numbers से जोड़ती है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>मतलब</th><th>पड़ाव 5 में</th></tr></thead>
+    <tbody>
+      <tr><td>q</td><td>सवाल</td><td>Which office hour is least crowded, and where is it?</td></tr>
+      <tr><td><i>t</i> और <i>T</i></td><td><i>t</i> iteration का number है, और <i>T</i> कुल iterations। ∀ का मतलब है “हर एक के लिए”, यानी t = 1, 2, …, T हर एक पर।</td><td><i>T</i> = 2, यानी <i>t</i> = 1 और <i>t</i> = 2</td></tr>
+      <tr><td>y<sub><i>t</i></sub></td><td>Iteration t में LLM का जवाब। y<sub>0</sub> खाली है, इसलिए पहली query सिर्फ़ q है।</td><td>y<sub>1</sub> = Thursday 9am, y<sub>2</sub> = Thursday 9am, Zoom पर</td></tr>
+      <tr><td>‖</td><td>दो texts को आगे-पीछे जोड़ना, यानी lesson 5 वाला <button class="def" data-w="w-concat">concatenate</button></td><td>y<sub>1</sub> ‖ q = Thursday 9am which office hour …</td></tr>
+      <tr><td>D<sub>x</sub></td><td>Text x को query बनाकर लौटे top-k passages</td><td>D<sub>q</sub> = {queue log, forum post}, D<sub>y<sub>1</sub>‖q</sub> = {queue log, office hours page}</td></tr>
+      <tr><td>prompt(D, q)</td><td>Passages और सवाल से बना prompt</td><td>पड़ाव 1 जैसा prompt</td></tr>
+      <tr><td>M( y | … )</td><td>LLM, जो prompt दिया होने पर जवाब y लिखता है</td><td>Frozen LLM</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Formula में “|” को “दिया होने पर” पढ़िए, जैसे lesson 4 की <button class="def" data-w="w-conditional">conditional probability</button> में। वहाँ p(भरा | Tuesday) = 0.80 का मतलब था: Tuesday दिया हो, तो भरा होने की probability। यहाँ M(y<sub><i>t</i></sub> | prompt) का मतलब है: ये prompt दिया हो, तो LLM जवाब y<sub><i>t</i></sub> लिखता है।</p>
+
+  <p>तो formula के दो iterations ठीक पड़ाव 5 के चार steps हैं। <i>t</i> = 1 पर query y<sub>0</sub> ‖ q = q है, D<sub>q</sub> में queue log और forum post आते हैं, और M लिखता है y<sub>1</sub> = Thursday 9am। <i>t</i> = 2 पर query y<sub>1</sub> ‖ q है, और D में queue log (4) और office hours page (3) आते हैं। आख़िरी जवाब y<sub><i>T</i></sub> = y<sub>2</sub> है।</p>
+
+  <h4 class="sub" id="afl">Paper का example और setup</h4>
+
+  <p>Paper का example है: <q>What is the height of the player who won the 2015 AFL Rising Star award?</q> पहले iteration में retriever award वाला page लाता है, जिसमें विजेता Jesse Hogan का नाम है। LLM लिखता है कि Jesse Hogan 198 cm लंबा है, जो लौटे text में नहीं है। दूसरे iteration की query में Jesse Hogan का नाम है, इसलिए उसका अपना page आता है: 1.95 m। जवाब सुधरकर 1.95 m हो जाता है। <span class="mine">paper से</span></p>
+
+  <p>Paper का setup ये है। LLM text-davinci-003 है, और retriever Contriever, जो एक dense retriever है। हर query पर top-5 paragraphs आते हैं, और prompt में 3 हल किए examples हैं। Paper ज़्यादातर datasets के पहले 500 सवाल नापता है, और Bamboogle के सारे 125। इनमें HotPotQA जैसे multi-hop datasets हैं। <span class="mine">paper से</span></p>
+
+  <p>Paper Exact Match के साथ एक और score देता है, Acc†। Exact Match तभी सही गिनता है, जब जवाब हूबहू मिले। जैसे 1.95 m और 195 cm उसके लिए अलग जवाब हैं। <span class="mine">ये example मेरा</span></p>
+
+  <p>इसलिए paper एक LLM से भी जँचवाता है कि जवाब में सही जवाब आ गया या नहीं, और उस score को Acc† लिखता है। Paper ने 80 ऐसे जवाब हाथ से जाँचे, जिन पर दोनों scores अलग थे, और 97.5% बार Acc† सही निकला। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="iterresults">नतीजे: दूसरा iteration सबसे ज़्यादा जोड़ता है</h4>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>HotPotQA पर</th><th class="numh">Exact Match</th><th class="numh">Acc†</th></tr></thead>
+    <tbody>
+      <tr><td>Self-Ask</td><td class="num">36.8</td><td class="num">64.8</td></tr>
+      <tr><td>DSP</td><td class="num">43.8</td><td class="num">60.8</td></tr>
+      <tr><td>ITER-RETGEN, <i>T</i> = 1</td><td class="num">39.2</td><td class="num">65.5</td></tr>
+      <tr class="hi"><td>ITER-RETGEN, <i>T</i> = 2</td><td class="num">44.1</td><td class="num">71.2</td></tr>
+      <tr><td>ITER-RETGEN, <i>T</i> = 3</td><td class="num">45.2</td><td class="num">71.4</td></tr>
+      <tr><td>ITER-RETGEN, <i>T</i> = 4</td><td class="num">45.8</td><td class="num">73.4</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Paper से। <i>T</i> = 1 का मतलब है एक ही retrieval, यानी Naive RAG जैसा। Paper ने <i>T</i> = 7 तक नापा।</p>
+  <ul class="plain">
+    <li><i>T</i> = 1 से 2 पर Acc† 65.5 से 71.2 होता है, यानी 5.7 points। 2 से 3 पर सिर्फ़ 71.2 से 71.4, यानी 0.2 points। Paper भी यही लिखता है: दूसरा iteration सबसे बड़ा फ़ायदा देता है।</li>
+    <li><i>T</i> = 2 पर ITER-RETGEN 2 LLM calls करता है, और 2 × 5 = 10 paragraphs पढ़ता है। Self-Ask HotPotQA पर औसतन 3.2 calls और 16.0 paragraphs लेता है, फिर भी उसका Acc† 64.8 है।</li>
+    <li>Paper ने 10 ऐसे सवाल देखे, जिन पर DSP गलत था और ITER-RETGEN सही। 4 पर DSP सही documents नहीं ला पाया, और 5 पर DSP की summary ही गलत थी।</li>
+  </ul>
+
+  <h4 class="sub" id="chances">कई searches में chances का गुणा</h4>
+
+  <p>Multi-hop सवाल हर hop पर एक नई चूक का मौका देता है। मान लीजिए हर search 0.9 chance से सही passage लाती है। 100 सवालों में पहली search 90 पर सही होगी। उन 90 में से 90% पर दूसरी भी सही होगी, यानी 90 × 0.9 = 81 सवाल। <span class="mine">numbers मेरे बनाए</span></p>
+  <p>तो दोनों के सही होने का chance 0.9 × 0.9 = 0.81 है। Lesson 4 का <button class="def" data-w="w-chain">chain rule</button> यही कहता है: p(A और B) = p(A) × p(B | A), जैसे वहाँ 0.5 × 0.8 = 0.40। यहाँ A पहली search का सही होना है, और B दूसरी का।</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">Hops</th><th>हिसाब</th><th class="numh">सब सही होने का chance</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td>0.9</td><td class="num">0.9</td></tr>
+      <tr><td class="num">2</td><td>0.9 × 0.9</td><td class="num">0.81</td></tr>
+      <tr><td class="num">3</td><td>0.9 × 0.9 × 0.9</td><td class="num">0.729</td></tr>
+    </tbody>
+  </table></div>
+  <p>ITER-RETGEN में p(B | A) और भी ज़्यादा A पर टिका है। पहला जवाब Wednesday हो, तो दूसरी query में Thursday 9am आता ही नहीं, और दूसरी search का chance लगभग 0 हो जाता है। <b>इसलिए हर extra hop accuracy का एक हिस्सा खाता है, और पहली गलती आगे तक जाती है।</b> Lesson 18 इसे <button class="def" data-w="w-compounding">compounding error</button> कहता है, और वहाँ 5 steps पर 0.9 का गुणा 0.59 है।</p>
+
+  <h4 class="sub" id="threeways">एक बार से ज़्यादा ढूँढने के तीन तरीके</h4>
+
+  <p>Survey एक बार की retrieval से आगे के तीन तरीके गिनाता है: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li><b>Iterative:</b> retrieval और generation बारी-बारी चलते हैं, जैसे ITER-RETGEN। Iterations की गिनती पहले से तय होती है।</li>
+    <li><b>Recursive:</b> query हर बार पिछले नतीजों से सुधरती है, और सवाल छोटे सवालों में टूटता जाता है।</li>
+    <li><b>Adaptive:</b> LLM खुद तय करता है कि कब ढूँढना है और कब रुकना है, अक्सर खास tokens लिखकर। Self-RAG ऐसा है, और वो lesson 16 में आता है।</li>
+  </ul>
+
+  <p>Slide का Search-R1 trace adaptive है। Model खुद <code>&lt;search&gt;</code> tag में query लिखता है, और search system लौटे passages <code>&lt;information&gt;</code> tag में जोड़ता है। Model <code>&lt;think&gt;</code> में सोचता है, और <code>&lt;answer&gt;</code> में जवाब लिखकर रुकता है। <span class="mine">paper से</span> Slide का title कहता है कि model ये फ़ैसले <button class="def" data-w="w-rl">reinforcement learning</button> से सीखता है, और ये lesson 17 में आता है।</p>
+
+  <p>Trace में एक गड़बड़ भी है। तीसरी search Jed Hoyer birth year का नतीजा वही Jed Hoyer वाला document है, जो पहली search में आया था, और उसमें जन्म-तारीख नहीं है। फिर भी अगले think में model लिखता है कि Jed Hoyer December 7, 1973 को पैदा हुए। ये तारीख लौटे text से नहीं आई, और इसके नतीजे lesson 17 में आते हैं। Paper इस trace को सफल case मानता है, और लिखता है कि पहली query का कोई ख़ास मतलब नहीं था। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे इस lesson की दोनों Stanford slides हैं, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई बात अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p21.png"><img src="img/slide-p21.png" alt="Stanford slide: Different Variants of RAG, यानी Naive, Advanced और Modular RAG" loading="lazy"></a>
+  </figure>
+  <figure class="slide narrow">
+    <a href="img/slide-p21-naive.png"><img src="img/slide-p21-naive.png" alt="उसी slide का Naive RAG हिस्सा, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide narrow">
+    <a href="img/slide-p21-advanced.png"><img src="img/slide-p21-advanced.png" alt="उसी slide का Advanced RAG हिस्सा, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p21-modules.png"><img src="img/slide-p21-modules.png" alt="उसी slide के modules, बड़े करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p21-patterns.png"><img src="img/slide-p21-patterns.png" alt="उसी slide के patterns, बड़े करके" loading="lazy"></a>
+    <figcaption>Stanford की Different Variants of RAG वाली slide, और नीचे उसके चारों हिस्से, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Variants वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Advanced RAG में Pre-Retrieval वाला box Query वाली line पर है, Documents वाली line पर नहीं। इसका क्या मतलब है? Survey इसमें और क्या गिनता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Slide के तीनों pre-retrieval steps query पर काम करते हैं: routing, rewriting और expansion। Index वाली line Naive RAG जैसी ही है। Survey pre-retrieval में index सुधारना भी गिनता है, जैसे chunks का size और तारीख वाला metadata। (पड़ाव 3 और 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Modules में अंदर वाले घेरे के चार modules कौन से हैं, और वो किस pattern से मिलते हैं? Predict module Retrieve से कैसे अलग है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Retrieve, Rewrite, Rerank और Read, यानी Advanced RAG का pattern। Retrieve index से passages लाता है, जबकि Predict में LLM खुद context लिखता है। हमारे course के office hours LLM को पता ही नहीं, इसलिए यहाँ Predict गलत जवाब गढ़ेगा। (पड़ाव 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>DSP के नीचे [Khattab et al., 2022] और ITER-RETGEN के नीचे [Shao et al., 2023] लिखा है। HotPotQA पर किसका Exact Match ज़्यादा है, और ITER-RETGEN का तीर कितनी बार चलना सबसे फ़ायदेमंद रहा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>ITER-RETGEN के paper में DSP का Exact Match 43.8 है, और ITER-RETGEN का <i>T</i> = 2 पर 44.1, यानी लगभग बराबर। Acc† पर फ़र्क बड़ा है, 60.8 बनाम 71.2। दूसरा iteration सबसे ज़्यादा जोड़ता है, 5.7 points, और उसके बाद फ़ायदा छोटा है। DSP के अपने paper में उसका Exact Match 51.4 था, लेकिन वहाँ LM और retriever अलग थे। (पड़ाव 8 और 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p59.png"><img src="img/slide-p59.png" alt="Stanford slide: Search-R1 का trace, Jed Hoyer वाले सवाल पर" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p59-top.png"><img src="img/slide-p59-top.png" alt="उसी trace का पहला हिस्सा: पहली दो searches, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p59-bottom.png"><img src="img/slide-p59-bottom.png" alt="उसी trace का दूसरा हिस्सा: तीसरी search और जवाब, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की Search-R1 वाली slide, और नीचे उसका trace दो हिस्सों में, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Search-R1 वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Trace में कौन से tags model लिखता है, और कौन सा tag search system? Ground Truth वाली line किस काम की है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Model &lt;think&gt;, &lt;search&gt; और &lt;answer&gt; लिखता है, और &lt;information&gt; में search system के लौटाए passages हैं। Ground Truth सही जवाब है, John William Henry II। आप model के &lt;answer&gt; को इसी से मिलाकर जाँचते हैं। (पड़ाव 9, और lesson 17)</p>
+        </details>
+      </li>
+      <li>
+        <p>Model ने कितनी searches कीं? किस search का नतीजा दोबारा आया, और क्या उसमें Jed Hoyer की जन्म-तारीख है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>तीन searches। तीसरी search का नतीजा वही Jed Hoyer वाला document है, जो पहली search में आया था। उसमें जन्म-तारीख नहीं है, फिर भी अगला think December 7, 1973 लिखता है। ये तारीख retrieval से नहीं आई। (पड़ाव 5 और 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>ये trace ITER-RETGEN से कैसे अलग है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>ITER-RETGEN में searches की गिनती <i>T</i> पहले से तय है, और query हमेशा y<sub><i>t</i>−1</sub> ‖ q होती है। यहाँ model खुद तय करता है कि कितनी searches करनी हैं और query क्या हो, यानी ये adaptive है। Slide का title कहता है कि model ये फ़ैसले RL से सीखता है। (पड़ाव 9, और lessons 16 और 17)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>API वाला LLM frozen है, इसलिए lesson 5 वाली training नहीं चलती। RAG pipeline LLM से पहले के steps सुधारती है: query, retrieval और prompt।</li>
+    <li>Naive RAG एक बार index बनाता है, और हर query पर Retrieve और Read चलाता है। Expansion किसी passage का score नहीं घटाता, इसलिए छूटा passage ला सकता है। Rerank लौटे passages का set नहीं बदलता, इसलिए recall नहीं बढ़ाता।</li>
+    <li>Modular RAG modules को अलग-अलग क्रम में जोड़ता है। ITER-RETGEN पिछले जवाब से दोबारा ढूँढता है, और HotPotQA पर दूसरा iteration Acc† को 65.5 से 71.2 करता है। हर extra hop chances का गुणा करता है, जैसे 0.9 × 0.9 = 0.81।</li>
+  </ol>
+
+  <details class="more">
+    <summary>बाकी lecture का नक्शा</summary>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Pipeline का हिस्सा</th><th>सवाल</th><th>Lessons</th></tr></thead>
+      <tbody>
+        <tr><td>Indexing</td><td>Documents के टुकड़े कैसे बनें, और उनका context कैसे बचे?</td><td>7, 8, 9</td></tr>
+        <tr><td>Retrieval</td><td>तेज़ search कैसे हो, और शब्द या मतलब से कैसे ढूँढें?</td><td>10, 11, 12</td></tr>
+        <tr><td>नापना</td><td>Retriever कितना अच्छा है?</td><td>13</td></tr>
+        <tr><td>Post-retrieval</td><td>Fusion और rerank कैसे करें?</td><td>14, 15</td></tr>
+        <tr><td>Loop</td><td>Model खुद कब ढूँढे, क्या ढूँढे, कब रुके?</td><td>16, 17</td></tr>
+        <tr><td>Failures</td><td>सब कुछ होने के बाद भी कहाँ टूटता है?</td><td>18</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-frozen">Frozen LLM</dt><dd>जिसके parameters आप नहीं बदल सकते, सिर्फ़ prompt भेज सकते हैं। जैसे GPT या Gemini, जो आप API से लेते हैं।</dd>
+    <dt id="w-pipeline">Pipeline</dt><dd>Steps की line, जिसमें हर step का output अगले का input है। जैसे Retrieve का output top-K passages हैं, और वही Read का input।</dd>
+    <dt id="w-naive">Naive RAG</dt><dd>सबसे सीधी pipeline: index, फिर हर query पर Retrieve और Read। बीच में कोई extra step नहीं।</dd>
+    <dt id="w-indexing">Indexing time और query time</dt><dd>एक बार चलने वाले steps, और हर query पर चलने वाले steps। जैसे 60,000 passages के embeddings एक बार बनते हैं, और query का embedding हर बार।</dd>
+    <dt id="w-pre">Pre-retrieval</dt><dd>Retrieval से पहले query सुधारने वाले steps: routing, rewriting और expansion।</dd>
+    <dt id="w-routing">Query routing</dt><dd>तय करना कि किस index या source में ढूँढना है। जैसे “when is the project milestone due” syllabus वाले index में जाए।</dd>
+    <dt id="w-rewriting">Query rewriting</dt><dd>LLM से query को साफ़ search query में बदलवाना। जैसे “OH timings?” से “CS 329Z office hours schedule”।</dd>
+    <dt id="w-expansion">Query expansion</dt><dd>Query में जुड़े हुए शब्द या दूसरे रूप जोड़ना। जैसे “help ta” में “office hours” जोड़ने से office hours page का score 0 से 2 होता है।</dd>
+    <dt id="w-post">Post-retrieval</dt><dd>Retrieval के बाद लौटी list सुधारने वाले steps: rerank, summary और fusion।</dd>
+    <dt id="w-rerank">Rerank और reranker</dt><dd>धीमा लेकिन सटीक model, जो लौटाए गए passages को दोबारा sort करता है। जैसे queue log और forum post के बराबर score में से forum post को नीचे भेजना।</dd>
+    <dt id="w-summary">Summary</dt><dd>Passages को prompt से पहले छोटा करना। जैसे 500 tokens का passage 100 का हो, तो 14 passages 7,000 की जगह 1,400 tokens लेते हैं। खतरा: Room 104 जैसी detail छूट सकती है।</dd>
+    <dt id="w-fusion">Fusion</dt><dd>कई ranked lists को मिलाकर एक list बनाना। जैसे पहली list queue log, forum post, office hours page है, और दूसरी office hours page, queue log। जो दोनों में हैं, वो ऊपर आते हैं।</dd>
+    <dt id="w-advanced">Advanced RAG</dt><dd>Naive RAG में pre-retrieval और post-retrieval steps जोड़कर बनी pipeline। जैसे Rewrite, Retrieve, Rerank, Read।</dd>
+    <dt id="w-modular">Modular RAG</dt><dd>Pipeline को modules में बाँटकर, उन्हें अलग-अलग क्रम में जोड़ना। जैसे Retrieve, Read, Retrieve, Read।</dd>
+    <dt id="w-pattern">Pattern</dt><dd>Modules का एक तय क्रम, जैसे Retrieve, Read।</dd>
+    <dt id="w-demos">Demonstrations (few-shot)</dt><dd>Prompt में सवाल से पहले दिए गए हल किए हुए examples। जैसे “Q: When is the milestone due? A: Week 6, Thursday [P1]”।</dd>
+    <dt id="w-multihop">Multi-hop question</dt><dd>ऐसा सवाल, जिसके लिए कई बार ढूँढना पड़े, क्योंकि जवाब के हिस्से अलग passages में हैं। जैसे least crowded office hour कहाँ है: पहले queue log, फिर office hours page।</dd>
+    <dt id="w-precision">Precision</dt><dd>लौटे passages में से कितना हिस्सा सही है। जैसे K = 2 पर queue log सही और forum post गलत, तो precision = 1 ÷ 2 = 0.5।</dd>
+    <dt id="w-relgain">Relative gain</dt><dd>फ़र्क को पुराने number से भाग देकर % में लिखना। जैसे (51.4 − 36.9) ÷ 36.9 = 0.393, यानी करीब 39%। सीधा फ़र्क, 14.5, percentage points कहलाता है।</dd>
+    <dt id="w-dsp">DSP</dt><dd>Demonstrate–Search–Predict: frozen LM और frozen retriever के बीच text भेजने वाला program, जो demonstrations खुद बनाता है। 2022 में Stanford के Khattab और साथियों ने बनाया। जैसे HotPotQA पर Exact Match 51.4।</dd>
+    <dt id="w-iterretgen">ITER-RETGEN</dt><dd>Retrieval और generation बारी-बारी, जिसमें पिछला जवाब और सवाल मिलकर अगली query बनते हैं। 2023 में Shao और साथियों ने बनाया। जैसे Thursday 9am जोड़ने से office hours page का score 1 से 3 होता है।</dd>
+    <dt id="w-iterative">Iterative, recursive और adaptive retrieval</dt><dd>एक से ज़्यादा बार ढूँढने के तीन तरीके। Iterative में तय गिनती तक बारी-बारी, recursive में सवाल को छोटे सवालों में तोड़कर, और adaptive में model खुद तय करता है। जैसे ITER-RETGEN iterative है, और Search-R1 का trace adaptive।</dd>
+  </dl>
+
+<div class="pager">
+    <a href="05-rag-model-dense.html">पिछला: Lesson 5</a>
+    <a href="07-chunking-dense.html">अगला: Lesson 7, Embeddings और chunking</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Papers: Gao et al., 2024, “Retrieval-Augmented Generation for Large Language Models: A Survey” (slide का diagram)। Khattab et al., 2022, “Demonstrate-Search-Predict: Composing retrieval and language models for knowledge-intensive NLP”। Shao et al., 2023, “Enhancing Retrieval-Augmented Large Language Models with Iterative Retrieval-Generation Synergy”। Jin et al., 2025, “Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning” (trace वाली slide)। “मेरा” और “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var PASSAGES = [
+    { id: "P1", name: "Syllabus", text: "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10." },
+    { id: "P2", name: "Office hours page", text: "Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs." },
+    { id: "P3", name: "Queue log", text: "Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3." },
+    { id: "P4", name: "पुराना forum post", text: "Old forum post (2024): midweek afternoons are usually the least crowded time to visit." },
+    { id: "P5", name: "Homework 1 की announcement", text: "Homework 1 will be released on Oct 5." },
+    { id: "P6", name: "Project page", text: "Project proposal due on Oct 9. Teams of 1-3 people are recommended." }
+  ];
+  var QUERIES = [
+    { q: "which office hour is least crowded", add: "waiting", answer: "P3", rr: { P3: 0.92, P2: 0.41, P4: 0.35, P1: 0.05, P5: 0.03, P6: 0.04 } },
+    { q: "when can I get help from a TA", add: "office hours", answer: "P2", rr: { P2: 0.88, P3: 0.52, P4: 0.20, P1: 0.06, P5: 0.10, P6: 0.08 } }
+  ];
+  var STOP = ["which", "is", "the", "when", "can", "i", "get", "from", "a", "an", "to", "of", "on", "in", "it", "and", "are", "be", "this", "what", "how", "do"];
+  function words(s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function nameOf(id) { for (var i = 0; i < PASSAGES.length; i++) { if (PASSAGES[i].id === id) return PASSAGES[i].name; } return id; }
+  function highlight(text, qset) {
+    return text.split(/([A-Za-z0-9]+)/).map(function (part) {
+      return qset[part.toLowerCase()] ? "<mark>" + esc(part) + "</mark>" : esc(part);
+    }).join("");
+  }
+  var qi = 0;
+  var qBox = document.getElementById("pw-q");
+  var exp = document.getElementById("pw-exp");
+  var rr = document.getElementById("pw-rr");
+  var kIn = document.getElementById("pw-k");
+  var kOut = document.getElementById("pw-ko");
+  var body = document.getElementById("pw-body");
+  var out = document.getElementById("pw-out");
+  var wordsEl = document.getElementById("pw-words");
+  qBox.innerHTML = QUERIES.map(function (x, i) { return '<button type="button" data-i="' + i + '">' + esc(x.q) + "</button>"; }).join("");
+  qBox.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); }); });
+  [exp, rr].forEach(function (c) { c.addEventListener("change", render); });
+  kIn.addEventListener("input", render);
+
+  function render() {
+    var K = Number(kIn.value);
+    kOut.textContent = K;
+    qBox.querySelectorAll("button").forEach(function (b, i) { b.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    var Q = QUERIES[qi];
+    var text = Q.q + (exp.checked ? " " + Q.add : "");
+    var qw = words(text).filter(function (w) { return STOP.indexOf(w) < 0; });
+    var qset = {};
+    qw.forEach(function (w) { qset[w] = true; });
+    wordsEl.innerHTML = "Retriever को जाने वाले शब्द: <b>" + Object.keys(qset).join(", ") + "</b>";
+
+    var scored = PASSAGES.map(function (p, idx) {
+      var pw = {};
+      words(p.text).forEach(function (w) { pw[w] = true; });
+      var s = 0;
+      Object.keys(qset).forEach(function (w) { if (pw[w]) s++; });
+      return { p: p, s: s, idx: idx, r: Q.rr[p.id] };
+    });
+    var returned = scored.filter(function (x) { return x.s > 0; });
+    var rest = scored.filter(function (x) { return x.s === 0; });
+    returned.sort(function (a, b) { return b.s - a.s || a.idx - b.idx; });
+    if (rr.checked) returned.sort(function (a, b) { return b.r - a.r; });
+    var finalIds = returned.slice(0, K).map(function (x) { return x.p.id; });
+
+    body.innerHTML = returned.concat(rest).map(function (x, i) {
+      var inTop = finalIds.indexOf(x.p.id) >= 0;
+      var rrCell = rr.checked && x.s > 0 ? x.r.toFixed(2) : "";
+      return '<tr class="' + (inTop ? "hi" : "") + '"><td class="num">' + (x.s > 0 ? i + 1 : "") + "</td><td><b>" + x.p.name + "</b><br>" + highlight(x.p.text, qset) +
+        '</td><td class="num">' + x.s + '</td><td class="num">' + rrCell + "</td></tr>";
+    }).join("");
+
+    var ans = nameOf(Q.answer);
+    if (finalIds.length === 0) {
+      out.innerHTML = "Retriever ने कुछ नहीं लौटाया" + (rr.checked ? ", इसलिए reranker के पास sort करने को कुछ नहीं है" : "") + "। जवाब वाला passage, " + ans + ", LLM तक नहीं पहुँचा।";
+    } else {
+      var hit = finalIds.indexOf(Q.answer) >= 0;
+      out.innerHTML = "LLM को मिले: <b>" + finalIds.map(nameOf).join(", ") + "</b>। जवाब वाला passage, " + ans + "," + (hit ? " इनमें <b>है</b>" : " इनमें <b>नहीं है</b>") +
+        (finalIds[0] === Q.answer ? ", और सबसे ऊपर है।" : "।");
+    }
+  }
+  render();
+})();
+</script>
+</body>
+</html>

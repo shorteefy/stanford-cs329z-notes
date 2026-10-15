@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="“सारी deadlines क्या हैं?” का जवाब तीन passages में बिखरा है, इसलिए top-K सिर्फ़ एक टुकड़ा ऊपर लाता है। RAPTOR और GraphRAG सार बनाकर ये हल करते हैं, और आख़िर में Stanford की चारों slides खुद पढ़नी हैं।">
+<title>Lesson 9: RAPTOR और GraphRAG (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 9 / 18 · <a href="09-raptor-graphrag.html">आसान</a> · <b>गहरा</b> · <a href="09-raptor-graphrag-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 9 · गहरा version</p>
+  <h1>पूरे document पर फैले सवाल: RAPTOR और GraphRAG</h1>
+  <p class="lede"><b>RAPTOR और GraphRAG index में chunks के साथ उनके सार भी रखते हैं, ताकि पूरे document में बिखरे जवाब भी मिल सकें।</b> RAPTOR सारों का एक tree बनाता है, और GraphRAG text की चीज़ों और उनके रिश्तों का graph।</p>
+  <p class="lede">इसकी ज़रूरत इस सवाल पर दिखती है: <q>What are all the deadlines?</q> जवाब में course की 4 तारीखें हैं, और वो lesson 2 के तीन passages में बिखरी हैं। Syllabus में milestone (Week 6) और final report (Week 10) हैं। Project page में proposal (Oct 9) है, और Homework 1 की announcement में उसके release की तारीख (Oct 5)। Retriever project page को सबसे ऊपर रखता है, इसलिए K = 1 पर reader को 4 में से 1 तारीख मिलती है। <span class="mine">मेरे बनाए vectors से</span></p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 10 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 10 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#theme">Top-K सिर्फ़ टुकड़े लाता है</a><span class="can">Detail और thematic सवाल का फ़र्क cosine के numbers से बता पाएँगे।</span></li>
+      <li><a href="#clustering">मिलते-जुलते passages के groups: clustering</a><span class="can">Cosine और centroid हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#raptor">RAPTOR: सारों का tree, नीचे से ऊपर</a><span class="can">Tree बनने के steps बता पाएँगे, और RAPTOR की slide पढ़ पाएँगे।</span></li>
+      <li><a href="#levels">Tree के हर level में ढूँढना</a><span class="can">बता पाएँगे कि कौन सा सवाल leaf से मिलता है, और कौन सा सार से।</span></li>
+      <li><a href="#graphrag">GraphRAG: चीज़ों और रिश्तों का graph</a><span class="can">Knowledge graph, community और query-focused summarization समझा पाएँगे।</span></li>
+      <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#gmm">RAPTOR की clustering का गणित</a><span class="can">दूरी, Gaussian और mixture से soft membership हाथ से निकाल पाएँगे, और BIC और UMAP का काम बता पाएँगे।</span></li>
+      <li><a href="#raptorpaper">RAPTOR का paper</a><span class="can">Tree traversal और collapsed tree का फ़र्क numbers से बता पाएँगे, और paper के नतीजे पढ़ पाएँगे।</span></li>
+      <li><a href="#graphragpaper">GraphRAG का paper</a><span class="can">Leiden, map-reduce और win rate समझा पाएँगे, और tokens की बचत निकाल पाएँगे।</span></li>
+      <li><a href="#variants">GraphRAG का पूरा परिवार</a><span class="can">Survey के पाँच हिस्से और graphs की किस्में बता पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">इस lesson की चारों Stanford slides की हर बात समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="03-vectors-dense.html#cosine">Lesson 3</a> (vector, cosine), <a href="06-rag-pipeline-dense.html#naive">Lesson 6</a> (indexing time, query time) और <a href="07-chunking-dense.html#big">Lesson 7</a> (chunk, mean pooling)। पड़ाव 6 से आगे <a href="04-probability-tools-dense.html#marginal">Lesson 4</a> (exp, softmax, marginalization, likelihood) भी काम आता है। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="theme">
+  <h3><span class="cn">1</span>Top-K सिर्फ़ टुकड़े लाता है</h3>
+
+  <p><b>Detail question का जवाब किसी एक passage में लिखा होता है, और thematic question का जवाब कई passages को मिलाकर बनता है।</b> <q>When is the milestone due?</q> detail question है, क्योंकि जवाब syllabus की एक line में है। <q>What are all the deadlines?</q> thematic है, क्योंकि उसकी 4 तारीखें तीन passages में हैं।</p>
+
+  <p>Retriever हर passage को अलग से score देता है, और ऊपर के K passages लौटाता है। Thematic question पर हर passage के पास जवाब का सिर्फ़ एक हिस्सा होता है। नीचे हर text का vector 4 numbers का है। पहला number बताता है कि text milestone के बारे में कितना है, दूसरा बाकी deadlines के बारे में, और तीसरा office hours के बारे में। चौथा number बताता है कि text कितनी बातें समेटता है, यानी वो कितना overview जैसा है। <span class="mine">vectors मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage, और उसका vector</th><th class="numh">Milestone वाले सवाल से cosine</th><th class="numh">सारी deadlines वाले सवाल से cosine</th></tr></thead>
+    <tbody>
+      <tr><td>Syllabus: milestone Week 6, final report Week 10<span class="sub mono">[0.9, 0.3, 0, 0.1]</span></td><td class="num"><b>0.99</b></td><td class="num">0.60</td></tr>
+      <tr class="hi"><td>Project page: proposal Oct 9<span class="sub mono">[0.3, 0.9, 0, 0.1]</span></td><td class="num">0.51</td><td class="num"><b>0.66</b></td></tr>
+      <tr><td>Homework 1 की announcement: Oct 5<span class="sub mono">[0.1, 0.9, 0, 0.1]</span></td><td class="num">0.32</td><td class="num">0.61</td></tr>
+      <tr><td>Office hours page<span class="sub mono">[0, 0, 0.9, 0.1]</span></td><td class="num">0.01</td><td class="num">0.09</td></tr>
+      <tr><td>Queue log<span class="sub mono">[0, 0.05, 0.85, 0.1]</span></td><td class="num">0.02</td><td class="num">0.12</td></tr>
+      <tr><td>पुराना forum post<span class="sub mono">[0, 0, 0.8, 0.15]</span></td><td class="num">0.01</td><td class="num">0.14</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Milestone वाले सवाल का vector [0.95, 0.2, 0, 0.05] है, और सारी deadlines वाले का [0.4, 0.5, 0, 0.8]।</p>
+
+  <p><button class="def" data-w="w-cosine">Cosine</button> lesson 3 वाला नाप है: dot product को दोनों vectors की lengths के गुणा से भाग दीजिए। Syllabus और deadlines वाले सवाल पर ये तीन steps में निकलता है:</p>
+  <ol class="plain">
+    <li>Dot product: 0.9 × 0.4 + 0.3 × 0.5 + 0 × 0 + 0.1 × 0.8 = 0.36 + 0.15 + 0 + 0.08 = 0.59।</li>
+    <li>Lengths: सवाल की √(0.16 + 0.25 + 0 + 0.64) = √1.05 = 1.025, और syllabus की √(0.81 + 0.09 + 0 + 0.01) = √0.91 = 0.954।</li>
+    <li>Cosine: 0.59 ÷ (1.025 × 0.954) = 0.59 ÷ 0.977 = 0.60।</li>
+  </ol>
+
+  <p>Detail question पर syllabus को 0.99 मिला, यानी साफ़ जीत। Thematic question पर सबसे ऊँचा cosine project page का 0.66 है, और उसमें 4 में से 1 तारीख है। <b>कोई भी passage “सारी deadlines” के बारे में नहीं है, इसलिए किसी का cosine ऊँचा नहीं आता।</b> सवाल का चौथा number 0.8 है, क्योंकि वो overview माँगता है, जबकि हर passage का चौथा number सिर्फ़ 0.1 या 0.15 है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>K = 3 पर reader को कितनी तारीखें मिलेंगी? और अगर 40 pages के syllabus में 10 deadlines 10 अलग chunks में हों, तो K = 3 पर कितनी?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>इन 6 passages में top-3 project page (0.66), Homework 1 की announcement (0.61) और syllabus (0.60) हैं, इसलिए चारों तारीखें मिल जाती हैं। लेकिन 10 chunks वाले syllabus में K = 3 पर कम से कम 7 deadlines छूटेंगी। K पहले से तय होता है, और retriever नहीं जानता कि सवाल को कितने टुकड़े चाहिए। <span class="mine">मेरा example</span></p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">पूरे syllabus का एक बड़ा chunk भी नहीं चलता। Lesson 7 में बड़े chunk का vector उसके विषयों का औसत था, यानी <button class="def" data-w="w-pooling">mean pooling</button>। वहाँ दो विषय मिलने पर ही cosine 1.00 से 0.71 पर गिरा था। इसलिए index में ऐसा text चाहिए, जो खुद सारी deadlines के बारे में हो, यानी कई passages का लिखा हुआ सार।</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="clustering">
+  <h3><span class="cn">2</span>मिलते-जुलते passages के groups: clustering</h3>
+
+  <p>सारे 6 passages का एक ही सार बहुत मोटा होगा। Deadlines का एक सार और office hours का दूसरा सार ज़्यादा काम का है। इसलिए सार लिखने से पहले passages को विषय के हिसाब से groups में बाँटिए।</p>
+
+  <p><b>Clustering का मतलब है vectors को ऐसे groups में बाँटना, कि एक group के vectors आपस में पास हों और दूसरे groups से दूर।</b> हर group को <b class="term">cluster</b> कहते हैं। “पास” नापने के लिए यहाँ cosine काफ़ी है: cosine 1 के जितना पास, दोनों vectors की दिशा उतनी मिलती है।</p>
+
+  <p>हाथ का हिसाब छोटा रखने के लिए यहाँ lesson 3 वाले 2 numbers लीजिए। पहला number बताता है कि text office hours के बारे में कितना है, और दूसरा deadlines के बारे में। <span class="mine">vectors मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>जोड़ा</th><th class="numh">Cosine</th><th>नतीजा</th></tr></thead>
+    <tbody>
+      <tr><td>Syllabus [0.1, 0.9] और project page [0.2, 0.8]</td><td class="num">0.99</td><td>एक cluster</td></tr>
+      <tr><td>Office hours page [0.9, 0.1] और queue log [0.85, 0.2]</td><td class="num">0.99</td><td>एक cluster</td></tr>
+      <tr><td>Syllabus [0.1, 0.9] और office hours page [0.9, 0.1]</td><td class="num">0.22</td><td>अलग clusters</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>पहली row ऐसे निकली। Dot product 0.1 × 0.2 + 0.9 × 0.8 = 0.02 + 0.72 = 0.74 है। Lengths √(0.01 + 0.81) = 0.906 और √(0.04 + 0.64) = 0.825 हैं, इसलिए cosine 0.74 ÷ (0.906 × 0.825) = 0.74 ÷ 0.747 = 0.99 है।</p>
+
+  <p>ऐसे बाकी जोड़े मिलाइए, तो दो clusters बनते हैं। Deadlines वाले cluster में syllabus, project page और Homework 1 की announcement [0.15, 0.85] हैं। Office hours वाले cluster में office hours page, queue log और पुराना forum post [0.8, 0.15] हैं।</p>
+
+  <p>हर cluster का एक बीच वाला point भी होता है, जो पूरे cluster की जगह खड़ा हो सकता है। <b class="term">Centroid</b> cluster के सारे vectors का औसत है, जिसमें हर जगह के number का औसत अलग से लेते हैं। Deadlines cluster में पहला number (0.1 + 0.2 + 0.15) ÷ 3 = 0.15 है, और दूसरा (0.9 + 0.8 + 0.85) ÷ 3 = 0.85। तो centroid [0.15, 0.85] है, और office hours वाले cluster का [0.85, 0.15]। <a href="10-vector-search-dense.html">Lesson 10</a> में centroid search को तेज़ करता है।</p>
+
+  <p>कुछ passages दो विषयों के बीच होते हैं। Lesson 3 के लंबे FAQ page [1.6, 1.4] का cosine office hours वाले centroid से 0.86 है, और deadlines वाले से 0.78। <b>RAPTOR ऐसे passage को दोनों clusters में रख सकता है, ताकि उसकी बात दोनों सारों तक पहुँचे।</b> इसे <b class="term">soft clustering</b> कहते हैं।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="raptor">
+  <h3><span class="cn">3</span>RAPTOR: सारों का tree, नीचे से ऊपर</h3>
+
+  <p><b>RAPTOR हर cluster का सार एक LLM से लिखवाता है, और उस सार को भी एक chunk की तरह index में रखता है।</b> सार नया text है, vectors का औसत नहीं। इसलिए उसका vector “सारी deadlines” की दिशा में होता है, जबकि lesson 7 के बड़े chunk का vector औसत में घुल गया था।</p>
+
+  <p>सारों के ऊपर भी सार बन सकता है: deadlines के सार और office hours के सार से पूरे course का एक सार। ऐसे levels वाले ढाँचे को <b class="term">tree</b> कहते हैं। Tree का हर box एक <b class="term">node</b> है। सबसे नीचे के nodes, यानी असली chunks, <b class="term">leaves</b> कहलाते हैं, और सबसे ऊपर का node <b class="term">root</b>।</p>
+
+  <p>RAPTOR का पूरा नाम Recursive Abstractive Processing for Tree-Organized Retrieval है, और इसे 2024 में Stanford के Sarthi और साथियों ने बनाया <span class="mine">paper से</span>। ये tree नीचे से ऊपर पाँच steps में बनता है:</p>
+  <ol class="plain">
+    <li>हर chunk का embedding बनाइए।</li>
+    <li>Embeddings को cluster कीजिए।</li>
+    <li>हर cluster के chunks एक LLM को दीजिए, और उनका सार लिखवाइए। ये सार एक level ऊपर का नया node है।</li>
+    <li>सारों के embeddings बनाइए।</li>
+    <li>Steps 2 से 4 दोहराइए, जब तक सबसे ऊपर गिने-चुने nodes न बचें।</li>
+  </ol>
+
+  <p>Course corpus पर tree ऐसा बनता है। 6 passages leaves हैं, उनके ऊपर 2 सार हैं, और सबसे ऊपर 1 root। <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Level</th><th>Node</th><th>Text</th></tr></thead>
+    <tbody>
+      <tr><td>2, root</td><td>R, course का overview</td><td>CS 329Z logistics: deadlines from Oct 5 to Week 10, and office hours on Tuesday and Thursday.</td></tr>
+      <tr class="hi"><td>1</td><td>A, deadlines का सार</td><td>Homework 1 releases Oct 5. Proposal due Oct 9. Milestone due Week 6, Thursday 11:59pm, no late days. Final report Week 10.</td></tr>
+      <tr><td>1</td><td>B, office hours का सार</td><td>Tuesday 4pm in Room 104 (busy, about 14 waiting) and Thursday 9am on Zoom (about 3). An old 2024 post says midweek afternoons are quiet.</td></tr>
+      <tr><td>0, leaves</td><td>6 passages</td><td>Lesson 2 के 6 passages</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="slide">
+    <a href="img/slide-p32.png"><img src="img/slide-p32.png" alt="Stanford slide: RAPTOR का tree, एक level कैसे बनता है, और एक node में क्या है" loading="lazy"></a>
+    <figcaption>Stanford की RAPTOR slide: बाएँ पूरा tree, बीच में एक level बनने के दो steps, और दाएँ एक node के अंदर की चीज़ें। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>Slide के बीच वाले box में 5 chunks से 3 groups बने: {3, 5}, {1, 4, 5} और {2, 3}। Chunk 3 और 5 दो-दो groups में हैं, यानी यहाँ soft clustering है। हर group का सार ऊपर का एक node बना: 6, 7 और 8। दाएँ box में node 8 के children (2 और 3), उनका सार, और उस सार का embedding है।</p>
+
+  <p>इसकी कीमत indexing time पर है, क्योंकि हर level पर हर cluster के लिए एक LLM call लगता है। सार LLM लिखता है, इसलिए वो बारीक बात छोड़ सकता है, या गलत लिख सकता है। Node B ने पुराने post की राय को queue log के data के बराबर रख दिया। यानी पुराने forum post की दिक्कत अब सार में बैठ गई।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Corpus में 64 chunks हैं, और हर cluster में करीब 4 nodes आते हैं। Root तक कितने levels बनेंगे, और कुल कितने सार?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Level 1 पर 64 ÷ 4 = 16 सार बनते हैं, level 2 पर 16 ÷ 4 = 4, और level 3 पर 4 ÷ 4 = 1 root। कुल 16 + 4 + 1 = <b>21 सार</b>, यानी indexing पर 21 LLM calls। Leaves के ऊपर 3 levels बने।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="levels">
+  <h3><span class="cn">4</span>Tree के हर level में ढूँढना</h3>
+
+  <p><b>RAPTOR सवाल को tree के हर level के nodes से मिलाता है, leaves से भी और सारों से भी।</b> Leaves और सार एक ही index में हैं, इसलिए retriever हर node का cosine निकालता है, और ऊपर के nodes लौटाता है। Widget में हर node का 4 numbers वाला vector है, और सारों का चौथा number बड़ा है, क्योंकि वो कई बातें समेटते हैं। <span class="mine">vectors मेरे बनाए हैं</span></p>
+
+  <div class="widget" id="tw">
+    <h4>सवाल tree के किस level से मिलता है?</h4>
+    <p class="hint">एक सवाल चुनिए। Table हर node का cosine दिखाती है, सबसे ऊँचा पहले। चुनने से पहले अंदाज़ा लगाइए कि सवाल किस level के node से मिलेगा।</p>
+    <div class="btns" id="tw-q"></div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Node</th><th>Level</th><th class="numh">Cosine</th></tr></thead>
+      <tbody id="tw-body"></tbody>
+    </table></div>
+    <p class="out" id="tw-out"></p>
+  </div>
+
+  <p>Milestone वाला सवाल leaf syllabus से 0.99 पर मिलता है। सारी deadlines वाला सवाल सार A से 1.00 पर मिलता है, और A में चारों तारीखें हैं। <b>पड़ाव 1 में सबसे अच्छा passage, project page, सिर्फ़ 0.66 पर था, और उसमें 1 तारीख थी।</b> Overview वाला सवाल root R से मिलता है। A और R के vectors मैंने सवालों जैसे ही बनाए हैं, इसलिए cosine पूरा 1.00 है। असली embeddings में ये 1 से कम होता है।</p>
+
+  <p>Stanford की slide यही बात एक line में कहती है: detail question किसी leaf से मिलता है, और thematic question किसी ऊपर के node से। RAPTOR paper ने इसे Cinderella की कहानी के दो सवालों पर दिखाया: <q>central theme of the story?</q> और <q>how did she find a happy ending?</q></p>
+
+  <figure class="slide">
+    <a href="img/slide-p33.png"><img src="img/slide-p33.png" alt="Stanford slide: Cinderella के दो सवालों पर RAPTOR और DPR के चुने nodes" loading="lazy"></a>
+    <figcaption>Stanford की Cinderella वाली slide। रंगीन घेरे वाले boxes RAPTOR के चुने nodes हैं, और सबसे नीचे के तीर DPR के चुने leaves। नारंगी रंग पहले सवाल का है, और बैंगनी दूसरे का।</figcaption>
+  </figure>
+
+  <p><button class="def" data-w="w-dpr">DPR</button>, यानी <a href="05-rag-model-dense.html#retriever">lesson 5</a> के RAG का retriever, सिर्फ़ leaves में ढूँढता है। RAPTOR ने दोनों सवालों पर ऊपर के levels से भी nodes चुने। Slide के मुताबिक DPR के leaves की बात ज़्यादातर RAPTOR के context में पहले से होती है, सीधे या किसी सार के अंदर।</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="graphrag">
+  <h3><span class="cn">5</span>GraphRAG: चीज़ों और रिश्तों का graph</h3>
+
+  <p>RAPTOR के groups vectors की नज़दीकी से बनते हैं। लेकिन documents में चीज़ों के रिश्ते साफ़ लिखे होते हैं: milestone की deadline Week 6 है, और office hours TAs चलाते हैं। <b>GraphRAG इन्हीं रिश्तों से groups बनाता है, और हर group के सार से पूरे corpus वाले सवालों का जवाब लिखता है।</b></p>
+
+  <p>नाम वाली हर चीज़ को <b class="term">entity</b> कहते हैं: कोई व्यक्ति, जगह, course, document या तारीख। जैसे Project milestone, Week 6, TAs और Room 104। दो entities के रिश्ते को <b class="term">relation</b> कहते हैं, और उसे तीन हिस्सों में लिखते हैं: (entity, रिश्ता, entity)। जैसे (Project milestone, due, Week 6)।</p>
+
+  <p>GraphRAG में एक LLM हर chunk पढ़कर ये relations निकालता है। Course corpus से ये 7 rows निकलती हैं: <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Entity</th><th>Relation</th><th>Entity</th></tr></thead>
+    <tbody>
+      <tr><td>Project</td><td>has part</td><td>Proposal, Project milestone, Final report</td></tr>
+      <tr><td>Proposal</td><td>due</td><td>Oct 9</td></tr>
+      <tr><td>Project milestone</td><td>due</td><td>Week 6</td></tr>
+      <tr><td>Final report</td><td>due</td><td>Week 10</td></tr>
+      <tr><td>Homework 1</td><td>released</td><td>Oct 5</td></tr>
+      <tr><td>Office hours</td><td>run by</td><td>TAs</td></tr>
+      <tr><td>Office hours</td><td>held in</td><td>Room 104, Zoom</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>अब हर entity को एक node बनाइए, और हर relation को दो nodes के बीच की एक line। इन lines को <b class="term">edges</b> कहते हैं, और nodes और edges के network को graph। Entities और relations वाले graph को <b class="term">knowledge graph</b> कहते हैं। पहली row से Project तीन nodes से जुड़ता है, और हर part अपनी तारीख से।</p>
+
+  <p>Graph के कुछ हिस्सों के nodes आपस में बहुत जुड़े होते हैं, और बाकी graph से कम। ऐसे हिस्से को <b class="term">community</b> कहते हैं। हमारे graph में तीन communities हैं, और वो आपस में किसी edge से नहीं जुड़ीं। पहली में Project, उसके तीन parts और उनकी तारीखें हैं। दूसरी में Office hours, TAs, Room 104 और Zoom हैं, और तीसरी में Homework 1 और Oct 5।</p>
+
+  <p>GraphRAG को 2024 में Microsoft Research के Edge और साथियों ने बनाया <span class="mine">paper से</span>। Indexing time पर इसके पाँच steps हैं, और query time पर दो:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Indexing time</th><th>Query time</th></tr></thead>
+    <tbody>
+      <tr><td>1. Documents को chunks में तोड़िए।<br>2. LLM हर chunk से entities और relations निकालता है।<br>3. उनसे knowledge graph बनाइए।<br>4. Graph में communities ढूँढिए।<br>5. LLM हर community का सार लिखता है।</td><td>6. LLM हर community के सार से सवाल का एक हिस्सा-जवाब लिखता है।<br>7. LLM सारे हिस्सा-जवाबों को जोड़कर एक global answer लिखता है।</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="slide">
+    <a href="img/slide-p34.png"><img src="img/slide-p34.png" alt="Stanford slide: GraphRAG के indexing और query वाले steps, और communities वाला एक graph" loading="lazy"></a>
+    <figcaption>Stanford की GraphRAG slide। बाएँ नीचे की तरफ़ indexing time के steps हैं, और फिर दाएँ ऊपर की तरफ़ query time के। सबसे दाएँ एक असली graph है, जिसमें हर रंग एक community है।</figcaption>
+  </figure>
+
+  <p>हमारे सवाल पर step 6 हर community से एक हिस्सा-जवाब लिखता है। Project वाली community से तीन तारीखें आती हैं, Homework 1 वाली से एक, और office hours वाली से कोई नहीं। Step 7 इन्हें जोड़कर चारों तारीखों वाला जवाब लिखता है।</p>
+
+  <p>Steps 6 और 7 में LLM सार को सवाल के हिसाब से लिखता है, और इसे <b class="term">query-focused summarization</b> कहते हैं। Slide के title में यही शब्द है। RAPTOR के सार सवाल आने से पहले बनते हैं, जबकि GraphRAG का आख़िरी सार सवाल आने पर बनता है।</p>
+
+  <p>GraphRAG का फ़ायदा पूरे corpus वाले global सवालों पर है, जहाँ top-K passages बिल्कुल नहीं चलते। कीमत ज़्यादा है: indexing पर हर chunk और हर community के लिए LLM calls, और query पर भी हर community के लिए एक call। <b>LLM ने कोई गलत entity या relation निकाला, तो वो गलती graph में बैठकर उस community के सार तक पहुँचती है।</b></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>आपकी company के पास 2,000 support tickets हैं। दो सवाल आते हैं: (a) <q>Ticket #4471 किस product के बारे में है?</q> (b) <q>Customers सबसे ज़्यादा किस बात की शिकायत करते हैं?</q> किस पर आम top-K काफ़ी है, और किस पर नहीं?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>(a) detail question है, क्योंकि उसका जवाब एक ticket में लिखा है, इसलिए top-K काफ़ी है। (b) thematic है, क्योंकि जवाब सैकड़ों tickets को मिलाकर बनता है, और कोई एक ticket ऊँचा score नहीं पाएगा। उसके लिए सार चाहिए, और सवाल पूरे corpus पर है, इसलिए GraphRAG ठीक बैठता है।</p>
+    </details>
+  </div>
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 5 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले RAPTOR की clustering का गणित है, फिर RAPTOR और GraphRAG के papers के तरीके और नतीजे। उसके बाद GraphRAG का पूरा परिवार है, और आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="gmm">
+  <h3><span class="cn">6</span>RAPTOR की clustering का गणित: Gaussian mixture और soft membership</h3>
+
+  <p>पड़ाव 2 में clusters cosine देखकर हाथ से बने थे, और FAQ page दोनों clusters में गया। RAPTOR ये फ़ैसला एक probability model से करता है, जिसे <b class="term">Gaussian mixture model</b> (GMM) कहते हैं <span class="mine">paper से</span>। ये model हर passage को हर cluster के लिए एक probability देता है, और soft clustering इसी probability से चलती है। इसे चार कदमों में बनाते हैं: दूरी, एक cluster का bell curve, कई curves का mixture, और membership।</p>
+
+  <h4 class="sub" id="dist">दूरी: centroid से कितना दूर</h4>
+
+  <p>GMM cosine की जगह <button class="def" data-w="w-distance">दूरी</button> देखता है। दूरी दो vectors के फ़र्क वाले vector की length है, यानी फ़र्क के हर number का square, उनका जोड़, और फिर square root। पुराना forum post [0.8, 0.15] है, और office hours वाला centroid [0.85, 0.15]। फ़र्क [−0.05, 0] है, इसलिए दूरी √(0.0025 + 0) = 0.05 है।</p>
+
+  <p>Deadlines वाले centroid [0.15, 0.85] से फ़र्क [0.65, −0.7] है, और दूरी √(0.4225 + 0.49) = √0.9125 = 0.955। तो forum post office hours के centroid के बहुत पास है, और deadlines वाले से करीब 19 गुना दूर।</p>
+
+  <h4 class="sub" id="bell">एक cluster: bell curve</h4>
+
+  <p><b>GMM हर cluster को एक bell curve की तरह देखता है, जो centroid पर सबसे ऊँचा है और दूर जाने पर तेज़ी से गिरता है।</b> इस curve को <b class="term">Gaussian</b> कहते हैं। उसकी ऊँचाई e<sup>−d²/(2σ²)</sup> के हिसाब से चलती है, जहाँ d centroid से दूरी है। σ (sigma) cluster का फैलाव है, यानी उसके points centroid से आम तौर पर कितनी दूर हैं, और इसे <button class="def" data-w="w-std">standard deviation</button> कहते हैं।</p>
+
+  <p>e की negative power 1 से छोटी होती है, क्योंकि e<sup>−a</sup> = 1 ÷ e<sup>a</sup>। जैसे lesson 4 में <button class="def" data-w="w-exp">exp</button>(−1) = 1 ÷ 2.718 = 0.368 था। इसलिए दूरी जितनी बढ़ती है, ऊँचाई उतनी तेज़ी से गिरती है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Centroid से दूरी d</th><th>d²/(2σ²)</th><th class="numh">ऊँचाई e<sup>−d²/(2σ²)</sup></th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>0</td><td class="num">1.000</td></tr>
+      <tr><td>σ</td><td>0.5</td><td class="num">0.607</td></tr>
+      <tr><td>2σ</td><td>2</td><td class="num">0.135</td></tr>
+      <tr><td>3σ</td><td>4.5</td><td class="num">0.011</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>एक number वाले data पर Gaussian का पूरा formula ये है, जहाँ x point है और μ (mu) curve का बीच:</p>
+  <div class="formula">𝒩(x; μ, σ) = <span class="frac"><span>1</span><span>σ√(2π)</span></span> e<sup>−(x − μ)²/(2σ²)</sup></div>
+  <p>आगे का 1 ÷ (σ√(2π)) सिर्फ़ curve के नीचे का कुल area 1 करता है। μ = 0 और σ = 1 पर ऊँचाई x = 0 पर 0.399, x = 1 पर 0.242, और x = 2 पर 0.054 है। जाँच: 0.242 ÷ 0.399 = 0.607, जो table की दूसरी row है। ये ऊँचाई probability नहीं है, इसे density कहते हैं, और पतले curve में ये 1 से ऊपर भी होती है।</p>
+
+  <p>दो numbers वाले vector पर (x − μ)² की जगह centroid से दूरी का square d² आता है। आगे का number 1 ÷ (2πσ²) हो जाता है। यहाँ मैंने माना है कि फैलाव हर दिशा में एक जैसा है, और दोनों clusters का σ = 0.25 है <span class="mine">σ मेरा चुना हुआ</span>। तब 2σ² = 0.125 है, और आगे का number 1 ÷ (2π × 0.0625) = 2.546।</p>
+
+  <h4 class="sub" id="mixture">कई clusters: mixture</h4>
+
+  <p><b>Gaussian mixture कई bell curves का weighted जोड़ है।</b> हर cluster k का एक वज़न π<sub>k</sub> होता है, यानी कुल passages का कितना हिस्सा उस cluster में है। हमारे 6 passages में 3-3 हैं, इसलिए दोनों वज़न 0.5 हैं, और किसी point x पर mixture की ऊँचाई ये है:</p>
+  <div class="formula">P(x) = 0.5 × 𝒩<sub>office hours</sub>(x) + 0.5 × 𝒩<sub>deadlines</sub>(x)</div>
+  <p>Lesson 4 का <button class="def" data-w="w-marginal">marginalization</button> यही था: हर case का वज़न गुणा उस case की probability, फिर सबका जोड़, जैसे 0.5 × 0.8 + 0.5 × 0.1 = 0.45। वहाँ cases दिन थे, और यहाँ cases clusters हैं। Paper यही बात K clusters के लिए लिखता है:</p>
+  <div class="formula">P(x) = ∑<sub>k=1</sub><sup>K</sup> π<sub>k</sub> 𝒩(x; μ<sub>k</sub>, Σ<sub>k</sub>)</div>
+  <p>हमारे example में K = 2 है, π<sub>k</sub> दोनों 0.5 हैं, और μ<sub>k</sub> दोनों centroids हैं: [0.85, 0.15] और [0.15, 0.85]। Σ<sub>k</sub> यहाँ जोड़ का चिह्न नहीं, cluster k का फैलाव है, जो हर दिशा में अलग हो सकता है। हमारे simplification में ये हर दिशा में σ² = 0.0625 है।</p>
+
+  <h4 class="sub" id="member">Soft membership: हर cluster की probability</h4>
+
+  <p>अब एक नया passage लीजिए, जिसमें दोनों विषय हैं: <q>Milestone week में Thursday के office hours लंबे होंगे।</q> इसका vector [0.6, 0.4] है <span class="mine">मेरा passage</span>। <b>Membership वो probability है कि ये passage cluster k से आया।</b> इसे निकालने के लिए cluster की ऊँचाई को उसके वज़न से गुणा कीजिए, और कुल ऊँचाई P(x) से भाग दीजिए। Lesson 4 में p(Tuesday | भरा) = 0.40 ÷ 0.45 = 0.89 ठीक ऐसे ही निकला था।</p>
+  <ol class="plain">
+    <li>दूरी के squares: office hours centroid से (0.6 − 0.85)² + (0.4 − 0.15)² = 0.0625 + 0.0625 = 0.125, और deadlines वाले से (0.6 − 0.15)² + (0.4 − 0.85)² = 0.2025 + 0.2025 = 0.405।</li>
+    <li>ऊँचाइयाँ: e<sup>−0.125/0.125</sup> = e<sup>−1</sup> = 0.368, और e<sup>−0.405/0.125</sup> = e<sup>−3.24</sup> = 0.0392। इन्हें 2.546 से गुणा करने पर 𝒩<sub>office hours</sub> = 0.937 और 𝒩<sub>deadlines</sub> = 0.0997।</li>
+    <li>वज़न से गुणा: 0.5 × 0.937 = 0.468 और 0.5 × 0.0997 = 0.0499। जोड़ P(x) = 0.518 है।</li>
+    <li>Membership: office hours 0.468 ÷ 0.518 = 0.904, और deadlines 0.0499 ÷ 0.518 = 0.096। दोनों का जोड़ 1 है।</li>
+  </ol>
+  <div class="formula">p(k | x) = <span class="frac"><span>π<sub>k</sub> 𝒩(x; μ<sub>k</sub>, Σ<sub>k</sub>)</span><span>∑<sub>j</sub> π<sub>j</sub> 𝒩(x; μ<sub>j</sub>, Σ<sub>j</sub>)</span></span></div>
+  <p>ऊपर वाला हिस्सा step 3 का 0.468 है, और नीचे वाला जोड़ 0.518। 2.546 और 0.5 ऊपर और नीचे, दोनों में हैं, इसलिए भाग में कट जाते हैं। तब membership सिर्फ़ e<sup>−1</sup> और e<sup>−3.24</sup> का <button class="def" data-w="w-softmax">softmax</button> रह जाती है: 0.368 ÷ (0.368 + 0.0392) = 0.904।</p>
+
+  <p>RAPTOR के code में passage हर उस cluster में जाता है, जिसकी membership 0.1 से ऊपर हो <span class="mine">RAPTOR के code से</span>। हमारे passage की deadlines वाली membership 0.096 है, जो 0.1 से नीचे है। इसलिए ये सिर्फ़ office hours वाले cluster में जाता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Lesson 7 का बड़ा chunk [0.5, 0.5] office hours और deadlines का बराबर औसत था। उसकी दोनों memberships क्या होंगी, और वो कितने clusters में जाएगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>दोनों centroids से दूरी का square (0.35)² + (0.35)² = 0.245 है, इसलिए दोनों ऊँचाइयाँ एक जैसी हैं: e<sup>−1.96</sup> = 0.141। Memberships 0.5 और 0.5 हैं, और दोनों 0.1 से ऊपर हैं, इसलिए chunk दोनों clusters में जाता है। (पड़ाव 2 और 6)</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">σ = 0.25 मैंने चुना था, ताकि numbers पढ़ने लायक रहें। असली GMM μ, σ और π खुद data से निकालता है, और इसके लिए Expectation-Maximization (EM) नाम का तरीका चलाता है <span class="mine">paper से</span>। EM पहले हर passage की memberships निकालता है, फिर उन्हीं से centroids, फैलाव और वज़न दोबारा निकालता है। ये दोनों काम बारी-बारी तब तक चलते हैं, जब तक numbers टिक न जाएँ।</p>
+
+  <p>हमारे 6 points पर ऐसा fit करीब σ = 0.04 देता है, क्योंकि हर cluster के points बहुत पास-पास हैं <span class="mine">हिसाब मेरा</span>। इतने छोटे σ पर ज़्यादातर memberships लगभग पक्की 0 या 1 होती हैं, और सिर्फ़ बिल्कुल बीच वाले passages बँटते हैं।</p>
+
+  <details class="more">
+    <summary>कितने clusters बनें: BIC से चुनाव</summary>
+    <p>GMM को पहले बताना पड़ता है कि clusters कितने हैं। RAPTOR ये गिनती <b class="term">BIC</b> (Bayesian Information Criterion) से चुनता है: कई गिनतियाँ आज़माइए, और जिसका BIC सबसे छोटा हो, वो लीजिए <span class="mine">paper से</span>। Paper का formula ये है:</p>
+    <div class="formula">BIC = ln(N) · k − 2 ln(L̂)</div>
+    <p>N passages की गिनती है, यहाँ 6, और ln 6 = 1.792। L̂ सबसे अच्छे fit की <button class="def" data-w="w-likelihood">likelihood</button> है, यानी हर passage की P(x) का गुणा। Lesson 4 का नियम ln(a × b) = ln a + ln b इस गुणा को जोड़ बना देता है। k model के parameters की गिनती है, यानी वो numbers जो fit तय करता है।</p>
+    <p>हमारे simplified model में हर centroid के 2 numbers हैं, और सारे clusters का एक σ है। K clusters के K − 1 वज़न हैं, क्योंकि आख़िरी वज़न बाकी से तय हो जाता है। <span class="mine">हिसाब मेरा</span></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Clusters K</th><th class="numh">ln L̂</th><th class="numh">k, और ln(6) · k</th><th class="numh">BIC</th></tr></thead>
+      <tbody>
+        <tr><td>1: सारे passages एक साथ</td><td class="num">−4.51</td><td class="num">3, 5.38</td><td class="num">14.40</td></tr>
+        <tr class="hi"><td>2: deadlines और office hours</td><td class="num">17.20</td><td class="num">6, 10.75</td><td class="num">−23.64</td></tr>
+        <tr><td>3: office hours page अलग</td><td class="num">18.12</td><td class="num">9, 16.13</td><td class="num">−20.11</td></tr>
+      </tbody>
+    </table></div>
+    <p>K = 2 वाली row ऐसे निकली। हर passage की P(x) में दूसरे cluster का हिस्सा लगभग 0 है, इसलिए ln P(x) = ln 0.5 + ln 𝒩 है। Fit का σ² = 0.001667 है, और सारी दूरियों के squares का जोड़ 0.02।</p>
+    <ol class="plain">
+      <li>वज़न: 6 × ln 0.5 = 6 × (−0.693) = −4.159।</li>
+      <li>आगे का number: 1 ÷ (2π × 0.001667) = 95.5, और 6 × ln 95.5 = 6 × 4.559 = 27.354।</li>
+      <li>दूरियाँ: −0.02 ÷ (2 × 0.001667) = −0.02 ÷ 0.003333 = −6.0।</li>
+      <li>जोड़: −4.159 + 27.354 − 6.0 = 17.195, यानी 17.20। फिर BIC = 1.792 × 6 − 2 × 17.195 = 10.75 − 34.39 = −23.64।</li>
+    </ol>
+    <p>ln L̂ यहाँ positive है, क्योंकि पतले curves की density 1 से ऊपर है। K = 3 पर ln L̂ सिर्फ़ 17.20 से 18.12 तक बढ़ता है, लेकिन parameters का penalty 10.75 से 16.13 हो जाता है। इसलिए BIC सबसे छोटा K = 2 पर है, और RAPTOR यही गिनती चुनता है।</p>
+  </details>
+
+  <h4 class="sub" id="umap">UMAP: पहले vector छोटा करना</h4>
+
+  <p>Paper एक और दिक्कत बताता है: बहुत ज़्यादा numbers वाले vectors में दूरी ठीक से फ़र्क नहीं दिखाती <span class="mine">paper से</span>। ये देखने के लिए मैंने 200 random points लिए, जिनका हर number 0 और 1 के बीच है। फिर एक random query से सबसे पास और सबसे दूर वाले point की दूरी नापी: <span class="mine">मेरे बनाए random points</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>हर vector में numbers</th><th class="numh">सबसे पास, सबसे दूर</th><th class="numh">दूर ÷ पास</th></tr></thead>
+    <tbody>
+      <tr><td>2</td><td class="num">0.03, 0.80</td><td class="num">25.94</td></tr>
+      <tr><td>10</td><td class="num">0.58, 1.79</td><td class="num">3.09</td></tr>
+      <tr class="hi"><td>768</td><td class="num">10.82, 12.07</td><td class="num">1.11</td></tr>
+    </tbody>
+  </table></div>
+  <p>768 numbers पर सबसे पास और सबसे दूर वाला point लगभग बराबर दूर है, इसलिए “पास” का मतलब धुंधला हो जाता है। इसलिए RAPTOR clustering से पहले <b class="term">UMAP</b> चलाता है। UMAP हर vector को बहुत कम numbers में बदलता है। साथ में वो कोशिश करता है कि जो points पहले पास थे, वो नए vectors में भी पास रहें। RAPTOR के code में ये 10 numbers हैं। <span class="mine">RAPTOR के code से</span></p>
+
+  <p>UMAP का n_neighbors बताता है कि हर point कितने पड़ोसियों को देखकर अपनी जगह तय करे। बड़ा n_neighbors पूरे data का मोटा ढाँचा रखता है, और छोटा पास-पास की बारीकी। RAPTOR पहले मोटे global clusters बनाता है, फिर हर global cluster के अंदर local clusters। किसी cluster का text summary model की token limit से बड़ा हो, तो RAPTOR उसके अंदर फिर cluster करता है। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="raptorpaper">
+  <h3><span class="cn">7</span>RAPTOR का paper: tree में ढूँढने के दो तरीके, setup और नतीजे</h3>
+
+  <h4 class="sub" id="collapsed">Tree traversal और collapsed tree</h4>
+
+  <p>Paper tree में ढूँढने के दो तरीके आज़माता है <span class="mine">paper से</span>। <b class="term">Tree traversal</b> ऊपर से नीचे चलता है। सबसे ऊपर के level से सवाल के सबसे पास वाले k nodes चुनिए, फिर सिर्फ़ उनके children में से k, और ऐसे leaves तक। <b class="term">Collapsed tree</b> पूरे tree को एक list बनाकर सारे nodes को cosine से sort करता है। फिर वो ऊपर से nodes तब तक जोड़ता है, जब तक tokens की limit न भरे।</p>
+
+  <p>हमारे tree पर k = 1 वाला traversal deadlines वाले सवाल के लिए ऐसे चलता है। Root R अकेला है, इसलिए traversal उसी से शुरू होता है। उसके children में A (1.00) B (0.62) से आगे है। A के children में project page (0.66) Homework (0.61) और syllabus (0.60) से आगे है। Context बनता है: R, A और project page।</p>
+
+  <p>Collapsed tree के लिए हर node के tokens चाहिए, और limit 100 tokens रखिए: <span class="mine">token गिनती मेरी</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Node, cosine के क्रम में</th><th class="numh">Cosine</th><th class="numh">Tokens, और अब तक का जोड़</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>A, deadlines का सार</td><td class="num">1.00</td><td class="num">30, 30</td></tr>
+      <tr class="hi"><td>R, course का overview</td><td class="num">0.89</td><td class="num">25, 55</td></tr>
+      <tr class="hi"><td>Project page</td><td class="num">0.66</td><td class="num">15, 70</td></tr>
+      <tr><td>B, office hours का सार</td><td class="num">0.62</td><td class="num">35, छोड़ा (105 बनता)</td></tr>
+      <tr class="hi"><td>Homework 1 की announcement</td><td class="num">0.61</td><td class="num">10, 80</td></tr>
+      <tr class="hi"><td>Syllabus</td><td class="num">0.60</td><td class="num">20, 100</td></tr>
+    </tbody>
+  </table></div>
+  <p>फ़र्क detail question पर दिखता है। Milestone वाले सवाल पर traversal हर level से एक node लेता है: R (0.33), A (0.52), और फिर syllabus (0.99)। Collapsed tree syllabus को सबसे पहले रखता है। <b>Traversal में हर level के nodes का अनुपात हर सवाल पर एक जैसा रहता है, जबकि collapsed tree level सवाल के हिसाब से चुनता है।</b> Paper ने 20 QASPER stories पर दोनों आज़माए, और collapsed tree हर setting में बेहतर रहा।</p>
+
+  <p>Main experiments में RAPTOR collapsed tree को 2,000 tokens की limit के साथ चलाता है, जो करीब top-20 nodes के बराबर है। UnifiedQA reader एक बार में सिर्फ़ 512 tokens पढ़ता है, इसलिए उसे 400 tokens का context मिलता है। Baselines को भी उतने ही tokens मिलते हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="setup">Tree कैसे बना</h4>
+
+  <p>Paper का setup ये है: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li>Chunks 100 tokens के हैं। कोई sentence 100 की limit पार करे, तो पूरा sentence अगले chunk में जाता है, बीच से कटता नहीं।</li>
+    <li>Embeddings SBERT से बनते हैं, जो BERT पर बना encoder है (multi-qa-mpnet-base-cos-v1)।</li>
+    <li>सार gpt-3.5-turbo लिखता है, और prompt है: <q>Write a summary of the following, including as many key details as possible</q>।</li>
+    <li>हर parent के नीचे औसतन 6.7 nodes हैं, और सार अपने children के कुल text की करीब 0.28 गुना लंबाई का है, यानी 72% छोटा।</li>
+    <li>Authors ने 150 nodes हाथ से जाँचे, और 6 में, यानी 4% में, छोटा hallucination मिला। ये गलतियाँ ऊपर के सारों तक नहीं पहुँचीं, और जवाबों पर उनका असर नहीं दिखा।</li>
+    <li>Tree बनाने के tokens और समय, दोनों document की लंबाई के साथ सीधी line में बढ़ते हैं।</li>
+  </ul>
+
+  <h4 class="sub" id="raptorresults">तीन datasets के नतीजे</h4>
+
+  <p>Paper तीन datasets पर नापता है। NarrativeQA में किताबों और movie scripts पर सवाल हैं, कुल 1,572 documents। QASPER में 1,585 NLP papers पर 5,049 सवाल हैं, और QuALITY में करीब 5,000 tokens के passages पर multiple-choice सवाल। <span class="mine">paper से</span></p>
+
+  <p>QASPER का नाप <b class="term">F1</b> है, जो reader के जवाब के शब्दों को सही जवाब के शब्दों से मिलाता है। मान लीजिए जवाब में 4 शब्द हैं, सही जवाब में 5, और 3 शब्द दोनों में हैं। <span class="mine">मेरे numbers</span> <button class="def" data-w="w-precision">Precision</button> 3 ÷ 4 = 0.75 है, और <button class="def" data-w="w-recall">recall</button> 3 ÷ 5 = 0.6। F1 = 2 × 0.75 × 0.6 ÷ (0.75 + 0.6) = 0.9 ÷ 1.35 = 0.667, और इसे % में लिखते हैं।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Retriever</th><th class="numh">GPT-3</th><th class="numh">GPT-4</th><th class="numh">UnifiedQA</th></tr></thead>
+    <tbody>
+      <tr><td>BM25</td><td class="num">46.6</td><td class="num">50.2</td><td class="num">26.4</td></tr>
+      <tr><td>DPR</td><td class="num">51.3</td><td class="num">53.0</td><td class="num">32.1</td></tr>
+      <tr class="hi"><td>RAPTOR</td><td class="num">53.1</td><td class="num">55.7</td><td class="num">36.6</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">QASPER पर F1 (%)। Columns में जवाब लिखने वाला reader है, और rows में retriever। <span class="mine">paper से</span></p>
+
+  <p>तीनों readers के साथ RAPTOR आगे है: DPR से 1.8, 2.7 और 4.5 points, और BM25 से 6.5, 5.5 और 10.2 points। QuALITY पर GPT-3 के साथ accuracy BM25 की 57.3% है, DPR की 60.4% और RAPTOR की 62.4%। RAPTOR हर retriever की मदद करता है: UnifiedQA के साथ QuALITY पर BM25 49.9 से 52.1 होता है, और DPR 53.1 से 54.7। <span class="mine">paper से</span></p>
+
+  <p>RAPTOR को GPT-4 के साथ जोड़ने पर QuALITY पर accuracy 82.6% है, जबकि पहले का सबसे अच्छा नतीजा 62.3% था, यानी 20.3 points ऊपर। सबसे मुश्किल सवालों वाले HARD हिस्से पर ये 76.2 बनाम 54.7 है, यानी 21.5 points। QASPER पर RAPTOR + GPT-4 का F1 55.7 है, जो पिछले सबसे अच्छे 53.9 से 1.8 ऊपर है। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="layers">कौन से levels काम आए</h4>
+
+  <p>QuALITY की एक story पर paper ने search को अलग-अलग levels तक सीमित किया। सिर्फ़ leaves में ढूँढने पर accuracy 57.9% थी, और तीनों levels में ढूँढने पर 73.68%। Collapsed tree के लौटाए nodes में से 18.5% से 57% तक leaves नहीं, ऊपर के सार थे, dataset और retriever के हिसाब से। <span class="mine">paper से</span></p>
+
+  <p>Paper ने ये भी नापा कि clustering खुद कितना काम आता है। Clusters की जगह लगातार 7-7 chunks का सार लिखने पर QuALITY accuracy 55.8% रही। GMM clustering के साथ ये 56.6% थी, यानी फ़र्क 0.8 points का है। Cinderella पर GPT-4 को DPR का context मिला, तो उसने लिखा कि happy ending का पता नहीं चल सकता। RAPTOR के context से उसने सही जवाब लिखा। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="graphragpaper">
+  <h3><span class="cn">8</span>GraphRAG का paper: graph बनाना, map-reduce जवाब और नतीजे</h3>
+
+  <h4 class="sub" id="extract">Chunks से graph तक</h4>
+
+  <p>GraphRAG documents को 600 tokens के chunks में तोड़ता है, जिनमें 100 tokens का <button class="def" data-w="w-chunkoverlap">overlap</button> है <span class="mine">paper से</span>। यानी हर नया chunk 500 नए tokens लाता है। Chunk का size एक सौदा है: बड़े chunks पर LLM calls कम लगती हैं, लेकिन LLM उनमें entities छोड़ता है। HotPotQA के data पर GPT-4 ने 600 tokens वाले chunks से 2,400 tokens वाले chunks के मुकाबले करीब दोगुने entity references निकाले।</p>
+
+  <p>इसलिए GraphRAG एक दूसरा मौका देता है, जिसे gleaning कहते हैं। Entities निकलने के बाद GraphRAG LLM से हाँ या ना में पूछता है कि कोई entity छूटी या नहीं। हाँ हो, तो अगला prompt कहता है कि बहुत सी entities छूट गईं, और LLM और entities निकालता है। GraphRAG ये एक तय गिनती तक दोहराता है। <span class="mine">paper से</span></p>
+
+  <p>LLM हर entity और relation के साथ एक छोटा description भी लिखता है। साथ में वो claims निकालता है, यानी तारीख या घटना जैसी तथ्य वाली बातें। एक ही entity कई chunks से निकलती है, तो सबका एक node बनता है, और LLM उसके descriptions का सार लिखता है। कोई relation जितनी बार निकले, उसके edge का weight उतना होता है। जैसे (Office hours, run by, TAs) दो passages से निकले, तो उस edge का weight 2 होगा।</p>
+
+  <h4 class="sub" id="leiden">Community के levels: Leiden</h4>
+
+  <p>Communities ढूँढने के लिए GraphRAG <b class="term">Leiden</b> algorithm चलाता है <span class="mine">paper से</span>। Leiden graph को ऐसे हिस्सों में बाँटता है, जिनके अंदर edges ज़्यादा हों और हिस्सों के बीच कम। GraphRAG इसे बार-बार चलाता है: पहले communities, फिर हर community के अंदर sub-communities, जब तक और बाँटना मुमकिन न रहे।</p>
+
+  <p>इससे community के levels बनते हैं: C0 सबसे ऊपर का level है, जिसमें सबसे कम communities हैं, और C3 सबसे नीचे का, जिसमें सबसे ज़्यादा। हर level पर हर node ठीक एक community में होता है। <b>यहाँ GraphRAG, RAPTOR से अलग है, क्योंकि RAPTOR में एक passage दो clusters में भी हो सकता था।</b> हमारे graph में level 0 पर तीन communities होंगी। नीचे के level पर Project वाली community proposal वाले और milestone वाले हिस्सों में बँट सकती है।</p>
+
+  <p>Community का सार लिखते वक्त LLM की token limit भर सकती है, इसलिए GraphRAG ज़रूरी बातें पहले डालता है। किसी node की <b class="term">degree</b> उससे जुड़े edges की गिनती है, और हर edge की अहमियत उसके दोनों nodes की degree का जोड़ है। हमारे graph में Project की degree 3 है, और Proposal की 2। इसलिए (Project, has part, Proposal) की अहमियत 3 + 2 = 5 है, और (Proposal, due, Oct 9) की 2 + 1 = 3। सार में पहले 5 वाले edges आते हैं।</p>
+
+  <h4 class="sub" id="mapreduce">सवाल आने पर: map-reduce</h4>
+
+  <p>Query time पर GraphRAG जवाब <b class="term">map-reduce</b> से लिखता है। Map का मतलब है हर टुकड़े पर अलग से एक ही काम, और reduce का मतलब है उन सबके नतीजों को जोड़ना। Paper में ये तीन steps हैं: <span class="mine">paper से</span></p>
+  <ol class="plain">
+    <li>चुने गए level के community सारों को random क्रम में मिलाइए, और तय tokens के टुकड़ों में बाँटिए।</li>
+    <li>Map: हर टुकड़े से LLM एक हिस्सा-जवाब लिखता है। साथ में वो 0 से 100 के बीच score देता है कि जवाब कितना काम का है, और score 0 वाले हिस्से हटते हैं।</li>
+    <li>Reduce: बाकी हिस्से score के क्रम में तब तक जुड़ते हैं, जब तक context window न भरे, और LLM उनसे आख़िरी जवाब लिखता है।</li>
+  </ol>
+  <p>हमारे सवाल पर Project वाला हिस्सा 95 पाता है, Homework 1 वाला 80, और office hours वाला 0 <span class="mine">scores मेरे बनाए</span>। Office hours वाला हिस्सा हटता है, और reduce पहले Project और फिर Homework 1 वाला हिस्सा पढ़कर चारों तारीखें लिखता है। Paper ने summaries, हिस्सा-जवाब और आख़िरी जवाब, तीनों के लिए 8k tokens की window रखी।</p>
+
+  <h4 class="sub" id="graphresults">LLM judge वाले नतीजे</h4>
+
+  <p>Global सवालों का कोई एक सही जवाब नहीं होता, इसलिए paper ने सवाल भी LLM से बनवाए। LLM ने हर dataset के लिए 5 तरह के users सोचे, और हर user के 5 काम। हर काम पर 5 सवाल बने, यानी 5 × 5 × 5 = 125 सवाल। जैसे एक tech journalist का सवाल: <q>Which episodes deal primarily with tech policy and government regulation?</q> <span class="mine">paper से</span></p>
+
+  <p>Paper में दो datasets थे। Podcast transcripts में 600 tokens के 1,669 chunks थे (करीब 10 लाख tokens), और News articles में 3,197 chunks (करीब 17 लाख tokens)। Podcast से बने graph में 8,564 nodes और 20,691 edges थे, और उसकी indexing में gpt-4-turbo के साथ 281 minute लगे। <span class="mine">paper से</span></p>
+
+  <p>फिर एक दूसरा LLM judge बना। उसे सवाल और दो systems के जवाब मिले, और उसने हर कसौटी पर बताया कि कौन बेहतर है, या दोनों बराबर हैं। कसौटियाँ चार थीं: comprehensiveness (कितनी बातें आईं), diversity (कितने अलग नज़रिए), empowerment (पढ़ने वाला कितना समझकर फ़ैसला ले सके), और directness (कितना सीधा जवाब)। Paper ने directness जानबूझकर रखी, ताकि बाकी नतीजों की जाँच हो सके। वो comprehensiveness की उल्टी है, इसलिए कोई तरीका चारों कसौटियों पर नहीं जीत सकता।</p>
+
+  <p>हर जोड़ी की तुलना हर सवाल पर 5 बार हुई, यानी 125 × 5 = 625 फ़ैसले। <b class="term">Win rate</b> बताता है कि इनमें से कितने % में judge ने एक system को बेहतर चुना, और 50% का मतलब बराबरी है। जैसे 72% win rate का मतलब है 625 में से करीब 0.72 × 625 = 450 फ़ैसले। <span class="mine">हिसाब मेरा</span></p>
+
+  <p>Paper ने छह तरीके मिलाए: चारों community levels C0 से C3, TS, और SS। TS उसी map-reduce को graph के बिना सीधे chunks पर चलाता है, और SS आम vector RAG है, जो सबसे पास वाले chunks लेता है। <b>Comprehensiveness में graph वाले और TS जैसे global तरीकों का SS पर win rate 72% से 83% था (podcast) और 72% से 80% (news)।</b> Diversity में ये 75% से 82% और 62% से 71% था। Directness में SS जीता, जैसा सोचा था। <span class="mine">paper से</span></p>
+
+  <p>फ़र्क tokens में भी है। नीचे की table बताती है कि podcast पर हर सवाल के जवाब में कितना context पढ़ा गया: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किससे जवाब</th><th class="numh">Units</th><th class="numh">Tokens per सवाल</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>C0, सबसे ऊपर की communities</td><td class="num">34</td><td class="num">26,657</td></tr>
+      <tr><td>C1</td><td class="num">367</td><td class="num">225,756</td></tr>
+      <tr><td>C2</td><td class="num">969</td><td class="num">565,720</td></tr>
+      <tr><td>C3, सबसे नीचे की communities</td><td class="num">1,310</td><td class="num">746,100</td></tr>
+      <tr><td>TS, सीधे chunks</td><td class="num">1,669</td><td class="num">1,014,611</td></tr>
+    </tbody>
+  </table></div>
+  <p>C0 को TS के tokens का सिर्फ़ 26,657 ÷ 1,014,611 = 2.6% चाहिए, यानी करीब 38 गुना कम। News पर ये 39,770 ÷ 1,707,694 = 2.3% है, यानी करीब 43 गुना कम। इतने कम tokens पर भी C0 का SS पर comprehensiveness win rate 72% और diversity 62% रहा। <span class="mine">paper से</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>RAPTOR</th><th>GraphRAG</th></tr></thead>
+    <tbody>
+      <tr><td>Groups कैसे बनते हैं</td><td>Vectors की नज़दीकी से (GMM), एक passage कई clusters में</td><td>लिखे रिश्तों से (Leiden), हर node एक community में</td></tr>
+      <tr><td>सार कब बनता है</td><td>Indexing time पर</td><td>Indexing पर, और फिर सवाल आने पर</td></tr>
+      <tr><td>किस सवाल पर अच्छा</td><td>Detail और thematic, दोनों एक index से</td><td>पूरे corpus वाले global सवाल</td></tr>
+    </tbody>
+  </table></div>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="variants">
+  <h3><span class="cn">9</span>GraphRAG का पूरा परिवार: Han और साथियों का survey</h3>
+
+  <p>Edge का GraphRAG एक system है, लेकिन ये नाम अब पूरे परिवार के लिए भी चलता है। Han और साथियों का 2025 का survey हर उस RAG को GraphRAG कहता है, जिसका data source एक graph है <span class="mine">paper से</span>। Stanford की आख़िरी GraphRAG slide इसी survey की है, और पड़ाव 10 में आप उसे पढ़ेंगे।</p>
+
+  <p>Survey हर GraphRAG को पाँच हिस्सों में बाँटता है, और slide के बीच में यही पाँच boxes हैं। हमारे सारी deadlines वाले सवाल पर ये ऐसे दिखते हैं: <span class="mine">course वाला example मेरा</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>हिस्सा</th><th>काम</th><th>हमारे course में</th></tr></thead>
+    <tbody>
+      <tr><td>Query processor</td><td>सवाल को ढूँढने लायक बनाना</td><td>“deadlines” से entities निकालना: Proposal, Project milestone, Final report, Homework 1</td></tr>
+      <tr><td>Retriever</td><td>Graph से काम का हिस्सा लाना</td><td>इन nodes से due और released वाले edges पर चलकर तारीखें लाना</td></tr>
+      <tr><td>Data source</td><td>Graph खुद</td><td>पड़ाव 5 का knowledge graph</td></tr>
+      <tr><td>Organizer</td><td>लाए हिस्से को छाँटना और क्रम देना</td><td>चार relations को चार lines के text में लिखना</td></tr>
+      <tr><td>Generator</td><td>जवाब लिखना</td><td>LLM, जो चारों तारीखें लिखता है</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Slide के बाएँ हिस्से में आम RAG का data है: text और images। Survey के मुताबिक text tokens की एक line है, और image छोटे टुकड़ों (patches) की एक grid। अलग sentences एक जैसे tokens बाँटते हैं। Graph data में ऐसी कोई साझा unit नहीं है, और उसका ढाँचा हर domain में अलग है। इसलिए हर domain के लिए GraphRAG अलग बनता है। <span class="mine">paper से</span></p>
+
+  <p>Slide के दाएँ हिस्से में graphs की किस्में हैं:</p>
+  <ul class="plain">
+    <li><b>Nodes क्या हैं:</b> entity, research paper, product या customer। जैसे papers के बीच citation वाले edges, या customers और products के बीच खरीद वाले edges।</li>
+    <li><b>Graph:</b> knowledge graph की एक row, (California, State, USA), जो हमारे (Project milestone, due, Week 6) जैसी ही है। Protein का ढाँचा भी एक graph है।</li>
+    <li><b>Cellular complex:</b> इसमें edges के साथ ऐसे हिस्से भी होते हैं, जो कई nodes को एक unit मानते हैं। जैसे benzene का पूरा ring, या एक club के चार सदस्य, जो सब आपस में जुड़े हैं।</li>
+    <li><b>Homophily और heterophily:</b> homophily में जुड़े nodes एक जैसे होते हैं, जैसे social network के दोस्त। Heterophily में जुड़े nodes अलग किस्म के होते हैं, जैसे dating network।</li>
+    <li><b>Proximity similar और role similar:</b> slide के tree में 2 और 4 जुड़े होने से मिलते-जुलते हैं। 2 और 3 जुड़े नहीं हैं, फिर भी एक जैसी जगह पर हैं: दोनों 1 के children हैं, और दोनों के दो-दो children। हमारे graph में Project milestone और Final report role similar हैं, क्योंकि दोनों Project के parts हैं और दोनों की एक due तारीख है।</li>
+    <li><b>6-cycle और 4-cycle:</b> benzene में 6 nodes का घेरा है, और सड़कों के जाल में 4 nodes के घेरे। Drug design या शहर की planning में retriever को ऐसे आकार पहचानने पड़ते हैं।</li>
+  </ul>
+  <p>Survey ऐसे 10 domains गिनता है: knowledge, document, scientific, social, planning और reasoning, tabular, infrastructure, biological, scene और random graphs। Edge का GraphRAG document graph वाले domain में आता है। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे इस lesson की चारों Stanford slides हैं, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई बात अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p32.png"><img src="img/slide-p32.png" alt="Stanford slide: RAPTOR का tree, एक level कैसे बनता है, और एक node में क्या है" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p32-tree.png"><img src="img/slide-p32-tree.png" alt="उसी slide के तीनों boxes, बड़े करके" loading="lazy"></a>
+    <figcaption>Stanford की RAPTOR slide, और नीचे उसके तीनों boxes, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">RAPTOR वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>बीच वाले box में chunk 5 किन nodes के नीचे है, और ये किस तरीके की clustering है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Chunk 5 दो groups में है: {3, 5} और {1, 4, 5}, इसलिए वो node 6 और node 7, दोनों के नीचे है। ये soft clustering है। RAPTOR में ये फ़ैसला GMM की membership से होता है, और code में membership 0.1 से ऊपर हो, तो chunk उस cluster में जाता है। (पड़ाव 2 और 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाएँ box में node 8 के अंदर चार चीज़ें हैं। “Text Embedding” वाला [3, .1, 4, .1, 5] किस काम आता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>ये node 8 के सार का embedding है, और retrieval में सवाल से cosine इसी vector का निकलता है। Slide पर 5 numbers सिर्फ़ दिखाने के लिए हैं। Index #8 node की पहचान है, और Child Nodes 2, 3 बताते हैं कि ये सार किन nodes का है। (पड़ाव 3 और 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>आख़िरी line कहती है: <q>a detail question matches a leaf, a thematic question matches a node</q>। ये आपने कहाँ देखा, और paper इसे किस तरीके से करता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>पड़ाव 4 के widget में milestone वाला सवाल syllabus leaf से 0.99 पर मिला, और deadlines वाला सवाल सार A से 1.00 पर। Paper इसके लिए collapsed tree चलाता है, जो सारे levels के nodes एक list में sort करता है। (पड़ाव 4 और 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p33.png"><img src="img/slide-p33.png" alt="Stanford slide: Cinderella के दो सवालों पर RAPTOR और DPR के चुने nodes" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p33-tree.png"><img src="img/slide-p33-tree.png" alt="उसी slide का tree, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p33-legend.png"><img src="img/slide-p33-legend.png" alt="उसी slide के रंगों का मतलब, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की Cinderella वाली slide, और नीचे उसका tree और रंगों का मतलब, बड़े करके। नारंगी पहले सवाल का रंग है, और बैंगनी दूसरे का।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Cinderella वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>इस tree के हर level में कितने nodes हैं? और सबसे ऊपर 1 root की जगह 4 nodes क्यों हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Leaves 0 से 15 तक 16 हैं, बीच में 16 से 22 तक 7, और सबसे ऊपर 23 से 26 तक 4। कुल 27 nodes हैं। RAPTOR तब रुकता है, जब आगे clustering मुमकिन न रहे, इसलिए सबसे ऊपर कई nodes रह सकते हैं। पहली slide के tree में भी सबसे ऊपर दो nodes थे, 9 और 10। (पड़ाव 3)</p>
+        </details>
+      </li>
+      <li>
+        <p>पहले सवाल, central theme, पर RAPTOR ने किन levels से nodes चुने?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>तीनों levels से: सबसे ऊपर से 25, बीच से 16, 18 और 19, और leaves में से 11 और 15। Thematic सवाल पर ज़्यादातर nodes सार हैं, फिर भी दो leaves भी आईं, क्योंकि RAPTOR हर level के nodes को सवाल से मिलाता है। (पड़ाव 4 और 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>दूसरे सवाल पर RAPTOR ने सिर्फ़ 25, 16, 17 और 19 चुने, कोई leaf नहीं। DPR ने leaves 2, 3, 4, 5 और 11 चुने। DPR की बात RAPTOR के context में कैसे पहुँचती है, और इससे जवाब में क्या फ़र्क पड़ा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>16 से 26 तक के nodes नीचे वाले nodes के सार हैं, इसलिए leaves की बात उनके अंदर पहुँचती है। Slide की आख़िरी line यही कहती है। Paper में GPT-4 को सिर्फ़ DPR का context मिला, तो उसने लिखा कि happy ending का पता नहीं चल सकता। RAPTOR के context से उसने सही जवाब लिखा। (पड़ाव 4 और 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p34.png"><img src="img/slide-p34.png" alt="Stanford slide: GraphRAG के indexing और query वाले steps, और communities वाला एक graph" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p34-pipeline.png"><img src="img/slide-p34-pipeline.png" alt="उसी slide के steps, बड़े करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p34-communities.png"><img src="img/slide-p34-communities.png" alt="उसी slide का communities वाला graph, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की GraphRAG slide, और नीचे उसके steps और communities वाला graph, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">GraphRAG वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>बाएँ column के arrows पर दो बार “domain-tailored summarization” लिखा है। Entities निकालना summarization क्यों है, और “domain-tailored” का मतलब क्या है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Entities, relations और उनके descriptions text की छोटी, लिखी हुई शक्ल हैं, इसलिए paper इन्हें summarization का एक रूप कहता है। Domain-tailored का मतलब है कि prompt में उसी domain के examples होते हैं, जैसे science या law के। (पड़ाव 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाएँ column में “query-focused summarization” दो बार क्यों है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>पहली बार community summaries से community answers बनते हैं, यानी map step। दूसरी बार community answers से global answer बनता है, यानी reduce step। दोनों में LLM सवाल को ध्यान में रखकर लिखता है। (पड़ाव 5 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाएँ की तस्वीर में रंग और circles के size क्या बताते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>ये paper की तस्वीर है, जिसमें News वाले dataset के graph पर Leiden की सबसे ऊपर वाली communities हैं। हर circle एक entity है, उसका size उसकी degree के हिसाब से है, और रंग उसकी community बताता है। बड़ा गुलाबी circle बहुत सारे edges वाली entity है <span class="mine">paper से</span>। (पड़ाव 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p35.png"><img src="img/slide-p35.png" alt="Stanford slide: RAG और GraphRAG के data, और GraphRAG के पाँच हिस्से" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p35-rag.png"><img src="img/slide-p35-rag.png" alt="उसी slide का बायाँ हिस्सा और बीच के पाँच boxes, बड़े करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p35-graphs.png"><img src="img/slide-p35-graphs.png" alt="उसी slide का graphs वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की GraphRAG variants वाली slide, और नीचे उसके दोनों हिस्से, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">GraphRAG variants वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>बीच के पाँच boxes क्या हैं, और सारी deadlines वाले सवाल पर Retriever क्या करेगा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Query Processor, Retriever, Data Source, Organizer और Generator। Retriever Proposal, Project milestone, Final report और Homework 1 के nodes से due और released वाले edges पर चलकर चारों तारीखें लाएगा। (पड़ाव 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाएँ नीचे वाले tree में node 2 किसके साथ proximity similar है, और किसके साथ role similar?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Node 4 के साथ proximity similar, क्योंकि 2 और 4 एक edge से जुड़े हैं। Node 3 के साथ role similar, क्योंकि दोनों 1 के children हैं और दोनों के दो-दो children हैं, भले वो आपस में जुड़े नहीं। (पड़ाव 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>बाएँ हिस्से में लिखा है कि अलग sentences एक जैसे tokens बाँटते हैं। Graphs वाले हिस्से के लिए ये बात क्यों नहीं लिखी?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Graph data में tokens जैसी कोई साझा unit नहीं है। Knowledge graph rows में है, molecule rings में, और सड़कें घेरों में, इसलिए हर domain का GraphRAG अलग बनता है। (पड़ाव 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Thematic question का जवाब किसी एक chunk में नहीं होता। हर chunk का cosine कम आता है, K बढ़ाना काफ़ी नहीं, और बड़ा chunk सारी बातें औसत में घोल देता है।</li>
+    <li>RAPTOR, GMM से हर chunk को हर cluster की membership देता है, और soft clustering से उसे एक से ज़्यादा clusters में रख सकता है। हर cluster का सार लिखवाकर वो tree बनाता है, और collapsed tree से हर level में ढूँढता है। GPT-4 के साथ QuALITY पर उसकी accuracy 82.6% है, पिछले best से 20.3 points ऊपर।</li>
+    <li>GraphRAG LLM से knowledge graph बनाता है, Leiden से communities के levels ढूँढता है, और map-reduce से global जवाब लिखता है। Comprehensiveness में vector RAG पर उसका win rate 72% से 83% है। सबसे ऊपर वाले level को सीधे chunks के मुकाबले सिर्फ़ 2.3% से 2.6% tokens चाहिए।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-detailq">Detail question और thematic question</dt><dd>जवाब एक जगह लिखा हो, या कई passages को मिलाकर बने। जैसे “milestone कब है?” और “सारी deadlines क्या हैं?”।</dd>
+    <dt id="w-clustering">Clustering</dt><dd>Vectors को ऐसे groups में बाँटना कि एक group के vectors आपस में पास हों। जैसे syllabus [0.1, 0.9] और project page [0.2, 0.8] का cosine 0.99 है, तो दोनों एक group में।</dd>
+    <dt id="w-cluster">Cluster और centroid</dt><dd>Cluster एक group है, और centroid उसके vectors का औसत। जैसे [0.1, 0.9], [0.2, 0.8] और [0.15, 0.85] का centroid [0.15, 0.85]।</dd>
+    <dt id="w-softclust">Soft clustering</dt><dd>एक passage को एक से ज़्यादा clusters में रखना। जैसे FAQ page, जिसका cosine दोनों centroids से ऊँचा है (0.86 और 0.78)।</dd>
+    <dt id="w-raptor">RAPTOR</dt><dd>Clusters के सारों से नीचे से ऊपर tree बनाना, और हर level पर ढूँढना। जैसे सारी deadlines वाला सवाल सार A से मिलता है।</dd>
+    <dt id="w-tree">Tree, node, leaf, root</dt><dd>Levels वाला ढाँचा: node एक box, leaf सबसे नीचे का node, और root सबसे ऊपर का। जैसे 6 chunks (leaves) के ऊपर 2 सार, और उनके ऊपर 1 root।</dd>
+    <dt id="w-entity">Entity</dt><dd>नाम वाली कोई चीज़: व्यक्ति, जगह, course, document या तारीख। जैसे Week 6, TAs, Room 104।</dd>
+    <dt id="w-relation">Relation</dt><dd>दो entities का रिश्ता। जैसे (Project milestone, due, Week 6)।</dd>
+    <dt id="w-kg">Knowledge graph और edge</dt><dd>Entities (nodes) और relations (edges) का network। जैसे milestone और Week 6 के बीच एक edge, जिस पर “due” लिखा है।</dd>
+    <dt id="w-community">Community</dt><dd>Graph का आपस में बहुत जुड़ा हिस्सा। जैसे Office hours, TAs, Room 104 और Zoom।</dd>
+    <dt id="w-graphrag">GraphRAG</dt><dd>Knowledge graph, उसकी communities और उनके सारों से global सवालों का जवाब। जैसे सारी deadlines वाला जवाब, जो Project और Homework 1 वाली communities से बनता है।</dd>
+    <dt id="w-qfs">Query-focused summarization</dt><dd>सवाल को ध्यान में रखकर सार लिखना। जैसे “सारी deadlines” पूछने पर Project community के सार से सिर्फ़ तारीखें आएँ।</dd>
+    <dt id="w-gmm">Gaussian mixture model (GMM)</dt><dd>Bell curves का weighted जोड़: P(x) = ∑ π<sub>k</sub> 𝒩<sub>k</sub>(x)। ये हर passage को हर cluster की membership देता है। जैसे [0.6, 0.4] को office hours 0.904 और deadlines 0.096।</dd>
+    <dt id="w-bic">BIC</dt><dd>ln(N) · k − 2 ln(L̂): fit की likelihood और parameters की गिनती तौलकर clusters की गिनती चुनना, और सबसे छोटा BIC जीतता है। जैसे 6 passages पर K = 2 का BIC −23.64, और K = 3 का −20.11।</dd>
+    <dt id="w-umap">UMAP</dt><dd>Vectors को कम numbers में बदलना, ताकि पास वाले points पास रहें। जैसे RAPTOR के code में हर vector 10 numbers का बनता है।</dd>
+    <dt id="w-collapsed">Tree traversal और collapsed tree</dt><dd>ऊपर से नीचे हर level पर top-k चुनना, या सारे nodes एक list में sort करके token limit तक लेना। जैसे deadlines वाले सवाल पर collapsed tree 100 tokens में 5 nodes लेता है, और A सबसे पहले।</dd>
+    <dt id="w-f1">F1</dt><dd>Precision और recall को मिलाने वाला नाप, 2PR ÷ (P + R)। जैसे P = 0.75 और R = 0.6 पर F1 = 0.667।</dd>
+    <dt id="w-leiden">Leiden और degree</dt><dd>Leiden graph को ऐसी communities में बाँटता है, जिनके अंदर edges ज़्यादा हों। Degree किसी node के edges की गिनती है। जैसे Project की degree 3 है।</dd>
+    <dt id="w-mapreduce">Map-reduce</dt><dd>हर टुकड़े पर अलग से एक ही काम (map), फिर नतीजे जोड़ना (reduce)। जैसे हर community से हिस्सा-जवाब और score, फिर score के क्रम में आख़िरी जवाब।</dd>
+    <dt id="w-winrate">Win rate</dt><dd>दो systems की तुलना में कितने % फ़ैसले एक के पक्ष में गए, और 50% का मतलब बराबरी। जैसे 625 में से करीब 450 फ़ैसले, यानी 72%।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="08-contextual-retrieval-dense.html">पिछला: Lesson 8</a>
+    <a href="10-vector-search-dense.html">अगला: Lesson 10, तेज़ vector search</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Papers: Sarthi et al., 2024, “RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval”। Edge et al., 2024, “From Local to Global: A GraphRAG Approach to Query-Focused Summarization”। Han et al., 2025, “Retrieval-Augmented Generation with Graphs (GraphRAG)”। “RAPTOR के code से” वाली बातें RAPTOR के public code में हैं, paper में नहीं। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var NODES = [
+    { name: "R, course का overview", lvl: "2, root", v: [0.25, 0.3, 0.4, 0.9] },
+    { name: "A, deadlines का सार", lvl: "1, सार", v: [0.4, 0.5, 0, 0.8] },
+    { name: "B, office hours का सार", lvl: "1, सार", v: [0, 0, 0.6, 0.8] },
+    { name: "Syllabus", lvl: "0, leaf", v: [0.9, 0.3, 0, 0.1] },
+    { name: "Project page", lvl: "0, leaf", v: [0.3, 0.9, 0, 0.1] },
+    { name: "Homework 1 की announcement", lvl: "0, leaf", v: [0.1, 0.9, 0, 0.1] },
+    { name: "Office hours page", lvl: "0, leaf", v: [0, 0, 0.9, 0.1] },
+    { name: "Queue log", lvl: "0, leaf", v: [0, 0.05, 0.85, 0.1] },
+    { name: "पुराना forum post", lvl: "0, leaf", v: [0, 0, 0.8, 0.15] }
+  ];
+  var Q = [
+    { q: "When is the milestone due?", v: [0.95, 0.2, 0, 0.05] },
+    { q: "What are all the deadlines?", v: [0.4, 0.5, 0, 0.8] },
+    { q: "Give me an overview of course logistics", v: [0.25, 0.3, 0.4, 0.9] }
+  ];
+  function dot(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+  function cos(a, b) { return dot(a, b) / Math.sqrt(dot(a, a) * dot(b, b)); }
+  var qi = 0, box = document.getElementById("tw-q"), body = document.getElementById("tw-body"), out = document.getElementById("tw-out");
+  box.innerHTML = Q.map(function (x, i) { return '<button type="button" data-i="' + i + '">' + x.q + "</button>"; }).join("");
+  box.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); }); });
+  function render() {
+    box.querySelectorAll("button").forEach(function (b, i) { b.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    var rows = NODES.map(function (n) { return { n: n, c: cos(Q[qi].v, n.v) }; }).sort(function (a, b) { return b.c - a.c; });
+    body.innerHTML = rows.map(function (r, i) {
+      return '<tr class="' + (i === 0 ? "hi" : "") + '"><td>' + r.n.name + "</td><td>" + r.n.lvl + '</td><td class="num">' + r.c.toFixed(2) + "</td></tr>";
+    }).join("");
+    out.innerHTML = "सबसे ऊपर: <b>" + rows[0].n.name + "</b>, level " + rows[0].n.lvl + "।";
+  }
+  render();
+})();
+</script>
+</body>
+</html>

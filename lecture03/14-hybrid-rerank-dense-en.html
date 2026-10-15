@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="BM25 put E2 at rank 3, and dense retrieval put it at rank 1. The two lists have to become one, the top passages have to be reread with the query to fix their order, and then you work through the maths and read Stanford's slides yourself.">
+<title>Lesson 14: Hybrid search and reranking (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 14 / 18 · <a href="14-hybrid-rerank-en.html">Easy</a> · <b>Dense</b> · <a href="14-hybrid-rerank-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 14 · Dense version</p>
+  <h1>Hybrid search and reranking</h1>
+  <p class="lede"><b>Hybrid search merges the ranked lists of two retrievers into one list. Reranking then sorts the top passages of that list again, using a slower but more accurate model.</b></p>
+  <p class="lede">BM25 put E2 at rank 3, and dense retrieval put it at rank 1. The query was <q>E-4012 upload failed</q>, and it has two correct passages. E1 contains this error code exactly, and E2 says the same thing in other words. <a href="12-dpr-dense-en.html#limits">Lesson 12</a> ended on this point: the strengths and weaknesses of <button class="def" data-w="w-bm25">BM25</button> are the opposite of a dense retriever's.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 10 steps. The first 5 are the same as in the easy version, and steps 6 to 10 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#complement">BM25 and dense retrieval miss different passages</a><span class="can">Say what kind of text each retriever misses.</span></li>
+      <li><a href="#hybrid">Hybrid search, and simply adding the scores</a><span class="can">Show why adding the scores buries the dense retriever's order.</span></li>
+      <li><a href="#rrf">Reciprocal rank fusion: ranks instead of scores</a><span class="can">Compute RRF by hand, and explain what k = 60 does.</span></li>
+      <li><a href="#cross">Cross-encoder: query and passage together</a><span class="can">Do one attention step by hand, and explain why a cross-encoder is slow.</span></li>
+      <li><a href="#rerank">Reranking a shortlist</a><span class="can">Work out the time reranking takes, and explain why a reranker cannot raise recall.</span></li>
+      <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#rrfmath">The maths of RRF, and the experiment on k</a><span class="can">Compute RRF for any k, derive the condition r &lt; k + 2 yourself, and read the RRF paper's table for k.</span></li>
+      <li><a href="#normalize">Min-max normalisation, and the DPR paper's sum</a><span class="can">Do min-max by hand, show its weakness with numbers, and read the BM25 + DPR column.</span></li>
+      <li><a href="#inside">The cross-encoder from inside</a><span class="can">Work out attention weights with a softmax, and go from a score to a probability and a loss.</span></li>
+      <li><a href="#cost">The cost</a><span class="can">Count model runs and FLOPs, and show the recall ceiling in real numbers.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line of this lesson's five Stanford slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="03-vectors-dense-en.html">Lesson 3</a> (embedding, cosine), <a href="06-rag-pipeline-dense-en.html#post">Lesson 6</a> (fusion, rerank), <a href="11-bm25-dense-en.html">Lesson 11</a> (BM25), <a href="12-dpr-dense-en.html#biencoder">Lesson 12</a> (bi-encoder, DPR) and <a href="13-metrics-dense-en.html#mrr">Lesson 13</a> (MRR). From step 6 on, <a href="04-probability-tools-dense-en.html#softmax">Lesson 4</a> (softmax, ln, loss), the hyperparameter from <a href="11-bm25-dense-en.html">lesson 11</a>, and the in-batch negatives and full DPR table of <a href="12-dpr-dense-en.html#fullresults">lesson 12</a> also help. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="complement">
+  <h3><span class="cn">1</span>BM25 and dense retrieval miss different passages</h3>
+
+  <p><b>BM25 and a dense retriever fail on different kinds of text, so on the same query they leave out different correct passages.</b> BM25 counts the words a query and a passage share, while a dense retriever such as <button class="def" data-w="w-dpr">DPR</button> compares their <button class="def" data-w="w-embedding">embeddings</button>.</p>
+
+  <p>BM25 fails when a passage says the same thing in other words, which is called a <b class="term">paraphrase</b>. For example, the query says <q>upload failed</q> and the passage says <q>upload keeps failing</q>. To BM25, failing and failed are different words, so the only match it finds is upload.</p>
+
+  <p>A dense retriever fails when something has to match exactly, such as an error code or an order ID. Text like this is called a <b class="term">literal</b>. <a href="03-vectors-dense-en.html#embedding">Lesson 3</a> showed that passages with E-4012 and E-4021 can get almost the same embedding. To BM25, 4012 is a rare word with a high <a href="11-bm25-dense-en.html#idf">IDF</a>, so it finds the right passage.</p>
+
+  <p>Now look at how both retrievers rank three passages: <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>Correct?</th><th>BM25</th><th>Dense</th></tr></thead>
+    <tbody>
+      <tr><td><b>E1</b>, the one with the error code<span class="sub">Error E-4012: file larger than 50 MB. Compress the file and upload again.</span></td><td>Yes</td><td>Rank 1<span class="sub">4012 matches exactly</span></td><td>Rank 2</td></tr>
+      <tr><td><b>E2</b>, the one in other words<span class="sub">If your upload keeps failing on Gradescope, make the file smaller before submitting.</span></td><td>Yes</td><td>Rank 3<span class="sub">only upload matches</span></td><td>Rank 1<span class="sub">closest vector</span></td></tr>
+      <tr><td><b>E3</b>, the one with another error<span class="sub">Error E-4021: submission locked after the deadline.</span></td><td>No</td><td>Rank 2<span class="sub">an E- code, short passage</span></td><td>Rank 3</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>At top-1, BM25 brings only E1 and dense retrieval brings only E2. Each misses a different correct passage, <b>so merging their lists can bring both correct passages to the top.</b></p>
+
+  <p>Real data shows the same thing. In <a href="12-dpr-dense-en.html#results">lesson 12</a>, top-20 accuracy on SQuAD was 68.8% for BM25 and 63.2% for DPR. On the same Stanford slide, a retriever that combines the two reaches 71.5%, ahead of both.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The query is <q>refund policy for order #A77-310</q>. Which part will BM25 catch, and which part will the dense retriever catch?</p>
+    <details><summary>Show the answer</summary>
+      <p>BM25 catches the rare literal A77-310 exactly. The dense retriever can match refund policy to a passage about money back rules, which shares no word with it.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="hybrid">
+  <h3><span class="cn">2</span>Hybrid search, and simply adding the scores</h3>
+
+  <p><b>Hybrid search runs both retrievers and merges their two ranked lists into one list.</b> <a href="06-rag-pipeline-dense-en.html#post">Lesson 6</a> called merging lists <button class="def" data-w="w-fusion">fusion</button>. The simplest way is to add each passage's two scores: the BM25 score and the dense retriever's <button class="def" data-w="w-cosine">cosine</button>. <span class="mine">my scores</span></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The BM25 scores of E1, E3 and E2 are 7.2, 3.1 and 1.0, and their cosines are 0.79, 0.75 and 0.82. If you add the two, where does E2, the dense retriever's first passage, end up?</p>
+    <details><summary>Show the answer</summary>
+      <p>At rank 3, the bottom. The table below has the arithmetic.</p>
+    </details>
+  </div>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">BM25 score</th><th class="numh">Cosine</th><th class="numh">Plain sum</th></tr></thead>
+    <tbody>
+      <tr><td>E1</td><td class="num">7.2</td><td class="num">0.79</td><td class="num">7.99</td></tr>
+      <tr><td>E3 (wrong)</td><td class="num">3.1</td><td class="num">0.75</td><td class="num">3.85</td></tr>
+      <tr class="hi"><td>E2</td><td class="num">1.0</td><td class="num">0.82</td><td class="num">1.82</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>After adding, the order is E1, E3, E2, exactly BM25's order. The reason is the scale of the two scores. The cosines spread from 0.75 to 0.82, only 0.07, while BM25 spreads from 1.0 to 7.2, which is 6.2.</p>
+
+  <p><b>BM25's spread is about 90 times the cosine's, so in the sum the cosine has almost no effect.</b> A cosine always stays between −1 and 1, while BM25 has no upper limit. You could divide BM25 by some number, but that number would differ for every corpus, and you would have to find it each time.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="rrf">
+  <h3><span class="cn">3</span>Reciprocal rank fusion: merging ranks instead of scores</h3>
+
+  <p>The scores have different scales, but ranks have the same scale in every retriever: first, second, third. <b>Reciprocal rank fusion, or RRF, turns a passage's rank in each list into 1 ÷ (60 + rank), and adds these numbers over all lists.</b> The passages are then ordered by this sum.</p>
+
+  <p>E1 is at rank 1 in BM25's list, so it gets 1 ÷ (60 + 1) = 1 ÷ 61 = 0.01639, about 0.0164. In the dense list it is at rank 2, so it gets 1 ÷ 62 = 0.01613. E1's RRF is the sum: 0.01639 + 0.01613 = 0.03252.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>From BM25</th><th>From dense</th><th class="numh">Sum</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>E1</td><td>1 ÷ (60 + 1) = 0.01639</td><td>1 ÷ (60 + 2) = 0.01613</td><td class="num">0.03252</td></tr>
+      <tr class="hi"><td>E2</td><td>1 ÷ (60 + 3) = 0.01587</td><td>1 ÷ (60 + 1) = 0.01639</td><td class="num">0.03227</td></tr>
+      <tr><td>E3 (wrong)</td><td>1 ÷ (60 + 2) = 0.01613</td><td>1 ÷ (60 + 3) = 0.01587</td><td class="num">0.03200</td></tr>
+    </tbody>
+  </table></div>
+  <p>The new order is E1, E2, E3. Both correct passages moved to the top, and E3 dropped to the bottom, because it was not first in any list.</p>
+
+  <p>The three sums sit close together, and the reason is how a fraction behaves. When the bottom of 1 ÷ (60 + rank) grows, the fraction shrinks. But going from 61 to 62 makes the bottom only 1.6% bigger, so the fraction also shrinks by only about 1.6%. <b>That is why RRF numbers stay close together, and only their order matters.</b></p>
+
+  <p>Stanford's slide writes the same arithmetic as a formula:</p>
+  <div class="formula">RRF(d) = <span class="sum"><span class="op">∑</span><span class="lim"><i>r</i> ∈ <i>R</i></span></span> <span class="frac"><span>1</span><span><i>k</i> + rank<sub><i>r</i></sub>(d)</span></span>, &nbsp; <i>k</i> = 60</div>
+  <dl class="sym">
+    <dt>d</dt><dd>A passage, such as E1.</dd>
+    <dt><i>R</i></dt><dd>The set of retrievers, here {BM25, dense}. The <i>r</i> ∈ <i>R</i> under the <button class="def" data-w="w-sigma">∑</button> means: add over every retriever r in R.</dd>
+    <dt>rank<sub><i>r</i></sub>(d)</dt><dd>The rank of d in retriever r's list. For E1, 1 in BM25 and 2 in dense. A list that does not contain d adds nothing.</dd>
+    <dt><i>k</i></dt><dd>A fixed number, 60. It is not the k of top-k.</dd>
+  </dl>
+
+  <figure class="slide">
+    <a href="img/slide-p49.png"><img src="img/slide-p49.png" alt="Stanford slide: Hybrid Search and Reciprocal Rank Fusion" loading="lazy"></a>
+    <figcaption>Stanford's slide: Hybrid Search and Reciprocal Rank Fusion. The first line is step 1, the second is step 2, and at the bottom is the RRF formula. The small line says RRF needs no per-corpus tuning and works with any number of retrievers. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <h4 class="sub" id="whyk">What k = 60 does</h4>
+
+  <p><b>k = 60 shrinks the gap between rank 1 and rank 2, so rank 1 in a single list cannot decide the result on its own.</b> With k = 0, rank 1 would get 1 and rank 2 would get 0.5, half as much. With k = 60, they get 0.01639 and 0.01613.</p>
+
+  <p>Suppose passage A is only in BM25's list, at rank 1, and passage B is at rank 3 in both lists: <span class="mine">my example</span></p>
+  <ul class="plain">
+    <li>With k = 0, A gets 1 ÷ 1 = 1, and B gets 1 ÷ 3 + 1 ÷ 3 = 0.667. A wins.</li>
+    <li>With k = 60, A gets 1 ÷ 61 = 0.0164, and B gets 1 ÷ 63 + 1 ÷ 63 = 0.0317. B wins.</li>
+  </ul>
+  <p>So with k = 60, the winner is the passage that both retrievers place near the top.</p>
+
+  <div class="widget" id="fw">
+    <h4>Change k yourself</h4>
+    <p class="hint">A is at rank 1 in one list, and B is at rank r in both lists. Change k and r and see how long B stays ahead.</p>
+    <div class="ctl">
+      <label for="fw-k">k</label><input id="fw-k" type="range" min="0" max="100" step="1" value="60"><output id="fw-ko">60</output>
+      <label for="fw-r">B's rank r</label><input id="fw-r" type="range" min="1" max="100" step="1" value="3"><output id="fw-ro">3</output>
+    </div>
+    <div class="btns">
+      <button type="button" data-s="0,3">k = 0, r = 3</button>
+      <button type="button" data-s="60,3">k = 60, r = 3</button>
+      <button type="button" data-s="60,20">k = 60, r = 20</button>
+      <button type="button" data-s="60,61">k = 60, r = 61</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th>Arithmetic</th><th class="numh">RRF</th></tr></thead>
+      <tbody id="fw-body"></tbody>
+    </table></div>
+    <p class="out" id="fw-out"></p>
+  </div>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>In <a href="06-rag-pipeline-dense-en.html#post">lesson 6</a>, the original query's list was: queue log, forum post, office hours page. The rewritten query's list was: office hours page, queue log. What order does RRF give?</p>
+    <details><summary>Show the answer</summary>
+      <p>Queue log: 1 ÷ 61 + 1 ÷ 62 = 0.03252. Office hours page: 1 ÷ 63 + 1 ÷ 61 = 0.03227. The forum post is only in the first list: 1 ÷ 62 = 0.01613. The order is <b>queue log, office hours page, forum post</b>.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">The price of RRF is that it forgets how strong a score was. Whether E1's BM25 score is 7.2 or 70, rank 1 gives 1 ÷ 61 both times.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="cross">
+  <h3><span class="cn">4</span>Cross-encoder: reading the query and the passage together</h3>
+
+  <p>E1 and E2 are at the top of the RRF list only because the two retrievers agreed on them. Neither retriever read the query and the passage together. In a <button class="def" data-w="w-biencoder">bi-encoder</button>, a passage's vector is made before any question arrives, and the two meet only at the final dot product.</p>
+
+  <p><b>A cross-encoder joins the query and the passage into one text, feeds it to one model, and gets a single score for that pair.</b> The model is usually an encoder such as <button class="def" data-w="w-bert">BERT</button>.</p>
+
+  <h4 class="sub" id="attention">Attention: each token updates its vector from the other tokens</h4>
+
+  <p>An encoder makes a vector for every <button class="def" data-w="w-token">token</button> and then updates it many times. <b>In attention, each token takes a weighted average of the other tokens' vectors and uses it as its new vector.</b> In a weighted average you multiply each vector by its weight and add them up, and the weights add up to 1.</p>
+
+  <p>In a cross-encoder, the query's tokens can also look at the passage's tokens, which Stanford's slide calls full attention across both. Below, every vector has 2 numbers: the first says how much the token leans toward counted data, and the second how much it leans toward opinion. <span class="mine">my numbers</span></p>
+
+  <p>The query token crowded starts as [0.5, 0.5]. When the query is joined with the queue log, crowded gives weight 0.6 to the queue log's averaged [1.0, 0.0] and 0.4 to itself:</p>
+  <ol class="plain">
+    <li>First number: 0.6 × 1.0 + 0.4 × 0.5 = 0.6 + 0.2 = 0.8.</li>
+    <li>Second number: 0.6 × 0.0 + 0.4 × 0.5 = 0 + 0.2 = 0.2.</li>
+  </ol>
+  <p>With the forum post, the same 0.6 goes to usually [0.0, 1.0], and crowded becomes [0.2, 0.8]. <b>So the same query token gets a different vector with every passage.</b> In a bi-encoder, attention runs only inside the query, so crowded keeps one vector for every passage.</p>
+
+  <p>At the end, the model gathers the whole pair into one vector and turns it into a score. The reranker in <a href="06-rag-pipeline-dense-en.html#post">lesson 6</a> gave the queue log 0.92, the office hours page 0.41 and the forum post 0.35 on the least-crowded question. The retriever had given the queue log and the forum post the same 2. <span class="mine">my scores from lesson 6</span></p>
+
+  <figure class="slide">
+    <a href="img/slide-p50.png"><img src="img/slide-p50.png" alt="Stanford slide: Cross-Encoders and Reranking, diagrams of a bi-encoder and a cross-encoder" loading="lazy"></a>
+    <figcaption>Stanford's slide: Cross-Encoders and Reranking. On the left, in the bi-encoder, the query (In<sub>x</sub>) and the passage (In<sub>y</sub>) go through separate encoders. On the right, in the cross-encoder, both go through one Encoder together.</figcaption>
+  </figure>
+
+  <h4 class="sub" id="price">The price: nothing can be built in advance</h4>
+
+  <p>Every vector in a cross-encoder depends on the query, so nothing about a passage can be computed before the question arrives. On every query it has to run the whole model once for every passage, while a bi-encoder ran the model once per query.</p>
+
+  <p>According to Stanford's slide, a cross-encoder built on BERT-base takes 10,700 ms for 1,000 passages, which is 10.7 ms per passage. BERT-base is the smaller version of BERT. For the 60,000 passages of the company in <a href="02-retrieval-dense-en.html">lesson 2</a>, one query would take 60,000 × 10.7 ms = 642 seconds, about 11 minutes.</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="rerank">
+  <h3><span class="cn">5</span>Reranking a shortlist</h3>
+
+  <p>A retriever is fast but looks at passages roughly, and a cross-encoder is accurate but slow. <b>So a fast retriever first picks the top few passages, such as the top 100, and then the cross-encoder scores and sorts only those again.</b> This short list is called the <b class="term">shortlist</b>, and the second step is <b class="term">reranking</b>.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Step</th><th>On what</th><th>Time</th></tr></thead>
+    <tbody>
+      <tr><td>1. BM25 and dense, then RRF</td><td>The whole corpus</td><td>BM25 62 ms<span class="sub">dense tens of ms, from Stanford's slide</span></td></tr>
+      <tr><td>2. Reranking with the cross-encoder</td><td>Top-100 shortlist</td><td>100 × 10.7 = 1,070 ms</td></tr>
+      <tr><td>3. Into the LLM's prompt</td><td>Top 5 after reranking</td><td>–</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The whole corpus would take 642 seconds, and the shortlist takes about 1 second. A Stanford table shows the gain in accuracy. Its data is MS MARCO: real Bing search questions and about 8.8 million passages. <span class="mine">MS MARCO description from the paper</span></p>
+
+  <p>There, BM25 alone gets an <button class="def" data-w="w-mrr">MRR@10</button> of 16.7. In lesson 13 this was one over the rank of the first correct passage, such as 0.5 at rank 2. The table writes it multiplied by 100. Rerank BM25's top 1,000 with a BERT-base cross-encoder, and MRR@10 becomes 34.7. <b>So reranking roughly doubles MRR@10: 34.7 ÷ 16.7 = 2.08.</b> <span class="mine">BM25's top 1,000 from the paper</span></p>
+
+  <p>A reranker has a limit: it only changes the order of the shortlist, and it cannot bring in a passage that is not there. This is the <button class="def" data-w="w-ceiling">recall ceiling</button> from <a href="02-retrieval-dense-en.html#recall-ceiling">lesson 2</a>. If the shortlist holds the right passage for 60 out of 100 questions, the reranker cannot go above 60 either.</p>
+
+  <p>So the first step needs high recall, and hybrid search provides it: both E1 and E2 reach the shortlist.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Each query has a budget of 500 ms. The retriever takes 50 ms, and the cross-encoder takes 10.7 ms per passage. At most how many passages can the shortlist hold?</p>
+    <details><summary>Show the answer</summary>
+      <p>That leaves 500 − 50 = 450 ms for reranking. 450 ÷ 10.7 = 42.06, so <b>42 passages</b>.</p>
+    </details>
+  </div>
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The steps above are the same as in the easy version. The steps below take you to the level of the Stanford slides: first the maths of RRF and the experiment behind k, then another way to put scores on one scale. After that comes the cross-encoder from inside, then the full cost, and finally you read the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="rrfmath">
+  <h3><span class="cn">6</span>The maths of RRF: how k shrinks the gap between ranks</h3>
+
+  <p>All of RRF's behaviour comes from one fraction: 1 ÷ (k + rank). Step 3 used k = 60. The table below shows how the same fraction changes for different k: <span class="mine">my arithmetic</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Rank</th><th class="numh">k = 0</th><th class="numh">k = 10</th><th class="numh">k = 60</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="num">1</td><td class="num">0.09091</td><td class="num">0.01639</td></tr>
+      <tr><td>2</td><td class="num">0.5</td><td class="num">0.08333</td><td class="num">0.01613</td></tr>
+      <tr><td>3</td><td class="num">0.333</td><td class="num">0.07692</td><td class="num">0.01587</td></tr>
+      <tr><td>10</td><td class="num">0.1</td><td class="num">0.05000</td><td class="num">0.01429</td></tr>
+      <tr><td>100</td><td class="num">0.01</td><td class="num">0.00909</td><td class="num">0.00625</td></tr>
+      <tr class="hi"><td>Rank 1 ÷ rank 2</td><td class="num">2</td><td class="num">1.09</td><td class="num">1.016</td></tr>
+    </tbody>
+  </table></div>
+  <p>With k = 0, rank 1 is twice rank 2 and a hundred times rank 100. With k = 60, rank 1 is only 1.016 times rank 2, and 2.6 times rank 100. The reason is that with k = 60 the bottom of the fraction already holds 60. Adding 1 to the rank then takes the bottom from 61 to 62, a change of 1.6%, while with k = 0 the same step takes 1 to 2, a change of 100%.</p>
+
+  <h4 class="sub" id="rule">Rank r in both lists against rank 1 in one list</h4>
+
+  <p>Now look at A and B from step 3 for any k and r. A is at rank 1 in one list only, so it gets 1 ÷ (k + 1). B is at rank r in both lists, so it gets 2 ÷ (k + r).</p>
+
+  <p>There is a simple rule for comparing two positive fractions: a ÷ b is bigger than c ÷ d exactly when a × d is bigger than c × b. For example, 2 ÷ 3 is bigger than 1 ÷ 2, because 2 × 2 = 4 and 1 × 3 = 3. The same rule gives B's condition in three steps:</p>
+  <ol class="plain">
+    <li>2 ÷ (k + r) is bigger than 1 ÷ (k + 1) exactly when 2 × (k + 1) is bigger than 1 × (k + r).</li>
+    <li>That is, when 2k + 2 is bigger than k + r.</li>
+    <li>Subtract k from both sides: when k + 2 is bigger than r.</li>
+  </ol>
+  <p><b>B stays ahead as long as r is smaller than k + 2.</b> With k = 60, B stays ahead up to rank 61. Check: 2 ÷ 121 = 0.016529, which is bigger than 1 ÷ 61 = 0.016393. At r = 62 the two are tied, because 2 ÷ 122 = 1 ÷ 61. With k = 0, B is ahead only at r = 1.</p>
+
+  <p>So k decides how deep the agreement between the two retrievers counts. With k = 60, agreement anywhere inside the top 61 outweighs rank 1 in a single list. The widget in step 3 shows the same rule: it keeps B ahead up to r = k + 1.</p>
+
+  <h4 class="sub" id="cormack">k is a hyperparameter, and the RRF paper's experiment</h4>
+
+  <p>Training does not learn k. Someone has to choose it in advance. Lesson 11 called such a number a <button class="def" data-w="w-hyperparam">hyperparameter</button>, like BM25's k1 and b, which the DPR paper set to 0.9 and 0.4.</p>
+
+  <p>k = 60 comes from the 2009 paper by Cormack, Clarke and Büttcher that introduced RRF. According to the paper, k = 60 was fixed in a small early experiment and never changed afterwards. In that experiment the paper fused the lists of 30 search systems and measured the result for each k with MAP. <span class="mine">from the paper</span></p>
+
+  <p>MAP, or mean average precision, is a number between 0 and 1 for the quality of a ranking, and the bigger it is, the better the ranking. It averages the <button class="def" data-w="w-precision">precision</button> at the rank of each correct document. In lesson 6, precision was the share of returned passages that are right, such as 0.5 when 1 of 2 is right.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>k in RRF</th><th class="numh">MAP</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td class="num">.2072</td></tr>
+      <tr><td>10</td><td class="num">.2123</td></tr>
+      <tr class="hi"><td>60</td><td class="num">.2145</td></tr>
+      <tr><td>80, the best</td><td class="num">.2147</td></tr>
+      <tr><td>500</td><td class="num">.2098</td></tr>
+      <tr><td>Best single system, no fusion</td><td class="num">.2016</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Fusion of 30 systems on TREC topics 351 to 400. <span class="mine">from the paper</span></p>
+
+  <p>Going from k = 0 to 60 raises MAP from .2072 to .2145, and at 500 it falls back to .2098. Every k from 30 to 100 gives a MAP between .2138 and .2147. In the paper's words, k = 60 was near-optimal, but the choice was not critical. At every k, RRF beats the best single system's .2016.</p>
+
+  <p>The paper also explains the reasoning behind k. Top ranks matter more, but the effect of lower ranks should not vanish, as it would with an exponential formula. With a score of 1 ÷ 2<sup>rank</sup>, for example, rank 10 would get 1 ÷ 1,024, about 0.001. In RRF with k = 60, rank 10 gets 87% of what rank 1 gets. According to the paper, k also damps the high ranking that a single outlier system gives, which is exactly what happened with A and B. <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="normalize">
+  <h3><span class="cn">7</span>Putting scores on one scale: min-max, and the DPR paper's sum</h3>
+
+  <p>In step 2 the plain sum of scores failed because the two scores had different scales. RRF dropped the scores. The other route is to bring both scores onto one scale first, and then add them.</p>
+
+  <p><b>Min-max normalisation maps each list's scores onto 0 to 1: the smallest score becomes 0, the largest becomes 1, and the rest fall in between in proportion.</b> The formula is (x − min) ÷ (max − min). In BM25's list the min is 1.0 and the max is 7.2, so E3's 3.1 becomes (3.1 − 1.0) ÷ (7.2 − 1.0) = 2.1 ÷ 6.2 = 0.339. For the cosines the min is 0.75 and the max is 0.82, so E1's 0.79 becomes 0.04 ÷ 0.07 = 0.571. <span class="mine">my scores from step 2</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">BM25 on 0 to 1</th><th class="numh">Cosine on 0 to 1</th><th class="numh">Sum</th></tr></thead>
+    <tbody>
+      <tr><td>E1</td><td class="num">1<span class="sub">from 7.2</span></td><td class="num">0.571<span class="sub">from 0.79</span></td><td class="num">1.571</td></tr>
+      <tr class="hi"><td>E2</td><td class="num">0<span class="sub">from 1.0</span></td><td class="num">1<span class="sub">from 0.82</span></td><td class="num">1.000</td></tr>
+      <tr><td>E3 (wrong)</td><td class="num">0.339<span class="sub">from 3.1</span></td><td class="num">0<span class="sub">from 0.75</span></td><td class="num">0.339</td></tr>
+    </tbody>
+  </table></div>
+  <p>Now the order is E1, E2, E3, the same as RRF. In this example, min-max fixed the scale problem.</p>
+
+  <h4 class="sub" id="minmaxweak">The weakness of min-max: the result depends on the list's min and max</h4>
+
+  <p>Every min-max score depends on the list's min and max, and those depend on which passages made it into the list. Suppose a fourth, weak passage E4 with cosine 0.60 also enters the dense list. Now the cosine min is 0.60, and the spread is 0.82 − 0.60 = 0.22: <span class="mine">my example</span></p>
+  <ol class="plain">
+    <li>E1: (0.79 − 0.60) ÷ 0.22 = 0.19 ÷ 0.22 = 0.864, and the sum is 1 + 0.864 = 1.864.</li>
+    <li>E3: (0.75 − 0.60) ÷ 0.22 = 0.15 ÷ 0.22 = 0.682, and the sum is 0.339 + 0.682 = 1.021.</li>
+    <li>E2: (0.82 − 0.60) ÷ 0.22 = 1, and the sum is 0 + 1 = 1.000.</li>
+  </ol>
+  <p><b>The wrong E3 is now above the correct E2, although the scores of E1, E2 and E3 did not change at all.</b> One low passage joining the list was enough to flip the order. In RRF, E4 would enter the dense list at rank 4, the ranks of E1, E2 and E3 would stay the same, and so would their RRF values.</p>
+
+  <h4 class="sub" id="dprhybrid">The DPR paper's BM25 + DPR: a sum of scores with λ</h4>
+
+  <p>In the dense version of <a href="12-dpr-dense-en.html#fullresults">lesson 12</a>, the DPR paper's table had a column called BM25 + DPR. The paper builds this column by adding scores, not with RRF. It takes the top 2,000 passages from BM25 and from DPR, and sorts all passages from both lists again with this score: <span class="mine">from the paper</span></p>
+  <div class="formula">BM25(q, p) + λ · sim(q, p), &nbsp; λ = 1.1</div>
+  <p>Here sim(q, p) is DPR's dot-product score, and λ (lambda) is a number that multiplies it. The paper chose λ = 1.1 by checking accuracy on the dev set, the questions researchers use to check their decisions. <b>So this is step 2's multiplying by a number, and that number had to be chosen by looking at data.</b></p>
+
+  <p>The right λ depends on the scale of the scores. On our cosines, λ = 1.1 changes nothing: E1 gets 7.2 + 1.1 × 0.79 = 8.069, E3 gets 3.925, E2 gets 1.902, and the order is BM25's again. DPR's sim is a dot product, not a cosine, and it has no upper limit.</p>
+
+  <p>Stanford's results slide shows the same column. Single means that DPR was trained separately on each dataset:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Dataset</th><th class="numh">BM25</th><th class="numh">DPR</th><th class="numh">BM25 + DPR</th></tr></thead>
+    <tbody>
+      <tr><td>NQ</td><td class="num">59.1</td><td class="num">78.4</td><td class="num">76.6<span class="sub">1.8 below DPR</span></td></tr>
+      <tr><td>TriviaQA</td><td class="num">66.9</td><td class="num">79.4</td><td class="num">79.8<span class="sub">0.4 above</span></td></tr>
+      <tr><td>WQ</td><td class="num">55.0</td><td class="num">73.2</td><td class="num">71.0<span class="sub">2.2 below DPR</span></td></tr>
+      <tr><td>TREC</td><td class="num">70.9</td><td class="num">79.8</td><td class="num">85.2<span class="sub">5.4 above</span></td></tr>
+      <tr class="hi"><td>SQuAD</td><td class="num">68.8</td><td class="num">63.2</td><td class="num">71.5<span class="sub">2.7 above BM25</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Top-20 accuracy (%) on the test sets. “Above” and “below” compare with the better of the two retrievers.</p>
+
+  <p>On TREC, SQuAD and TriviaQA the sum beats both retrievers. On NQ and WQ it falls behind DPR, and on exactly these two BM25 was 19.3 and 18.2 points behind DPR. <b>The table shows that merging pays off when both retrievers are good in their own way, and that one much weaker retriever can drag the merged list down.</b></p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="inside">
+  <h3><span class="cn">8</span>The cross-encoder from inside: attention weights, the score and training</h3>
+
+  <h4 class="sub" id="weights">Attention weights come from a softmax</h4>
+
+  <p>In step 4, crowded gave weight 0.6 to averaged and 0.4 to itself. The model works these weights out itself. For every pair of tokens it first computes a score, and then a <button class="def" data-w="w-softmax">softmax</button> turns those scores into weights. In lesson 4, softmax meant taking e<sup>score</sup> for each score and dividing by the sum, so that the results add up to 1.</p>
+
+  <p>Suppose the pair crowded and averaged has score 0.9, and crowded with itself has score 0.5: <span class="mine">my numbers</span></p>
+  <ol class="plain">
+    <li>e<sup>0.9</sup> = 2.46 and e<sup>0.5</sup> = 1.65. Their sum is 4.11.</li>
+    <li>Weight of averaged: 2.46 ÷ 4.11 = 0.599, about 0.6.</li>
+    <li>Weight of crowded itself: 1.65 ÷ 4.11 = 0.401, about 0.4.</li>
+  </ol>
+  <p>This score is really a <button class="def" data-w="w-dot">dot product</button> of two vectors, but not of the tokens' own vectors. The model transforms each token's vector with numbers it has learned to make new vectors, and takes their dot product. Training adjusts exactly these numbers, so that a pair of tokens that matter to each other gets a large score.</p>
+
+  <h4 class="sub" id="cls">The input layout, and one vector to one score</h4>
+
+  <p>The 2019 paper by Nogueira and Cho turns BERT into a reranker in exactly this way, and the BERT-base 34.7 in Stanford's table comes from this method. The input is a single text: first a special token [CLS], then the query, then a special token [SEP], then the passage, and finally another [SEP]. [SEP] only separates the two parts. The query has at most 64 tokens, and the whole input at most 512. <span class="mine">from the paper</span></p>
+
+  <p>The [CLS] vector is also built by attention, and it takes a weighted average over the tokens of both the query and the passage. That is why, at the end, this single vector carries the whole pair. The Aggregator box in the slide's diagram does exactly this: it takes one vector out of all the output vectors, and in Humeau's paper it is the first one. <span class="mine">from the paper</span></p>
+
+  <p>Then a small layer turns this vector into one number. In Humeau's paper this layer is a dot product with a vector W that training learns. <span class="mine">from the paper</span> This is the Dim Reduction box in the diagram, because it shrinks the whole vector down to one number. Suppose the queue log pair's vector is [0.8, 0.2] and W = [2.0, −1.0]: <span class="mine">my numbers</span></p>
+  <ol class="plain">
+    <li>Queue log: 0.8 × 2.0 + 0.2 × (−1.0) = 1.6 − 0.2 = 1.4.</li>
+    <li>Forum post, whose vector is [0.2, 0.8]: 0.2 × 2.0 + 0.8 × (−1.0) = 0.4 − 0.8 = −0.4.</li>
+  </ol>
+
+  <h4 class="sub" id="prob">From score to probability, and the training loss</h4>
+
+  <p>Nogueira and Cho's reranker gives, instead of a raw score, the probability that the passage is relevant. <span class="mine">from the paper</span> A two-class layer like this gives two numbers, one for relevant and one for not relevant, and a softmax turns them into probabilities. Lesson 12 showed that adding the same number to all scores does not change a softmax. So only the difference between the two numbers matters, and the not-relevant number can be set to 0:</p>
+  <ol class="plain">
+    <li>The queue log's relevant number is 2.44. e<sup>2.44</sup> = 11.47, and e<sup>0</sup> = 1.</li>
+    <li>Probability = 11.47 ÷ (11.47 + 1) = 11.47 ÷ 12.47 = 0.92.</li>
+    <li>The forum post's number is −0.62: e<sup>−0.62</sup> = 0.54, and 0.54 ÷ 1.54 = 0.35.</li>
+  </ol>
+  <p>The office hours page's −0.36 gives 0.41 the same way. These are lesson 6's three scores: 0.92, 0.41 and 0.35. <span class="mine">2.44, −0.36 and −0.62 are my numbers</span></p>
+
+  <p>In training, each question comes with its relevant passages and with non-relevant passages from BM25's top 1,000. The loss is the −ln from lesson 4: −ln(probability) for a relevant passage, and −ln(1 − probability) for a non-relevant one, because its correct answer is not relevant. <span class="mine">from the paper</span></p>
+  <div class="formula">𝓛 = − <span class="sum"><span class="op">∑</span><span class="lim"><i>j</i> ∈ <i>J</i><sub>pos</sub></span></span> ln s<sub><i>j</i></sub> − <span class="sum"><span class="op">∑</span><span class="lim"><i>j</i> ∈ <i>J</i><sub>neg</sub></span></span> ln(1 − s<sub><i>j</i></sub>)</div>
+  <p>J<sub>pos</sub> is the list of relevant passages, J<sub>neg</sub> the list of non-relevant ones, and s<sub>j</sub> is passage j's probability. The paper writes log, meaning ln. On our two passages:</p>
+  <ol class="plain">
+    <li>The queue log is relevant, with s = 0.92: −ln 0.92 = 0.083.</li>
+    <li>The forum post is not relevant, with s = 0.35: −ln(1 − 0.35) = −ln 0.65 = 0.431.</li>
+    <li>The sum: 0.083 + 0.431 = 0.514.</li>
+  </ol>
+  <p>The forum post's loss is larger because the model still gives it 0.35, and training pushes its score further down. The paper trained BERT-large with batch size 128 for 100,000 steps, that is, on 12.8 million question-passage pairs, which took about 30 hours. <span class="mine">from the paper</span></p>
+
+  <p>Humeau's paper points out one more training difference: a cross-encoder cannot use the <button class="def" data-w="w-inbatch">in-batch negatives</button> of lesson 12. In a bi-encoder, each passage in the batch is encoded once, and every question can use it as a negative. In a cross-encoder, the model runs separately for every question-passage pair. So the paper uses separately supplied negatives, and keeps the batch small because of the extra memory. <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="cost">
+  <h3><span class="cn">9</span>The cost: running the model N times against once</h3>
+
+  <p>Counting makes the difference between a cross-encoder and a bi-encoder clear. Suppose the corpus has N passages and Q questions arrive per day:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Work</th><th>Bi-encoder</th><th>Cross-encoder</th></tr></thead>
+    <tbody>
+      <tr><td>Before any question</td><td>The passage encoder N times, only once</td><td>Nothing</td></tr>
+      <tr><td>On each question</td><td>The question encoder once, and N dot products</td><td>The whole model N times</td></tr>
+      <tr class="hi"><td>N = 60,000 and Q = 10,000</td><td>60,000 + 10,000 = 70,000 model runs</td><td>10,000 × 60,000 = 600 million model runs</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>How expensive one model run is shows up in the lower table of Stanford's ColBERT slide. Its last column gives <button class="def" data-w="w-flops">FLOPs</button> per query, the number of multiplications and additions. Reranking 1,000 passages with the BERT-base cross-encoder takes 97T FLOPs:</p>
+  <ol class="plain">
+    <li>T stands for trillion, 10<sup>12</sup>. Per passage that is 97T ÷ 1,000 = 97 billion FLOPs.</li>
+    <li>A dot product of two 768-number vectors takes 768 multiplications and 768 additions, which is 1,536 FLOPs.</li>
+    <li>97 billion ÷ 1,536 = about 63 million. <b>So one cross-encoder run costs about as much as 63 million dot products.</b></li>
+  </ol>
+
+  <p>Humeau's paper timed both methods on the same GPU, on a dialogue task: <span class="mine">from the paper</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Candidates</th><th class="numh">Bi-encoder</th><th class="numh">Cross-encoder</th></tr></thead>
+    <tbody>
+      <tr><td>1,000</td><td class="num">19 ms</td><td class="num">2,600 ms</td></tr>
+      <tr><td>100,000</td><td class="num">22 ms</td><td class="num">266,000 ms<span class="sub">estimated, not measured</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>At 1,000 candidates the cross-encoder is 2,600 ÷ 19 = about 137 times slower. At 100,000 the bi-encoder's time hardly changes, because the candidate vectors already exist and only the dot products grow. The cross-encoder's time grows in step with the number of candidates. This hardware differs from the hardware behind Stanford's slide, so do not compare these ms with the 10,700 ms.</p>
+
+  <p>A bigger model is more accurate but slower still. In Stanford's table, BERT-large reaches an MRR@10 of 36.5, 1.8 above BERT-base. But it takes 32,900 ms for 1,000 passages, 3.07 times as long. Within the 450 ms from step 5, BERT-large could rerank only 450 ÷ 32.9 = 13 passages, against 42 for BERT-base.</p>
+
+  <h4 class="sub" id="ceilingnum">The recall ceiling in real numbers</h4>
+
+  <p>In the upper table of the same slide, BM25's Recall@1000 on MS MARCO is 81.4. <button class="def" data-w="w-recallk">Recall@k</button> comes from lesson 13: the correct passages found in the top k divided by all correct passages, such as 0.5 when 1 of 2 is found. In MS MARCO each question has on average one correct passage. <span class="mine">from the paper</span> So 81.4 roughly means that for 81.4 out of 100 questions the correct passage is in BM25's top 1,000, and for 18.6 it is not.</p>
+
+  <p>BERT-base reranked exactly these 1,000 BM25 passages, so its Recall@1000 cannot go above 81.4 either. The table's ColBERT<sub>L2</sub> (re-rank) row shows this: it also reranks BM25's top 1,000, and its Recall@1000 is exactly 81.4. <b>Reranking took MRR@10 from 16.7 to 34.7, but BM25 fixed the recall ceiling at 81.4.</b></p>
+
+  <p>Hybrid search raises this ceiling, because the merged lists of two retrievers give the correct passage more chances to appear than one list does. Lesson 15 calls this design, a fast step first and an expensive step after it, a <button class="def" data-w="w-cascade">cascade</button>. There, ColBERT searches the whole corpus and lifts Recall@1000 to 96.8.</p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are five Stanford slides, unchanged, each followed by its key part enlarged. Under each slide are a few questions. Think of the answer first, then open it. If something stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p49.png"><img src="img/slide-p49.png" alt="Stanford slide: Hybrid Search and Reciprocal Rank Fusion" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p49-bullet.png"><img src="img/slide-p49-bullet.png" alt="The first point of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p49-rrf.png"><img src="img/slide-p49-rrf.png" alt="The RRF formula of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's hybrid search slide, and below it the first point and the formula, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the hybrid search slide</p>
+    <ol class="plain">
+      <li>
+        <p>The first point says BM25 misses paraphrase and dense retrieval misses rare literals. Which of E1, E2 and E3 are examples of each?</p>
+        <details><summary>Show the answer</summary>
+          <p>E2 is the paraphrase, and BM25 put it at rank 3. E1's E-4012 is the literal, and dense retrieval put E1 at rank 2, while BM25 put it at rank 1. (Step 1)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the formula, k = 60 is added to rank<sub>r</sub>(d). With k = 60, which passages beat a passage at rank 1 in one list?</p>
+        <details><summary>Show the answer</summary>
+          <p>Every passage at rank 61 or better in both lists, because a passage in both lists is ahead while r is smaller than k + 2. (Steps 3 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>The slide says no per-corpus tuning. Why does the DPR paper's BM25 + DPR not meet this?</p>
+        <details><summary>Show the answer</summary>
+          <p>It uses λ = 1.1, which the paper chose on the dev set. RRF needs no number chosen by looking at data, because ranks have the same scale in every corpus. (Steps 2 and 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p50.png"><img src="img/slide-p50.png" alt="Stanford slide: Cross-Encoders and Reranking" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p50-bi.png"><img src="img/slide-p50-bi.png" alt="The bi-encoder diagram of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p50-cross.png"><img src="img/slide-p50-cross.png" alt="The cross-encoder diagram of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's cross-encoder slide, and below it both diagrams, enlarged. In<sub>x</sub> are the query's tokens, and In<sub>y</sub> the passage's.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the cross-encoder slide</p>
+    <ol class="plain">
+      <li>
+        <p>In the bi-encoder, there is a ⊙ under Score. What does it do, and why is it missing from the cross-encoder?</p>
+        <details><summary>Show the answer</summary>
+          <p>⊙ is the dot product of Ctxt Emb and Cand Emb, the score from lesson 12. In the cross-encoder both texts are in one Encoder, so there are no two separate vectors. There, Dim Reduction turns one vector straight into a number. (Steps 4 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the cross-encoder, only Cand Emb sits above the Aggregator, and there is no Ctxt Emb. Why?</p>
+        <details><summary>Show the answer</summary>
+          <p>A cross-encoder never builds a separate vector for the query. The one vector the Aggregator gives belongs to the whole pair, and in Humeau's paper it is the first token's output, like [CLS]. (Step 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the bi-encoder you can build Cand Emb in advance and keep it in an index. Why can a cross-encoder not do this?</p>
+        <details><summary>Show the answer</summary>
+          <p>Because the Out<sub>y</sub> vectors are also built by looking at the query's tokens, just as crowded's vector differed with every passage. Change the query, and everything changes. (Step 4)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p47.png"><img src="img/slide-p47.png" alt="Stanford slide: DPR beats BM25 on 4 of 5 datasets" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p47-table.png"><img src="img/slide-p47-table.png" alt="The table from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's DPR results slide, and below it the table, enlarged. Lesson 12 read the BM25 and DPR rows. Here, read the BM25 + DPR rows.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the BM25 + DPR rows of the results slide</p>
+    <ol class="plain">
+      <li>
+        <p>At top-20, on which datasets is the Single BM25 + DPR row below DPR?</p>
+        <details><summary>Show the answer</summary>
+          <p>On NQ (76.6 against 78.4) and on WQ (71.0 against 73.2). On both, BM25 was far behind: 59.1 and 55.0. (Step 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>On SQuAD, BM25 + DPR is at 71.5. How far ahead of BM25 and DPR is that?</p>
+        <details><summary>Show the answer</summary>
+          <p>2.7 ahead of BM25's 68.8, and 8.3 ahead of DPR's 63.2. On SQuAD, BM25 alone was ahead of DPR, yet the merge got ahead of both. (Steps 1 and 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Are the BM25 + DPR rows built with RRF?</p>
+        <details><summary>Show the answer</summary>
+          <p>No. The DPR paper added scores with BM25(q, p) + 1.1 · sim(q, p) over the union of the two top-2,000 lists. <span class="mine">from the paper</span> (Step 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p53.png"><img src="img/slide-p53.png" alt="Stanford slide: ColBERT vs. Other Approaches, two tables" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p53-rerank.png"><img src="img/slide-p53-rerank.png" alt="The lower, reranking table of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p53-recall.png"><img src="img/slide-p53-recall.png" alt="The upper table of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's ColBERT slide. First the lower, reranking table enlarged, then the upper table with recall. The ColBERT rows come in lesson 15. Dev and Eval are two separate question sets of MS MARCO.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the reranking rows of the ColBERT slide</p>
+    <ol class="plain">
+      <li>
+        <p>In the lower table, BERT<sub>base</sub> [25] has an MRR@10 of 34.7. What is [25], and which list does this reranker rerank?</p>
+        <details><summary>Show the answer</summary>
+          <p>[25] is the paper by Nogueira and Cho. Its reranker reranks BM25's top 1,000, and BM25 alone is at 16.7. <span class="mine">from the paper</span> (Steps 5 and 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Under FLOPs/query, BERT<sub>base</sub> has 97T (13,900×). How many FLOPs is that per passage, and what is the 13,900× compared with?</p>
+        <details><summary>Show the answer</summary>
+          <p>Per passage, 97T ÷ 1,000 = 97 billion. The 13,900× compares with ColBERT's 7B in the last row: 97T ÷ 7B = about 13,900. (Step 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>In the upper table, why is the Recall@1000 of ColBERT<sub>L2</sub> (re-rank) exactly BM25 (official)'s 81.4?</p>
+        <details><summary>Show the answer</summary>
+          <p>Because the re-rank model sorts BM25's own top 1,000 again. Reranking changes the order, not the list, so the recall ceiling stays BM25's. (Steps 5 and 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p54.png"><img src="img/slide-p54.png" alt="Stanford slide: fast and slow retrievers compared" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p54-table.png"><img src="img/slide-p54-table.png" alt="The table from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's comparison slide, and below it the table, enlarged. Lesson 12 read the BM25 and DPR rows. Here, read the cross-encoder row.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the cross-encoder row of the comparison slide</p>
+    <ol class="plain">
+      <li>
+        <p>Why does the cross-encoder row say Nothing under Precomputed offline?</p>
+        <details><summary>Show the answer</summary>
+          <p>Because each of its vectors depends on the query, nothing about a passage can be built in advance. (Step 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>Wins on says Accuracy on a shortlist, and Breaks on says Cannot scan a corpus. What do these mean in numbers for 60,000 passages?</p>
+        <details><summary>Show the answer</summary>
+          <p>The whole corpus would take 60,000 × 10.7 ms = 642 seconds per query, and a top-100 shortlist takes 1,070 ms. On a shortlist, reranking took MRR@10 from 16.7 to 34.7. (Steps 4 and 5)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>BM25 misses paraphrases, and a dense retriever misses rare literals. Hybrid search merges their lists, but the DPR paper's sum of scores fell behind DPR on NQ and WQ.</li>
+    <li>RRF adds 1 ÷ (k + rank) from each list. With k = 60, a passage at rank 61 or better in both lists beats rank 1 in a single list, because the condition is r &lt; k + 2. The result of min-max depends on the list's min and max.</li>
+    <li>In a cross-encoder, attention runs between the query and the passage, so nothing can be built in advance, and one pair costs about as much as 63 million dot products. Reranking took MRR@10 from 16.7 to 34.7, but Recall@1000 stayed at BM25's 81.4.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-paraphrase">Paraphrase</dt><dd>The same statement in other words. For example, upload failed and upload keeps failing. BM25 misses it, because it counts shared words.</dd>
+    <dt id="w-literal">Literal</dt><dd>Text that has to match exactly, such as the error code E-4012 or the order ID A77-310. A dense retriever can miss it, and BM25 catches it as a rare word.</dd>
+    <dt id="w-hybrid">Hybrid search</dt><dd>Running both a word-based and a dense retriever and merging their lists. For example, making one list from BM25's E1, E3, E2 and dense retrieval's E2, E1, E3.</dd>
+    <dt id="w-rrf">Reciprocal rank fusion (RRF)</dt><dd>1 ÷ (k + rank) from a passage's rank in each list, summed over all lists, with k = 60. For example, E1: 1 ÷ 61 + 1 ÷ 62 = 0.03252.</dd>
+    <dt id="w-attention">Attention</dt><dd>Each token takes a weighted average of the other tokens' vectors as its new vector, and the weights add up to 1. For example, if crowded [0.5, 0.5] gives weight 0.6 to averaged [1.0, 0.0], it becomes [0.8, 0.2].</dd>
+    <dt id="w-crossenc">Cross-encoder</dt><dd>A reranker that joins the query and the passage, feeds them to one model, and gets a direct score for the pair. It runs in full for every passage, for example 10.7 ms per passage with BERT-base.</dd>
+    <dt id="w-reranking">Reranking</dt><dd>Scoring and sorting a fast retriever's shortlist again with an accurate model. For example, on MS MARCO, MRR@10 goes from 16.7 for BM25 alone to 34.7 after reranking with BERT-base.</dd>
+    <dt id="w-shortlist">Shortlist</dt><dd>The retriever's top few passages, on which the reranker runs. For example, the top 100 of 60,000 passages, which the cross-encoder handles in 1,070 ms.</dd>
+    <dt id="w-minmax">Min-max normalisation</dt><dd>Mapping each list's scores onto 0 to 1 with (x − min) ÷ (max − min). For example, BM25's 7.2, 3.1 and 1.0 become 1, 0.339 and 0. The result depends on the list's min and max.</dd>
+    <dt id="w-cls">[CLS] and [SEP]</dt><dd>Special tokens in BERT's input. [CLS] comes first, and in a cross-encoder its last vector carries the whole pair. [SEP] separates the query from the passage, as in [CLS] query [SEP] passage [SEP].</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="13-metrics-dense-en.html">Previous: Lesson 13</a>
+    <a href="15-colbert-dense-en.html">Next: Lesson 15, ColBERT</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Papers: Cormack, Clarke and Büttcher, 2009, “Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods”. Karpukhin et al., 2020, “Dense Passage Retrieval for Open-Domain Question Answering”. Humeau et al., 2020, “Poly-encoders”. Nogueira and Cho, 2019, “Passage Re-ranking with BERT”. Khattab and Zaharia, 2020, “ColBERT”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var kIn = document.getElementById("fw-k"), rIn = document.getElementById("fw-r");
+  var btns = document.querySelectorAll("#fw .btns button");
+  function f(x) { return x.toFixed(5); }
+  function render() {
+    var k = Number(kIn.value), r = Number(rIn.value);
+    document.getElementById("fw-ko").textContent = k;
+    document.getElementById("fw-ro").textContent = r;
+    var a = 1 / (k + 1), b = 2 / (k + r);
+    document.getElementById("fw-body").innerHTML =
+      '<tr class="' + (a > b ? "hi" : "") + '"><td><b>A</b>, rank 1 in one list</td><td>1 ÷ (' + k + ' + 1)</td><td class="num">' + f(a) + "</td></tr>" +
+      '<tr class="' + (b > a ? "hi" : "") + '"><td><b>B</b>, rank ' + r + " in both lists</td><td>2 × 1 ÷ (" + k + " + " + r + ')</td><td class="num">' + f(b) + "</td></tr>";
+    var win = Math.abs(a - b) < 1e-12 ? "A and B are tied" : (b > a ? "B is ahead" : "A is ahead");
+    document.getElementById("fw-out").innerHTML = "<b>" + win + ".</b> With k = " + k + ", B stays ahead only while r is at most " + (k + 1) + ".";
+    var key = k + "," + r;
+    btns.forEach(function (bt) { bt.setAttribute("aria-pressed", bt.dataset.s === key ? "true" : "false"); });
+  }
+  kIn.addEventListener("input", render);
+  rIn.addEventListener("input", render);
+  btns.forEach(function (bt) { bt.addEventListener("click", function () { var v = bt.dataset.s.split(","); kIn.value = v[0]; rIn.value = v[1]; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

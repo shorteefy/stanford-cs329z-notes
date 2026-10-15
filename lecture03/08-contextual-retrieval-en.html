@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="After chunking, the ACME chunk has lost both the company name and the quarter, so the retriever cannot tell it apart from 49 near-identical chunks. The chunk needs its lost context back.">
+<title>Lesson 8: Lost context</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 8 / 18 · <b>Easy</b> · <a href="08-contextual-retrieval-dense-en.html">Dense</a> · <a href="08-contextual-retrieval.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 8 · Easy version</p>
+  <h1>Giving a chunk back its lost context</h1>
+  <p class="lede"><b>The moment you cut a document into chunks, each chunk loses the text around it, and that text often said what the chunk was about.</b> This lesson teaches two ways to give that context back. In contextual retrieval, an LLM writes a short context for each chunk. In late chunking, the encoder reads the whole document first.</p>
+  <p class="lede">In <a href="07-chunking-en.html#size">lesson 7</a>, the queue log chunk <q>office hour averaged 3.</q> did not say which day it was about. This lesson looks at the same problem in the filings of 50 companies.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 4 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#loss">Context loss</a><span class="can">Count your way to why the ACME chunk makes the top 20 only 40% of the time.</span></li>
+      <li><a href="#contextual">Contextual retrieval</a><span class="can">Explain how the score goes from 1 to 5, and what it means that failures drop from 5.7% to 2.9%.</span></li>
+      <li><a href="#late">Late chunking</a><span class="can">Compute naive and late chunk vectors by hand, and show the difference with cosine.</span></li>
+      <li><a href="#compare">Comparing the two methods</a><span class="can">Pick the right method for your index and budget.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="02-retrieval-en.html#retriever">Lesson 2</a> (word overlap), <a href="03-vectors-en.html#cosine">Lesson 3</a> (embedding, cosine) and <a href="07-chunking-en.html#kinds">Lesson 7</a> (chunk, contextual embedding, mean pooling). If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="loss">
+  <h3><span class="cn">1</span>Context loss: after cutting, a chunk no longer says what it is about</h3>
+
+  <p><b>Context loss means that after cutting, a chunk no longer contains the words that say what it is about.</b> A <button class="def" data-w="w-chunk">chunk</button> is the piece of a document that a retriever returns. A name often appears once, at the top of a document, so the chunks further down are left without it.</p>
+
+  <p>Take the example from the slides. The corpus holds the Q2 2023 quarterly filings of 50 companies, one per company. <span class="mine">50 companies is my example</span> Almost every filing contains this line: <q>The company’s revenue grew by X% over the previous quarter.</q> The query is <q>What was the revenue growth for ACME Corp in Q2 2023?</q> ACME’s filing names the company and the quarter at the very top, so the chunk with the answer contains neither ACME nor Q2 2023.</p>
+
+  <p>Now count with lesson 2’s <button class="def" data-w="w-overlap">word overlap</button>: how many of the query’s words also appear in the chunk. In lesson 2 the queue log scored 2, because it contained office and hour. After removing <button class="def" data-w="w-stopwords">stopwords</button> such as what, was, the, for and in, the query keeps 6 words: revenue, growth, ACME, Corp, Q2 and 2023. The ACME chunk contains only revenue, because it says grew, not growth. So it scores 1, and so do the other 49 chunks. <span class="mine">my count</span></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>All 50 chunks score 1, and chunks with equal scores come out in random order. The retriever returns the top 20. How often does the ACME chunk make the top 20?</p>
+    <details><summary>Show the answer</summary>
+      <p>With a tie, the ACME chunk is equally likely to land in any of the 50 places. 20 of those places are in the top 20, so the chance is 20 ÷ 50 = 0.4, or 40%. The other 60% of the time the right chunk stays out of the top 20.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>So the answer is in the corpus, yet the retriever misses it 60% of the time.</b> An embedding does not save it either, because the embedding model reads only the chunk’s text. That text never mentions ACME, so the vector cannot carry anything about ACME.</p>
+
+  <p>Lesson 7’s <button class="def" data-w="w-enriched">context-enriched chunking</button> keeps metadata with each chunk, but nobody will write metadata by hand for 60,000 chunks.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="contextual">
+  <h3><span class="cn">2</span>Contextual retrieval: an LLM writes a context in front of each chunk</h3>
+
+  <p><b>Contextual retrieval puts a short context in front of each chunk, written by an LLM that has read the whole document.</b> Anthropic published the method in 2024. It runs four steps at <button class="def" data-w="w-indexing">indexing time</button>, before any query arrives:</p>
+  <ol class="plain">
+    <li>For each chunk, give the LLM the whole document and that chunk.</li>
+    <li>The LLM writes a short context for the chunk, 50 to 100 tokens long.</li>
+    <li>Put that context in front of the chunk. The new text is called a contextualized chunk.</li>
+    <li>Embed the contextualized chunk, and also add it to a word-based index, which comes in <a href="11-bm25-en.html#bm25">lesson 11</a>.</li>
+  </ol>
+
+  <p>For the ACME chunk, the LLM writes this context. The coloured part is the LLM’s, and the rest is the original chunk:</p>
+  <div class="sentence"><span class="new">From ACME Corp’s Q2 2023 SEC filing; Q1 2023 revenue was $314M.</span> The company’s revenue grew by 3% over the previous quarter.</div>
+
+  <figure class="slide">
+    <a href="img/slide-p26.png"><img src="img/slide-p26.png" alt="Stanford slide: the same chunk without and with context" loading="lazy"></a>
+    <figcaption>Stanford’s slide: the query at the top, the bare chunk on the left, and the same chunk with the yellow context on the right. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The query’s 6 words are revenue, growth, ACME, Corp, Q2 and 2023. What is the contextualized chunk’s word overlap score now? What will the other companies’ contextualized chunks score?</p>
+    <details><summary>Show the answer</summary>
+      <p>The ACME chunk scores 5: revenue, ACME, Corp, Q2 and 2023. Growth is still missing. The other companies’ contexts carry their own names, so they score at most 3: revenue, Q2 and 2023. <span class="mine">my count</span></p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>With the context added, the ACME chunk breaks out of the 49-way tie and goes straight to the top.</b> The embedding model now also gets a text that contains ACME and Q2 2023.</p>
+
+  <h4 class="sub" id="failures">Anthropic’s results: failed retrievals@20</h4>
+
+  <p>Anthropic measured the method on real data. Assume each query has one right chunk. Then <b class="term">failed retrievals@20</b> is the percentage of queries whose right chunk did not make the top 20. The smaller this number, the better.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Method</th><th class="numh">Failed retrievals@20</th><th class="numh">Drop from 5.7%</th></tr></thead>
+    <tbody>
+      <tr><td>Embedding, plain chunks</td><td class="num">5.7%</td><td class="num">baseline</td></tr>
+      <tr><td>Embedding + word-based index, plain chunks</td><td class="num">5.0%</td><td class="num">12%</td></tr>
+      <tr><td>Embedding, contextualized chunks</td><td class="num">3.7%</td><td class="num">35%</td></tr>
+      <tr class="hi"><td>Embedding + word-based index, contextualized chunks</td><td class="num">2.9%</td><td class="num">49%</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The drop in the third row is easiest to see on 1,000 queries:</p>
+  <ol class="plain">
+    <li>With plain chunks, 5.7% × 1,000 = 57 queries fail.</li>
+    <li>With contextualized chunks, 3.7% × 1,000 = 37 queries fail.</li>
+    <li>57 − 37 = 20 queries are saved, and 20 ÷ 57 = 0.35. So failures fell by 35%.</li>
+  </ol>
+  <p>The failure rate fell by only 2 points, from 5.7 to 3.7, yet failures fell by 35%. The drop in points is 5.7 − 3.7, and the percentage drop divides that by the starting value, 5.7. <b>Add the word-based index as well, and failures fall to 2.9%, which is (5.7 − 2.9) ÷ 5.7 = 0.49, about half.</b> How to merge the two indexes’ lists comes in <a href="14-hybrid-rerank-en.html#hybrid">lesson 14</a>.</p>
+
+  <p>The cost comes at indexing time: one LLM call per chunk, and the whole document in every call. With 60,000 chunks, that is 60,000 calls. There is no extra cost at query time, because the context is already in the index. There is also a risk: if the LLM writes a wrong context, that mistake stays in the index.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="late">
+  <h3><span class="cn">3</span>Late chunking: encode the whole document first, then average each chunk</h3>
+
+  <p>LLM calls are expensive, so the next question is whether the encoder alone can supply the context. Lesson 7’s <button class="def" data-w="w-contextual">contextual embedding</button> builds each token’s vector from the words around it. There, late had the vector [0.1, 0.9] in one sentence and [0.9, 0.1] in the other. But the encoder only sees the text it is given.</p>
+
+  <p>The usual method gives the encoder only the chunk: cut first, then encode each chunk on its own. This is called <b class="term">naive chunking</b>. The chunk’s tokens know nothing about the rest of the document.</p>
+
+  <p><b>Late chunking reverses the order: the encoder reads the whole document first, and the cutting happens afterwards.</b></p>
+  <ol class="plain">
+    <li>Feed the whole document into a <b class="term">long-context encoder</b>, an encoder that can read a very long text in one go, such as 8,192 tokens, about 10 pages. <span class="mine">from the paper</span></li>
+    <li>The encoder returns a vector for every token, and every vector is built with the whole document in view.</li>
+    <li>Average the token vectors inside each chunk. That average is the chunk’s vector.</li>
+  </ol>
+  <p>This average is lesson 7’s <button class="def" data-w="w-pooling">mean pooling</button>, for example [0.9, 0.1], [0.7, 0.3] and [0.8, 0.2] give [0.8, 0.2]. The cutting happens after encoding, that is, late, hence the name.</p>
+
+  <p>Take a small document: <q>CS 329Z project milestone policy. It is due Week 6.</q> The second chunk is <q>It is due Week 6</q>. In each vector, the first number says how much the text is about the project milestone, and the second how much it is about homework. <span class="mine">my numbers</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th class="mono">Naive: chunk alone</th><th class="mono">Late: whole document</th></tr></thead>
+    <tbody>
+      <tr><td>It</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>is</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.8, 0.2]</td></tr>
+      <tr><td>due</td><td class="mono">[0.6, 0.4]</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>Week</td><td class="mono">[0.4, 0.6]</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>6</td><td class="mono">[0.5, 0.5]</td><td class="mono">[1.0, 0.0]</td></tr>
+      <tr class="total"><td>Mean pooling</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.9, 0.1]</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The last row works out like this:</p>
+  <ol class="plain">
+    <li>Naive, first number: (0.5 + 0.5 + 0.6 + 0.4 + 0.5) ÷ 5 = 2.5 ÷ 5 = 0.5. The second number is also 0.5.</li>
+    <li>Late, first number: (0.9 + 0.8 + 0.9 + 0.9 + 1.0) ÷ 5 = 4.5 ÷ 5 = 0.9. The second: (0.1 + 0.2 + 0.1 + 0.1 + 0.0) ÷ 5 = 0.5 ÷ 5 = 0.1.</li>
+  </ol>
+  <p>In the naive version, <q>It</q> cannot tell whether the text is about the milestone or about homework, so the vector sits in the middle. In the late version, the encoder also read the first sentence, so every token leans towards the milestone.</p>
+
+  <p>Take the query <q>When is the project milestone due?</q> with the vector [0.95, 0.05]. Lesson 3’s <button class="def" data-w="w-cosine">cosine similarity</button> divides the dot product by the product of the two lengths, as in 0.74 ÷ (0.82 × 0.91) = 0.99. The cosine with the naive chunk takes three steps:</p>
+  <ol class="plain">
+    <li>Dot product: 0.95 × 0.5 + 0.05 × 0.5 = 0.475 + 0.025 = 0.5.</li>
+    <li>Lengths: the query’s is √(0.95² + 0.05²) = √0.905 = 0.951, and the chunk’s is √(0.5² + 0.5²) = √0.5 = 0.707.</li>
+    <li>Divide: 0.5 ÷ (0.951 × 0.707) = 0.5 ÷ 0.672 = 0.74.</li>
+  </ol>
+  <p>For the late chunk [0.9, 0.1], the same arithmetic gives 0.86 ÷ (0.951 × 0.906) = 1.00. <b>The late chunk points almost exactly the way the query does, while the naive chunk stays at 0.74.</b></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Now take a homework query with the vector [0.05, 0.95]. Work out its cosine with the naive chunk [0.5, 0.5] and with the late chunk [0.9, 0.1]. What weakness of the naive chunk shows up?</p>
+    <details><summary>Show the answer</summary>
+      <p>Naive: (0.025 + 0.475) ÷ (0.951 × 0.707) = <b>0.74</b>. Late: (0.045 + 0.095) ÷ (0.951 × 0.906) = <b>0.16</b>.</p>
+      <p>The naive chunk gives 0.74 for both queries, so the milestone chunk ranks just as high for the homework question. <span class="mine">my query</span></p>
+    </details>
+  </div>
+
+  <figure class="slide" style="margin-top:28px">
+    <a href="img/slide-p30.png"><img src="img/slide-p30.png" alt="Stanford slide: naive chunking and late chunking" loading="lazy"></a>
+    <figcaption>Stanford’s slide: naive chunking in the middle, and late chunking on the right.</figcaption>
+  </figure>
+
+  <p>In the paper, with chunks of 256 tokens, late chunking raised the average score from 52.2 to 54.0. This is a ranking score from 0 to 100, which <a href="13-metrics-en.html#ndcg">lesson 13</a> opens up. The gain is largest for the smallest chunks, because a small chunk loses the most context.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="compare">
+  <h3><span class="cn">4</span>Comparing the two methods: context in the text or in the vector</h3>
+
+  <p><b>The two methods keep the context in different places: contextual retrieval writes it into the chunk’s text, and late chunking keeps it only in the vector.</b> The other differences follow from this:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>Contextual retrieval</th><th>Late chunking</th></tr></thead>
+    <tbody>
+      <tr><td>Who supplies the context</td><td>An LLM, by writing text</td><td>The encoder, inside the vectors</td></tr>
+      <tr><td>Indexing cost</td><td>One LLM call per chunk</td><td>One encoder run per document</td></tr>
+      <tr><td>Does the chunk get longer?</td><td>Yes, by 50–100 tokens</td><td>No</td></tr>
+      <tr><td>Helps a word-based index</td><td>Yes, the new words are in the text</td><td>No</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The ACME query shows the difference directly. After late chunking, the chunk’s text still does not contain ACME, so its word overlap score stays at 1. <b>So only contextual retrieval helps a word-based index, while both help embeddings.</b> Late chunking also has a limit: the whole document must fit within the encoder’s length limit, or the context gets cut again.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The corpus is very large, the budget for LLM calls is small, chunks are 64 tokens, and the retriever uses embeddings only. Which method do you pick? What if the retriever is a word-based index only?</p>
+    <details><summary>Show the answer</summary>
+      <p><b>Late chunking.</b> It needs no LLM call, and its gain is largest on small chunks. On a word-based index alone, late chunking does nothing, because its context never reaches the text. Then pick contextual retrieval.</p>
+    </details>
+  </div>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 5 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 5: Anthropic’s full pipeline, the prompt, the metric, the cost, and 1.9% with reranking.</li>
+      <li>Step 6: late chunking from the inside: i.i.d. and conditional embeddings, attention, and the paper’s pooling formula.</li>
+      <li>Step 7: the paper’s results, the chunk-size charts, and long late chunking.</li>
+      <li>Step 8: both methods on the same ACME example, with the paper’s cosine numbers.</li>
+      <li>Step 9: all six Stanford slides of this part, which you read yourself.</li>
+    </ul>
+    <p><a href="08-contextual-retrieval-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>Cutting makes a chunk lose its context. The ACME chunk ended up tied with 49 other chunks, and it makes the top 20 only 40% of the time.</li>
+    <li>Contextual retrieval has an LLM write a context in front of each chunk. Failed retrievals@20 fell from 5.7% to 3.7%, and to 2.9% with a word-based index.</li>
+    <li>Late chunking encodes the whole document first, then averages each chunk’s token vectors. It needs no LLM call, but the context lives only in the vector.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-contextloss">Context loss</dt><dd>After cutting, a chunk can no longer say which document or topic it belongs to. For example, <q>The company’s revenue grew by 3%</q> does not name the company.</dd>
+    <dt id="w-ctxretrieval">Contextual retrieval</dt><dd>Indexing each chunk with a 50–100 token context, written by an LLM, placed in front of it. For example, adding <q>From ACME Corp’s Q2 2023 SEC filing</q>.</dd>
+    <dt id="w-failed20">Failed retrievals@20</dt><dd>When each query has one right chunk, the percentage of queries whose right chunk is not in the top 20. Smaller is better. For example, 29 failures in 1,000 queries is 2.9%.</dd>
+    <dt id="w-naivechunk">Naive chunking</dt><dd>Cutting first, then encoding each chunk on its own. Then the vector of <q>It is due Week 6</q> stays at [0.5, 0.5].</dd>
+    <dt id="w-latechunk">Late chunking</dt><dd>Encoding the whole document first, then mean pooling each chunk’s token vectors. Then the vector of <q>It is due Week 6</q> becomes [0.9, 0.1].</dd>
+    <dt id="w-longctx">Long-context encoder</dt><dd>An encoder that can read a very long text in one go. For example, 8,192 tokens, about 10 pages.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="07-chunking-en.html">Previous: Lesson 7</a>
+    <a href="09-raptor-graphrag-en.html">Next: Lesson 9, Questions about a whole document</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Contextual retrieval: Anthropic, “Introducing Contextual Retrieval”, 2024. Late chunking: Günther et al., 2024, “Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding Models”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+</body>
+</html>

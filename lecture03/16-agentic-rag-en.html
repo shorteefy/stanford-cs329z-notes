@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="BM25 ranked the old forum post above the queue log, and the pipeline sent it to the prompt without checking it. Retrieval has to become a decision at every step, and someone has to check what came back.">
+<title>Lesson 16: Agentic RAG</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 16 / 18 · <b>Easy</b> · <a href="16-agentic-rag-dense-en.html">Dense</a> · <a href="16-agentic-rag.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 16 · Easy version</p>
+  <h1>Agentic RAG: retrieval as a decision</h1>
+  <p class="lede"><b>In agentic RAG, retrieval is no longer a fixed step in a pipeline. At every step an LLM decides whether to retrieve, what to retrieve, and whether what came back is good enough.</b> An LLM working this way is called an agent, and this lesson shows two ways of making these decisions: Self-RAG and CRAG.</p>
+  <p class="lede">The need for it showed up in <a href="11-bm25-en.html#bm25">lesson 11</a>. For the question <q>which office hour is least crowded</q>, BM25 gave the old forum post 2.749 and the queue log 2.473. At K = 1 only the forum post reaches the prompt, and the LLM writes <q>midweek afternoons [P4]</q>, where [P4] is that post's ID. This is the wrong answer from lesson 1, now with a citation. The opposite mistake happens too: even for <q>what is 17 × 3?</q> the pipeline searches 60,000 passages.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 5 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#agent">Agents: action, observation and the loop</a><span class="can">Follow an agent loop step by step, and count its scores by hand.</span></li>
+      <li><a href="#decisions">Three decisions, and where a pipeline falls short</a><span class="can">Explain each decision with one question, and read the agentic RAG slide.</span></li>
+      <li><a href="#selfrag">Self-RAG: decisions as tokens</a><span class="can">Rank segments from their reflection tokens, and read the Self-RAG slide.</span></li>
+      <li><a href="#crag">CRAG: a separate evaluator and two thresholds</a><span class="can">Name CRAG's action from a confidence, and read the CRAG slide.</span></li>
+      <li><a href="#compare">Self-RAG and CRAG side by side, and their limits</a><span class="can">Say who makes which decision, and why lesson 17 is needed.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="01-how-llms-answer-en.html#next-token">Lesson 1</a> (next-token prediction, vocabulary), <a href="06-rag-pipeline-en.html#pre">Lesson 6</a> (pipeline, query rewriting, ITER-RETGEN) and <a href="14-hybrid-rerank-en.html#rerank">Lesson 14</a> (reranker). If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="agent">
+  <h3><span class="cn">1</span>Agents: action, observation and the loop</h3>
+
+  <p><b>An agent is an LLM that works in a loop. It chooses the next thing to do, that thing gets done, and then it reads the result and chooses again.</b> What the agent chooses to do is called an <b class="term">action</b>, such as searching or writing the answer. A program actually carries out the action, a search engine for example, and that program is called a <b class="term">tool</b>. What the tool returns, and what the agent reads before its next step, is called the <b class="term">observation</b>.</p>
+
+  <p>The need for a loop showed up in <a href="06-rag-pipeline-en.html#modular">lesson 6</a>. There, <button class="def" data-w="w-iterretgen">ITER-RETGEN</button> searched twice, and a person had fixed that count in advance. But on the Jed Hoyer <button class="def" data-w="w-multihop">multi-hop</button> question the model made three searches, and 17 × 3 needs none. No fixed count suits both, so the count should come from whoever is reading the result of each search.</p>
+
+  <p>Here is a small loop. The user asks in shorthand, <q>OH timings?</q> The retriever is the word overlap from lesson 6, which counts how many query words also appear in a passage. <span class="mine">my example loop</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Step</th><th>The agent's action</th><th>Observation</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Search: <q>OH timings</q></td><td>Every passage scores 0</td></tr>
+      <tr><td>2</td><td>Search: <q>CS 329Z office hours schedule</q></td><td>Office hours page 2, queue log 1</td></tr>
+      <tr class="hi"><td>3</td><td>Answer: <q>Tuesday 4pm, Room 104, or Thursday 9am, Zoom [P2]</q></td><td>Loop ends</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The first query's words, oh and timings, appear in no passage. In the second query, office and hours both appear in the office hours page, so it scores 2. The queue log has office, but it says hour instead of hours, so it scores 1. The [P2] in the answer is the office hours page's ID.</p>
+
+  <p>The second step came from the first step's observation: nothing came back, so the agent rewrote the query. This is the <button class="def" data-w="w-rewriting">query rewriting</button> from lesson 6. Lesson 6's Advanced RAG pipeline rewrites every query, which costs an extra LLM call on every query. Each step of the agent also costs an LLM call, but here the rewriting step happened only because the search came back empty.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Suppose the user had typed <q>office hour timings</q> in the first place. What would each passage score, and would the agent need to rewrite the query?</p>
+    <details><summary>Show the answer</summary>
+      <p>The queue log has both office and hour, so it scores 2. The office hours page has only office, so it scores 1. The search did not come back empty, so there is no reason to change the query. But the queue log has the times and not the place, so the agent now has to decide whether what it found is enough. That is the third decision in the next step.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="decisions">
+  <h3><span class="cn">2</span>Three decisions, and where a pipeline falls short</h3>
+
+  <p><b>At every step, an agent that retrieves faces three decisions.</b> First, retrieve or answer directly. Second, which query to send. Third, whether what came back is good enough. All three appeared in the loop of step 1: the agent chose to search, then wrote a new query, then judged the result good enough and answered.</p>
+
+  <p>A pipeline makes none of these decisions. It runs the same steps on every question. Below is one question per decision where the pipeline falls short:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Decision</th><th>Question</th><th>What the pipeline does</th><th>What an agent can do</th></tr></thead>
+    <tbody>
+      <tr><td>1. Retrieve?</td><td><q>What is 17 × 3?</q></td><td>Searches 60,000 passages<span class="sub">and puts about 2,500 tokens into the prompt</span></td><td>0 searches, answers 51 directly</td></tr>
+      <tr><td>2. Which query?</td><td><q>OH timings?</q></td><td>Sends that query as is, gets 0 passages</td><td>Changes the query when the search comes back empty</td></tr>
+      <tr class="hi"><td>3. Good enough?</td><td>Least crowded, K = 1</td><td>Sends the forum post alone</td><td>The post is a 2024 opinion, so it searches again</td></tr>
+    </tbody>
+  </table></div>
+
+  <p><b>When retrieval becomes an action of the agent, and these three decisions are made at every step, the result is called <span class="term">agentic RAG</span>.</b> Stanford's slide says exactly this:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p56.png"><img src="img/slide-p56.png" alt="Stanford slide: agentic RAG, retrieval inside the loop, and three decisions" loading="lazy"></a>
+    <figcaption>Stanford's slide: retrieval inside the loop. The top line says that nothing so far decides whether to retrieve, what to ask, or when to stop. Below are the same three decisions. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>The <q>when to stop</q> at the top and the third decision at the bottom are the same thing. If the result is good enough, the agent stops and answers, and if it is not, the agent searches again.</p>
+
+  <p>The question now is who makes these decisions. This lesson gives two answers. In Self-RAG the model that writes the answer makes them itself, and in CRAG a separate, small model checks the result.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="selfrag">
+  <h3><span class="cn">3</span>Self-RAG: decisions as tokens</h3>
+
+  <p>The most direct option is to let the LLM that writes the answer make the decisions, because it is reading both the question and the passages. The difficulty is that an LLM only writes the <button class="def" data-w="w-ntp">next token</button>. It does not announce decisions separately.</p>
+
+  <p><b>Self-RAG solves this by turning the decisions into tokens as well.</b> It adds some special tokens to the model's <button class="def" data-w="w-vocabulary">vocabulary</button>, called <b class="term">reflection tokens</b>. The model gets special training, and then it writes these tokens just like any other text. Self-RAG is a 2024 method by Asai and colleagues, and its main tokens are these:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th>Meaning</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td>Search now</td><td>Decision 1</td></tr>
+      <tr><td>Relevant / Irrelevant</td><td>Whether the retrieved passage is useful for the question</td><td>Decision 3</td></tr>
+      <tr><td>Supported / Partially</td><td>Whether the passage fully or only partly backs up what the model wrote</td><td>A second check for decision 3</td></tr>
+    </tbody>
+  </table></div>
+  <p>The paper has a few more tokens, such as No support. A fourth kind gives the whole answer a score from 1 to 5, and it is covered in the dense version.</p>
+
+  <p>Now take our question: <q>Which office hour this week is least crowded?</q> Suppose the model wrote Retrieve, and the retriever brought the queue log, the old forum post and the Homework 1 announcement. The model writes the next segment separately with each passage, and adds reflection tokens to each segment. <span class="mine">my example and tokens</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>Reflection tokens</th><th>Segment the model wrote</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td>Relevant, Supported</td><td><q>Thursday 9am, about 3 waiting.</q></td></tr>
+      <tr><td>Old forum post</td><td>Relevant, Partially</td><td><q>Wednesday afternoon is quietest.</q></td></tr>
+      <tr class="hi"><td>Homework 1 announcement</td><td>?</td><td><q>Homework 1 will be released on Oct 5.</q></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The forum post segment is Partially, because the post says midweek, not Wednesday, and it also says usually. So the Wednesday claim is only half in the passage. The queue log claim is written out in full in the queue log, so that segment is Supported.</p>
+
+  <div class="recall">
+    <p class="rl">Work out the third row</p>
+    <p>Which token goes on the Homework segment? What is the order of the three segments, and which one joins the answer?</p>
+    <details><summary>Show the answer</summary>
+      <p><b>Irrelevant</b>. The Homework date is true, and the announcement even backs it up, but the question is about crowding at office hours. The order is the queue log, then the forum post, then Homework. The queue log segment is Relevant and Supported, so that is the one that joins the answer: Thursday 9am.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>So Self-RAG checks each segment on two counts: whether it is useful for the question, and whether the passage backs it up.</b> Stanford's slide shows the paper's own example, and you can now read it:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p57.png"><img src="img/slide-p57.png" alt="Stanford slide: the three steps of Self-RAG on the US states example" loading="lazy"></a>
+    <figcaption>Stanford's slide: the three steps of Self-RAG. Green boxes are the good tokens, the orange box is Partially, and the red box is Irrelevant.</figcaption>
+  </figure>
+
+  <p>In step 1 the model writes a first sentence, then Retrieve, and three passages arrive. In step 2 it writes one segment with each passage, and in step 3 the tokens give the order 1 &gt; 3 &gt; 2. The Texas claim is true, but its passage is Irrelevant, so it comes last. Then the model writes Retrieve again and repeats the process.</p>
+
+  <p>Self-RAG has a cost. The generator needs special training, so a <button class="def" data-w="w-frozen">frozen LLM</button> from an API does not work here. It has to write a separate segment with each passage, which means K generations, like the <button class="def" data-w="w-ragseq">RAG-Sequence</button> model of lesson 5. And Supported only says that the claim is in the passage. It does not say that the passage is still true.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="crag">
+  <h3><span class="cn">4</span>CRAG: a separate evaluator and two thresholds</h3>
+
+  <p>Most systems are built on a frozen LLM, so decision 3 has to be made by something outside the generator. A first idea is the <button class="def" data-w="w-rerank">reranker</button> from <a href="14-hybrid-rerank-en.html#rerank">lesson 14</a>. But a reranker only changes the order. Suppose the retriever brought only the Homework 1 announcement and the project page, both useless for the crowding question. The reranker still puts one of them on top, and that one goes into the prompt. <span class="mine">my example</span></p>
+
+  <p><b>In CRAG, a small model gives every document a confidence: how right this document is for this question.</b> This model is called the <b class="term">retrieval evaluator</b>. CRAG stands for Corrective RAG, a 2024 method by Yan and colleagues. The confidence has a meaning of its own, so you can set a limit on it in advance, and such a limit is called a <b class="term">threshold</b>.</p>
+
+  <p>CRAG keeps two thresholds, an upper one and a lower one. Here the confidence runs from 0 to 1, and the thresholds are 0.6 and 0.2. <span class="mine">my scale and numbers</span> The paper's own numbers are in the dense version. Start with the case where the retriever brought a single document, K = 1:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Single document</th><th class="numh">Confidence</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.85</td><td>Correct<span class="sub">above 0.6</span></td></tr>
+      <tr class="hi"><td>Old forum post</td><td class="num">0.4</td><td>Ambiguous<span class="sub">between 0.2 and 0.6</span></td></tr>
+      <tr><td>Homework 1 announcement</td><td class="num">0.05</td><td>Incorrect<span class="sub">below 0.2</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>With several documents, one document above 0.6 is enough for Correct, while Incorrect needs every document below 0.2. In the reranker example Homework is at 0.05 and the project page at 0.1, so the verdict is Incorrect. <span class="mine">my 0.1 for the project page</span> Each verdict triggers a different action:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Verdict</th><th>Action</th><th>What the generator gets</th></tr></thead>
+    <tbody>
+      <tr><td><b>Correct</b></td><td>Knowledge refinement: split the documents into strips, drop the useless strips, join the rest</td><td>Question + cleaned documents</td></tr>
+      <tr><td><b>Incorrect</b></td><td>Drop the documents, rewrite the query, search the web</td><td>Question + web results</td></tr>
+      <tr><td><b>Ambiguous</b></td><td>Both</td><td>Question + cleaned documents + web results</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="widget" id="cw">
+    <h4>CRAG's verdict at K = 1</h4>
+    <p class="hint">The retriever brought one document. Change the evaluator's confidence and see what CRAG does. The thresholds are 0.6 and 0.2. <span class="mine">my thresholds and confidences</span></p>
+    <div class="btns">
+      <button type="button" data-v="0.85">Queue log</button>
+      <button type="button" data-v="0.4">Old forum post</button>
+      <button type="button" data-v="0.05">Homework 1 announcement</button>
+    </div>
+    <div class="ctl"><label for="cw-s">Evaluator's confidence</label><input id="cw-s" type="range" min="0" max="1" step="0.05" value="0.85"><output id="cw-so">0.85</output></div>
+    <div class="tscroll"><table class="t"><tbody id="cw-body"></tbody></table></div>
+  </div>
+
+  <p>Even on the Correct path the document does not go in whole. CRAG splits it into small pieces called strips. It then checks each strip with the evaluator, drops the useless strips, and joins the rest in order. This is called <b class="term">knowledge refinement</b>. For the question <q>When is the milestone due?</q>, the syllabus's three sentences become three strips: <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Syllabus strip</th><th>Keep?</th></tr></thead>
+    <tbody>
+      <tr><td><q>The project milestone is due Week 6, Thursday 11:59pm.</q></td><td>Yes, this is the answer</td></tr>
+      <tr><td><q>Late days may not be applied to the milestone.</q></td><td>Yes, it is about the milestone deadline</td></tr>
+      <tr class="hi"><td><q>The final report is due Week 10.</q></td><td>No, this is about the final report</td></tr>
+    </tbody>
+  </table></div>
+  <p>The generator gets 2 of the 3 strips. The Week 10 line never reaches the prompt, so the generator cannot mistake it for the milestone date.</p>
+
+  <p>On the Incorrect path CRAG drops its documents. An LLM rewrites the question as keywords suited to a search engine, and CRAG searches the web. On the slide the question is <q>Who was the screenwriter for Death of a Batman?</q>, and the new query has three parts: Death of a Batman, screenwriter and Wikipedia.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p58.png"><img src="img/slide-p58.png" alt="Stanford slide: CRAG, the evaluator's three verdicts and their actions" loading="lazy"></a>
+    <figcaption>Stanford's slide: CRAG. Correct runs Knowledge Refinement, Incorrect runs Knowledge Searching, and Ambiguous runs both. The bottom row shows what the generator gets for each verdict.</figcaption>
+  </figure>
+
+  <p class="callout"><b>Watch out:</b> Not every text from the web can be trusted. It can contain false claims, or even instructions that steer the agent off course, which come up in <a href="18-failure-modes-en.html">lesson 18</a>. That is why the slide has a Select step after the web search too.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>At K = 1 the forum post arrives alone, and the evaluator gives it 0.4. What does CRAG do, and what does the generator get?</p>
+    <details><summary>Show the answer</summary>
+      <p>0.4 is between 0.2 and 0.6, so the verdict is <b>Ambiguous</b>. CRAG refines the forum post and keeps it, and it also rewrites the query and searches the web. The generator gets the question, the cleaned part of the forum post and the web results.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="compare">
+  <h3><span class="cn">5</span>Self-RAG and CRAG side by side, and their limits</h3>
+
+  <p>Now go back to the two questions from the start. On 17 × 3, a well-trained Self-RAG does not write Retrieve, and writes 51 directly. In the paper's own example, too, the model does not search for a prompt that asks for an essay. <span class="mine">from the paper</span> CRAG would search here as well, because it searches on every question and only checks the result.</p>
+
+  <p>If the forum post arrives alone at K = 1, Self-RAG's Wednesday segment is Partially, and the model can write Retrieve again. CRAG's evaluator gives the forum post 0.4, so CRAG also searches the web. <b>Neither of them passes the forum post on unchecked any more.</b></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>Self-RAG</th><th>CRAG</th></tr></thead>
+    <tbody>
+      <tr><td><b>Who decides</b></td><td>The generator itself, with reflection tokens</td><td>A separate evaluator, with two thresholds</td></tr>
+      <tr><td><b>Does the generator change?</b></td><td>Yes, special training</td><td>No, any LLM</td></tr>
+      <tr><td><b>Decision 1: retrieve?</b></td><td>With the Retrieve token</td><td>Always retrieves</td></tr>
+      <tr><td><b>Decision 2: which query?</b></td><td>Does not write a separate query<span class="sub">from the paper</span></td><td>Rewrites the query for the web</td></tr>
+      <tr><td><b>Decision 3: good enough?</b></td><td>With the Relevant and Supported tokens</td><td>With the evaluator's confidence</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Both have limits. A person sets CRAG's thresholds, and the evaluator can make mistakes too. Self-RAG's reflection tokens are also written by the model, so they can be wrong as well. And neither of them learned these decisions by trying things out.</p>
+
+  <p>In <a href="17-search-r1-en.html">lesson 17</a> the model learns these decisions by trying and seeing the result: when to search, which query to write, and when to stop. In a loop, one wrong decision also affects the later steps, which is the subject of <a href="18-failure-modes-en.html">lesson 18</a>.</p>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 4 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 6: all four kinds of Self-RAG tokens, their probabilities, the retrieval threshold δ, and the weighted score of each segment.</li>
+      <li>Step 7: Self-RAG's training and the paper's results, read in points.</li>
+      <li>Step 8: CRAG's real evaluator, its −1 to 1 scale, the paper's thresholds, verdicts on sets of documents, and the results.</li>
+      <li>Step 9: Stanford's three agentic RAG slides, which you read yourself.</li>
+    </ul>
+    <p><a href="16-agentic-rag-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>An agent takes an action in a loop, reads the observation, and decides the next action. In agentic RAG, retrieval is one such action.</li>
+    <li>Every step has three decisions: retrieve or not, which query to send, and whether the result is good enough. A pipeline makes none of them.</li>
+    <li>Self-RAG makes these decisions inside the generator with reflection tokens. CRAG checks the result with a separate evaluator and two thresholds, and searches the web when retrieval goes wrong.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-agent">Agent</dt><dd>An LLM that works in a loop: it chooses an action, reads the observation, and decides the next action. For example, when the search for <q>OH timings</q> came back empty, the agent wrote a new query.</dd>
+    <dt id="w-action">Action and tool</dt><dd>What the agent chooses to do, such as searching for <q>OH timings</q>. A tool is the program that does it, such as a search engine.</dd>
+    <dt id="w-observation">Observation</dt><dd>The result of an action, which the agent reads before its next step. For example, the result of the first search: every passage scored 0.</dd>
+    <dt id="w-agentic">Agentic RAG</dt><dd>RAG in which retrieval is an action of the agent, not a fixed step of a pipeline. For example, 0 searches for 17 × 3 and 3 for the Jed Hoyer question.</dd>
+    <dt id="w-selfrag">Self-RAG</dt><dd>The generator itself writes reflection tokens to decide when to retrieve and which segment to keep. For example, Relevant and Partially on the forum post segment.</dd>
+    <dt id="w-reflection">Reflection tokens</dt><dd>Special tokens added to the vocabulary, which the model writes like any other text. For example, Retrieve, Relevant or Irrelevant, and Supported or Partially.</dd>
+    <dt id="w-crag">CRAG</dt><dd>Corrective RAG: an evaluator calls the retrieval Correct, Incorrect or Ambiguous, and refinement, web search or both follow. For example, the forum post at 0.4 is Ambiguous.</dd>
+    <dt id="w-evaluator">Retrieval evaluator</dt><dd>A small model that reads the question and one document and returns a confidence. For example, 0.4 for the forum post at K = 1.</dd>
+    <dt id="w-refine">Knowledge refinement</dt><dd>Splitting documents into strips, dropping the useless strips, and joining the rest in order. For example, 2 of the syllabus's 3 strips stay for the milestone question.</dd>
+    <dt id="w-threshold">Threshold</dt><dd>A limit set in advance, where being above or below it triggers a different action. For example, in CRAG above 0.6 means Correct, and below 0.2 means Incorrect.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="15-colbert-en.html">Previous: Lesson 15</a>
+    <a href="17-search-r1-en.html">Next: Lesson 17, Search-R1</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Papers: Asai et al., 2024, “Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection”, and Yan et al., 2024, “Corrective Retrieval Augmented Generation”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var s = document.getElementById("cw-s"), so = document.getElementById("cw-so"), body = document.getElementById("cw-body");
+  var btns = document.querySelectorAll("#cw .btns button");
+  function render() {
+    var v = Number(s.value);
+    so.textContent = v.toFixed(2);
+    var verdict, why, action, gets;
+    if (v > 0.6) { verdict = "Correct"; why = "above 0.6"; action = "Knowledge refinement: split into strips, drop the useless strips"; gets = "Question + cleaned document"; }
+    else if (v < 0.2) { verdict = "Incorrect"; why = "below 0.2"; action = "Drop the document, rewrite the query, search the web"; gets = "Question + web results"; }
+    else { verdict = "Ambiguous"; why = "between 0.2 and 0.6"; action = "Both: refinement and web search"; gets = "Question + cleaned document + web results"; }
+    body.innerHTML = "<tr><td><b>Verdict</b></td><td><b>" + verdict + "</b>, because " + v.toFixed(2) + " is " + why + "</td></tr><tr><td><b>Action</b></td><td>" + action + "</td></tr><tr><td><b>Generator gets</b></td><td>" + gets + "</td></tr>";
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", Number(b.dataset.v) === v ? "true" : "false"); });
+  }
+  s.addEventListener("input", render);
+  btns.forEach(function (b) { b.addEventListener("click", function () { s.value = b.dataset.v; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

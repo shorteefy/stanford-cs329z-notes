@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Lesson 3 का retriever हर query पर index के हर vector से तुलना करता है। 10 करोड़ passages पर इसमें हर query करीब 7.7 seconds लेती है। कम vectors देखकर ज़्यादातर बार वही सबसे पास वाले vectors ढूँढने हैं।">
+<title>Lesson 10: तेज़ vector search</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .plane { display: block; width: 100%; max-width: 380px; margin: 0 auto 12px; touch-action: none; cursor: crosshair; user-select: none; }
+  .plane .frame { fill: none; stroke: var(--rule); }
+  .plane .pt { fill: var(--muted); opacity: .45; }
+  .plane .pt.cand { opacity: 1; }
+  .plane .pt.best { fill: var(--accent); opacity: 1; }
+  .plane .pt.true { fill: none; stroke: var(--ink); stroke-width: 2; opacity: 1; }
+  .plane .cen { fill: var(--card); stroke: var(--ink); stroke-width: 1.5; }
+  .plane .cen.on { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.5; }
+  .plane .q { fill: var(--accent); }
+  .plane text { fill: var(--ink); font: 12px "Segoe UI", "Nirmala UI", sans-serif; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 10 / 18 · <b>आसान</b> · <a href="10-vector-search-dense.html">गहरा</a> · <a href="10-vector-search-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 10 · आसान version</p>
+  <h1>करोड़ों vectors में तेज़ search</h1>
+  <p class="lede"><b>Vector search का काम है: query के vector के सबसे पास वाले k vectors ढूँढना। ये lesson ऐसे तरीके सिखाता है, जो हर vector देखे बिना ज़्यादातर बार वही k vectors ढूँढ लेते हैं।</b> <a href="03-vectors.html#embedding">Lesson 3</a> का retriever हर query पर index के हर vector से तुलना करता था। <a href="02-retrieval.html#corpus">Lesson 2</a> की company के 60,000 passages पर ये पल भर का काम है, लेकिन 10 करोड़ passages पर हर query करीब 7.7 seconds लेगी। <span class="mine">मेरा अंदाज़ा</span></p>
+  <p class="lede">Lesson 5 की <button class="def" data-w="w-mips">MIPS</button> search सबसे बड़े dot product वाले k passages ढूँढती है। उसे तेज़ करने का रास्ता भी यही है: हर vector मत देखिए। तब कभी-कभी सबसे पास वाला passage छूटता है, और ये lesson उस चूक को नापना भी सिखाता है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 5 पड़ाव हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#bruteforce">हर vector से तुलना: exact search</a><span class="can">एक query का खर्च N × d से निकाल पाएँगे।</span></li>
+      <li><a href="#ann">ANN: थोड़ा recall देकर बहुत speed</a><span class="can">दूरी और ANN का recall हाथ से निकाल पाएँगे, और vector search वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#ivf">IVF: सिर्फ़ पास वाले clusters देखना</a><span class="can">nprobe से तुलनाएँ गिन पाएँगे, और बता पाएँगे कि किनारे पर IVF क्यों चूकता है।</span></li>
+      <li><a href="#pq">PQ: हर vector को छोटे code में बदलना</a><span class="can">किसी vector का code हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#hnsw">HNSW: layers वाले graph पर greedy चाल</a><span class="can">Layers पर greedy search हाथ से चला पाएँगे, और HNSW वाली slide पढ़ पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="03-vectors.html#dot">Lesson 3</a> (vector, dot product, length) और <a href="09-raptor-graphrag.html#clustering">Lesson 9</a> (cluster, centroid, graph)। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="bruteforce">
+  <h3><span class="cn">1</span>हर vector से तुलना: exact search और उसका खर्च</h3>
+
+  <p><b>Stanford की slide पर vector search का काम ये है: query के vector के लिए index के N vectors में से top-k लौटाने हैं।</b> सबसे सीधा तरीका हर vector से score निकालता है, और सबसे ऊँचे k scores वाले vectors लौटाता है। इसे <b class="term">exact search</b> या brute force कहते हैं, क्योंकि ये बिना किसी तरकीब के सब कुछ देखता है।</p>
+
+  <p>इसका खर्च गिनना आसान है। Lesson 3 की query [0.8, 0.2] और office hours page [0.9, 0.1] का <button class="def" data-w="w-dot">dot product</button> 0.8 × 0.9 + 0.2 × 0.1 = 0.74 है। इसमें 2 गुणा लगे। d numbers वाले vectors में d गुणा लगते हैं, इसलिए N vectors से तुलना में N × d गुणा लगते हैं।</p>
+
+  <p>असली vectors में d बड़ा है: BERT-base के vector में 768 numbers हैं, यानी d = 768। Speed के लिए एक मोटा अंदाज़ा लीजिए कि computer एक second में 1,000 करोड़ गुणा करता है। <span class="mine">speed मेरा अंदाज़ा है</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Corpus</th><th class="numh">एक query पर गुणा</th><th class="numh">एक query का समय</th></tr></thead>
+    <tbody>
+      <tr><td>Lesson 2 की company<span class="sub">60,000 passages</span></td><td class="num">4.6 करोड़<span class="sub mono">60,000 × 768</span></td><td class="num">0.005 second</td></tr>
+      <tr><td>Lesson 5 का Wikipedia<span class="sub">2.1 करोड़ passages</span></td><td class="num">1,613 करोड़<span class="sub mono">2.1 करोड़ × 768</span></td><td class="num">1.6 seconds</td></tr>
+      <tr class="hi"><td>बड़ा corpus<span class="sub">10 करोड़ passages</span></td><td class="num">7,680 करोड़<span class="sub mono">10 करोड़ × 768</span></td><td class="num">7.7 seconds</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>आख़िरी row दो steps में निकली:</p>
+  <ol class="plain">
+    <li>एक query पर गुणा: 10 करोड़ × 768 = 7,680 करोड़।</li>
+    <li>समय: 7,680 करोड़ ÷ 1,000 करोड़ per second = 7.68 seconds, यानी करीब 7.7 seconds।</li>
+  </ol>
+
+  <p>Slide इस खर्च को O(N·d) लिखती है, और इस लिखावट को <b class="term">Big-O</b> कहते हैं। Big-O सही गिनती नहीं बताता। वो बताता है कि N या d बढ़ने पर खर्च किस हिसाब से बढ़ता है। O(N·d) का मतलब है कि N दोगुना हो, तो खर्च दोगुना, और d दोगुना हो, तब भी दोगुना। Table में N 60,000 से 10 करोड़ हुआ, यानी करीब 1,667 गुना, और समय भी 0.005 से 7.7 seconds, उतने ही गुना बढ़ा।</p>
+
+  <p><b>Brute force हमेशा असली top-k देता है, इसलिए छोटे corpus पर यही सबसे अच्छा तरीका है।</b> दिक्कत सिर्फ़ बड़े corpus पर है, जहाँ हर query seconds लेती है।</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="ann">
+  <h3><span class="cn">2</span>ANN: थोड़ा recall देकर बहुत speed</h3>
+
+  <p>हर vector देखे बिना पक्का top-k नहीं मिल सकता, क्योंकि जो vector नहीं देखा, वही सबसे पास हो सकता है। इसलिए बड़े corpus पर एक सौदा करना पड़ता है: कम vectors देखिए, और ज़्यादातर बार सही जवाब पाइए। Query के सबसे पास वाले vectors को उसके <b class="term">nearest neighbors</b> कहते हैं।</p>
+
+  <p><b>ANN, यानी approximate nearest neighbor search, वो तरीके हैं जो कुछ ही vectors देखकर ज़्यादातर बार असली nearest neighbors लौटाते हैं।</b> Approximate का मतलब है लगभग। Slide इसे एक सौदा कहती है: <q>trade a little recall for a lot of speed</q>, यानी थोड़ा recall दीजिए, और बहुत speed लीजिए।</p>
+
+  <p>यहाँ <button class="def" data-w="w-recall">recall</button> का मतलब है: brute force जो असली top-10 देता, उनमें से ANN ने कितने लौटाए। ANN ने 10 में से 9 लौटाए, तो recall 9 ÷ 10 = 0.9 है। ANN जो passage छोड़ता है, वो reader तक कभी नहीं पहुँचता। इसलिए ये चूक lesson 2 वाली <button class="def" data-w="w-ceiling">recall ceiling</button> को नीचे लाती है।</p>
+
+  <p><a href="13-metrics.html#recallk">Lesson 13</a> का Recall@k इससे अलग है। वहाँ सही जवाब इंसानों के labels से आता है, और यहाँ brute force के top-10 से।</p>
+
+  <h4 class="sub" id="dist">दूरी: “पास” कैसे नापें</h4>
+
+  <p>“पास” नापने के लिए इस lesson के तरीके <b class="term">दूरी</b> लेते हैं। दो vectors की दूरी निकालने के लिए पहले एक ही जगह वाले numbers घटाइए, जिससे फ़र्क वाला vector बनता है। फिर उसकी <button class="def" data-w="w-length">length</button> लीजिए, यानी lesson 3 वाला हिसाब: हर number का square, सबका जोड़, फिर square root।</p>
+
+  <p>Lesson 3 की query [0.8, 0.2] और office hours page [0.9, 0.1] पर ये तीन steps में होता है:</p>
+  <ol class="plain">
+    <li>फ़र्क: [0.9 − 0.8, 0.1 − 0.2] = [0.1, −0.1]।</li>
+    <li>Squares का जोड़: 0.1 × 0.1 + (−0.1) × (−0.1) = 0.01 + 0.01 = 0.02। Minus वाले number का square भी plus होता है।</li>
+    <li>Square root: √0.02 = 0.14। जाँच: 0.14 × 0.14 = 0.0196, यानी करीब 0.02।</li>
+  </ol>
+  <p>Syllabus [0.1, 0.9] का फ़र्क [−0.7, 0.7] है, और उसकी दूरी √(0.49 + 0.49) = √0.98 = 0.99 है। दूरी जितनी छोटी, vector उतना पास, इसलिए office hours page query के ज़्यादा पास है।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p36.png"><img src="img/slide-p36.png" alt="Stanford slide: vector search, exact search और ANN के तीन तरीके" loading="lazy"></a>
+    <figcaption>Stanford की slide: vector search। पहली तीन lines अब आप पढ़ सकते हैं: काम, exact search का खर्च O(N·d), और ANN का सौदा। नीचे के तीन ANN तरीके, IVF, PQ और HNSW, अगले तीन पड़ावों में आते हैं। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="ivf">
+  <h3><span class="cn">3</span>IVF: सिर्फ़ query के पास वाले clusters देखना</h3>
+
+  <p>Query के nearest neighbors उसके आस-पास होंगे, इसलिए दूर के vectors देखना बेकार है। मुश्किल ये है कि किसी vector को देखे बिना पता नहीं चलता कि वो दूर है। इसमें lesson 9 का <button class="def" data-w="w-cluster">centroid</button> काम आता है, यानी किसी cluster के vectors का औसत। जैसे [0.1, 0.9], [0.2, 0.8] और [0.15, 0.85] का centroid [0.15, 0.85] है। Query किसी centroid से दूर है, तो उसके cluster के vectors भी ज़्यादातर दूर होंगे।</p>
+
+  <p><b>IVF (inverted file index) vectors को clusters में बाँटता है, और search के वक्त सिर्फ़ query के पास वाले clusters के vectors देखता है।</b> इसका काम दो हिस्सों में बँटता है:</p>
+  <ol class="plain">
+    <li><button class="def" data-w="w-offline">Offline</button>: हर vector अपने सबसे पास वाले centroid के cluster में जाता है, और हर centroid के साथ उसके vectors की एक list रहती है। इन lists का नाम inverted file है।</li>
+    <li>Online: query पहले सिर्फ़ centroids से मिलती है। फिर IVF सबसे पास वाले कुछ centroids चुनता है, और सिर्फ़ उनकी lists के vectors से दूरी निकालता है।</li>
+  </ol>
+
+  <p>कितने clusters देखने हैं, उस number को <b class="term">nprobe</b> कहते हैं। <span class="mine">nprobe नाम slide पर नहीं है</span> मान लीजिए 10 लाख vectors 1,000 clusters में बँटे हैं, यानी हर cluster में करीब 1,000 vectors। nprobe = 10 पर तुलनाएँ ऐसे गिनिए:</p>
+  <ol class="plain">
+    <li>Centroids से: 1,000 तुलनाएँ।</li>
+    <li>चुने हुए 10 clusters के vectors से: 10 × 1,000 = 10,000 तुलनाएँ।</li>
+    <li>कुल 11,000, जबकि brute force में 10,00,000। 10,00,000 ÷ 11,000 = 91, यानी करीब 91 गुना कम काम।</li>
+  </ol>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Query दो clusters के किनारे पर है, और nprobe = 1 है। क्या IVF असली सबसे पास वाला point ढूँढ लेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>हमेशा नहीं। IVF सिर्फ़ उस cluster को देखता है, जिसका centroid query के सबसे पास है। किनारे वाली query का सबसे पास वाला point पड़ोसी cluster में भी हो सकता है। Widget में “Query किनारे पर” चुनकर देखिए।</p>
+    </details>
+  </div>
+
+  <div class="widget" id="iw">
+    <h4>IVF खुद चलाइए</h4>
+    <p class="hint">40 points, 4 clusters। चौकोर boxes centroids हैं। Plane पर click करके query रखिए, और nprobe बदलिए। गहरे points वो हैं, जिन्हें IVF ने देखा। घेरे वाला point असली सबसे पास वाला है।</p>
+    <svg class="plane" id="iw-svg" viewBox="0 0 320 320" role="img" aria-label="IVF clusters"></svg>
+    <div class="btns" id="iw-p">
+      <button type="button" data-q="0.3,0.3">Query cluster के बीच</button>
+      <button type="button" data-q="0.52,0.3">Query किनारे पर</button>
+      <button type="button" data-q="0.48,0.6">Query बीचोंबीच</button>
+    </div>
+    <div class="ctl"><label for="iw-n">nprobe, कितने clusters देखें</label><input id="iw-n" type="range" min="1" max="4" step="1" value="1"><output id="iw-no">1</output></div>
+    <p class="out" id="iw-out"></p>
+  </div>
+
+  <p>“Query किनारे पर” चुनिए। Query का सबसे पास वाला centroid दाईं तरफ़ का है, इसलिए nprobe = 1 पर IVF सिर्फ़ वही cluster देखता है। तुलनाएँ हैं 4 centroids और 11 points, कुल 15, जबकि brute force में 40। लेकिन असली सबसे पास वाला point बाईं तरफ़ के cluster में है, और वो छूट गया। nprobe = 2 करते ही वो मिल जाता है, और तुलनाएँ 25 हो जाती हैं।</p>
+
+  <p><b>यही IVF की हद है: query किनारे पर हो, तो उसके nearest neighbors पड़ोसी cluster में हो सकते हैं।</b> “Query बीचोंबीच” में तो nprobe = 3 तक चाहिए। nprobe बढ़ाने से recall बढ़ता है और speed घटती है, यानी ANN वाला सौदा अब एक setting से तय होता है।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="pq">
+  <h3><span class="cn">4</span>PQ: हर vector को छोटे code में बदलना</h3>
+
+  <p>IVF ने तुलनाएँ घटाईं, लेकिन सारे vectors अब भी memory में रखने हैं। एक आम number 4 bytes लेता है, तो 768 numbers का vector 768 × 4 = 3,072 bytes का है। 10 करोड़ vectors के लिए 10 करोड़ × 3,072 = 30,720 करोड़ bytes चाहिए। 1 GB में 100 करोड़ bytes होते हैं, इसलिए ये 307 GB है, यानी करीब 300 GB। <span class="mine">slide के बाहर</span></p>
+
+  <p><b>Product quantization (PQ) हर vector को टुकड़ों में काटता है। फिर हर टुकड़े की जगह वो एक तय list के सबसे पास वाले vector का number लिख देता है।</b> इस list को <b class="term">codebook</b> कहते हैं, और उसके हर vector को codeword। ये numbers मिलकर vector का code बनाते हैं, और index में असली numbers की जगह यही code रहता है। Quantization का मतलब यही है: किसी value को तय list की सबसे पास वाली value से बदलना।</p>
+
+  <p>4 numbers का vector [0.9, 0.1, 0.2, 0.8] लीजिए, और उसे दो टुकड़ों में काटिए: [0.9, 0.1] और [0.2, 0.8]। Codebook में 4 codewords हैं: #0 [1, 0], #1 [0, 1], #2 [0.5, 0.5] और #3 [0.7, 0.7]। यहाँ दोनों टुकड़े एक ही codebook से काम चलाते हैं, जबकि असली PQ में हर टुकड़े की जगह का अपना codebook होता है। <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Codeword</th><th class="numh">[0.9, 0.1] से दूरी</th><th class="numh">[0.2, 0.8] से दूरी</th></tr></thead>
+    <tbody>
+      <tr><td>#0 [1, 0]</td><td class="num"><b>0.14</b></td><td class="num">1.13</td></tr>
+      <tr><td>#1 [0, 1]</td><td class="num">1.27</td><td class="num"><b>0.28</b></td></tr>
+      <tr><td>#2 [0.5, 0.5]</td><td class="num">0.57</td><td class="num">0.42</td></tr>
+      <tr><td>#3 [0.7, 0.7]</td><td class="num">0.63</td><td class="num">0.51</td></tr>
+    </tbody>
+  </table></div>
+  <p>पहली दूरी ऐसे निकली: [1 − 0.9, 0 − 0.1] = [0.1, −0.1], और √(0.01 + 0.01) = 0.14। पहले टुकड़े के सबसे पास #0 है, और दूसरे के सबसे पास #1। इसलिए पूरा vector बस code (0, 1) बन गया।</p>
+
+  <p>Code से vector लगभग वापस बनता है: #0 और #1 को साथ रखकर [1, 0, 0, 1]। अब query [1, 0, 0, 1] से dot product देखिए। असली vector से ये 1 × 0.9 + 0 × 0.1 + 0 × 0.2 + 1 × 0.8 = 1.7 है, और code वाले vector से 1 + 1 = 2.0।</p>
+
+  <p>असली पैमाने पर 768 numbers को 8-8 के 96 टुकड़ों में काटिए, और हर codebook में 256 codewords रखिए। 1 byte में 8 bits हैं, और 8 bits से 2 × 2 × 2 × 2 × 2 × 2 × 2 × 2 = 256 अलग numbers बनते हैं। इसलिए 0 से 255 तक का हर code 1 byte में आता है, और पूरा vector 96 bytes का बनता है। <span class="mine">ये settings आम हैं, slide पर नहीं</span></p>
+  <p><b>Vector 3,072 ÷ 96 = 32 गुना छोटा हुआ, और 10 करोड़ vectors 300 GB से घटकर करीब 9.6 GB रह गए।</b> हिसाब: 10 करोड़ × 96 = 960 करोड़ bytes, यानी 9.6 GB।</p>
+
+  <p>इसकी हद ऊपर के 1.7 और 2.0 में दिखती है: code से निकला score अंदाज़न है, और पास-पास scores का क्रम उलट सकता है। इसलिए कई systems आख़िरी कुछ candidates को असली vectors से दोबारा score करते हैं।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>ऊपर वाले codebook से vector [0.65, 0.65, 0.95, 0.05] का code क्या होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>[0.65, 0.65] के सबसे पास #3 [0.7, 0.7] है, दूरी 0.07। #2 [0.5, 0.5] की दूरी 0.21 है। [0.95, 0.05] के सबसे पास #0 [1, 0] है, दूरी 0.07। Code = <b>(3, 0)</b>।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="hnsw">
+  <h3><span class="cn">5</span>HNSW: layers वाले graph पर greedy चाल</h3>
+
+  <p>IVF किनारे पर इसलिए चूकता है, क्योंकि वो बाकी clusters के vectors देखता ही नहीं। दूसरा idea clusters बनाता ही नहीं, वो हर vector को उसके कुछ पास वाले vectors से जोड़ देता है। ऐसे graph को <b class="term">proximity graph</b> कहते हैं, जिसमें हर vector एक node है, जैसे lesson 9 के graph में।</p>
+
+  <p><b>Proximity graph पर search एक node से शुरू होती है, और हर कदम पर उस neighbor पर जाती है जो query के सबसे पास है।</b> जब कोई neighbor अभी वाले node से ज़्यादा पास न हो, तो search अटक जाती है, और वही node जवाब है। इस चाल को <b class="term">greedy search</b> कहते हैं।</p>
+
+  <p>एक ही layer में दूर से शुरू करें, तो छोटे-छोटे बहुत सारे कदम लगते हैं। इसलिए <b class="term">HNSW</b> (Hierarchical Navigable Small World) graph को layers में बनाता है। Layer 0 में सारे vectors हैं, और ऊपर की layers में कम nodes और लंबी छलाँगें। Search सबसे ऊपर से शुरू होती है, और जहाँ अटके, वहीं से एक layer नीचे उतरती है।</p>
+
+  <p>हाथ से हिसाब हो सके, इसलिए 1 dimension का example लीजिए। Vectors 0 से 100 तक 5-5 के फ़ासले पर 21 numbers हैं, और दूरी बस दोनों numbers का फ़र्क है। हर node अपनी layer में अपने दाएँ और बाएँ वाले node से जुड़ा है। Query 73 है, और search layer 2 के node 10 से शुरू होती है। <span class="mine">मेरा example</span></p>
+  <ul class="plain">
+    <li>Layer 2: 10, 50, 90</li>
+    <li>Layer 1: 10, 30, 50, 70, 90</li>
+    <li>Layer 0: 0, 5, 10, …, 100 (सारे 21)</li>
+  </ul>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Layer</th><th>कहाँ हैं (दूरी)</th><th>Neighbors (दूरी)</th><th>फ़ैसला</th></tr></thead>
+    <tbody>
+      <tr><td>2</td><td>10 (63)</td><td>50 (23)</td><td>50 पर जाइए</td></tr>
+      <tr><td>2</td><td>50 (23)</td><td>10 (63), 90 (17)</td><td>90 पर जाइए</td></tr>
+      <tr><td>2</td><td>90 (17)</td><td>50 (23)</td><td>अटके, layer 1 पर उतरिए</td></tr>
+      <tr><td>1</td><td>90 (17)</td><td>70 (3)</td><td>70 पर जाइए</td></tr>
+      <tr><td>1</td><td>70 (3)</td><td>50 (23), 90 (17)</td><td>अटके, layer 0 पर उतरिए</td></tr>
+      <tr><td>0</td><td>70 (3)</td><td>?</td><td>?</td></tr>
+      <tr class="hi"><td>0</td><td>75 (2)</td><td>70 (3), 80 (7)</td><td>अटके। जवाब: 75</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">छठी row आप निकालिए</p>
+    <p>Layer 0 पर आप node 70 पर हैं। उसके neighbors कौन हैं, query 73 से उनकी दूरी कितनी है, और फ़ैसला क्या है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Layer 0 में सारे 21 numbers हैं, तो 70 के neighbors 65 और 75 हैं। दूरियाँ: 65 (8) और 75 (2)। 75 अभी वाले 70 (3) से पास है, तो <b>75 पर जाइए</b>।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">कुल 4 कदम लगे (50, 90, 70, 75), और जवाब सही है, क्योंकि 73 के सबसे पास 75 ही है। रास्ते में search ने 7 nodes की दूरी निकाली, जबकि brute force सारे 21 की निकालता।</p>
+
+  <p>N बढ़ने पर ये फ़र्क बहुत बढ़ता है। Slide कहती है कि HNSW में करीब <button class="def" data-w="w-log2">log N</button> कदम लगते हैं, यानी 2 को जितनी बार गुणा करने पर N बने, करीब उतने। 2 को 20 बार गुणा करने पर 10,48,576 बनता है। इसलिए 10 लाख vectors पर करीब 20 कदम लगते हैं, और 10 करोड़ पर करीब 27।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p37.png"><img src="img/slide-p37.png" alt="Stanford slide: HNSW की तीन layers और उन पर greedy चाल" loading="lazy"></a>
+    <figcaption>Stanford की slide: HNSW की layers। लाल point सबसे ऊपर का शुरुआती node है, लाल arrows greedy चाल हैं, और लाल dashed arrows वहाँ हैं जहाँ search एक layer नीचे उतरी। हरा point query है। दाईं तरफ़ का arrow कहता है कि नीचे की layers में edges छोटी होती हैं, जैसे हमारे example में 40, 20 और 5 की छलाँगें। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>HNSW की कीमत memory में है, क्योंकि हर node के साथ उसकी edges भी रखनी पड़ती हैं। <span class="mine">slide के बाहर</span> इसकी हद ये है कि greedy चाल ऐसे node पर भी अटक सकती है, जो असली सबसे पास वाला नहीं है। ऐसा ख़ासकर तब होता है, जब vectors अलग-अलग groups में बँटे हों। इसलिए HNSW हर नए vector को एक edge किसी दूसरे group तक भी देता है।</p>
+
+  <div class="deeper">
+    <h2>गहरे version में और क्या है</h2>
+    <p>गहरे version में ये पूरा lesson है, और उसके बाद 5 पड़ाव और, जो Stanford की slides के level तक ले जाते हैं:</p>
+    <ul class="plain">
+      <li>पड़ाव 6: दूरी का गणित, और length 1 वाले vectors पर दूरी और dot product एक ही क्रम क्यों देते हैं।</li>
+      <li>पड़ाव 7: k-means से IVF के centroids, और कितने clusters बनाएँ।</li>
+      <li>पड़ाव 8: PQ के codebooks, lookup table से तेज़ score, और IVF के साथ PQ।</li>
+      <li>पड़ाव 9: HNSW की random layers, ef, neighbors चुनने का नियम, और memory।</li>
+      <li>पड़ाव 10: Stanford की तीनों vector search slides, जिन्हें आप खुद पढ़ते हैं।</li>
+    </ul>
+    <p><a href="10-vector-search-dense.html">गहरा version खोलिए</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Brute force का खर्च O(N·d) है: ये पक्का सही है, लेकिन 10 करोड़ passages पर हर query करीब 7.7 seconds लेती है।</li>
+    <li>ANN कम vectors देखता है, और उसका recall बताता है कि असली top-k में से कितने मिले। IVF सिर्फ़ पास वाले clusters देखता है, और nprobe से ये सौदा तय होता है।</li>
+    <li>PQ हर vector को 3,072 से 96 bytes के code में बदलता है। HNSW layers वाले graph पर ऊपर से नीचे greedy चलता है, करीब log N कदमों में।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-exact">Exact search (brute force)</dt><dd>हर vector से तुलना करके पक्का सही top-k निकालना। जैसे 21 vectors हों, तो 21 दूरियाँ गिनना।</dd>
+    <dt id="w-bigo">Big-O, O(N·d)</dt><dd>N या d बढ़ने पर खर्च किस हिसाब से बढ़ता है। जैसे O(N·d) में N दोगुना हो, तो खर्च भी दोगुना।</dd>
+    <dt id="w-nn">Nearest neighbors</dt><dd>Query के सबसे पास वाले vectors। जैसे query 73 के पास वालों में 75 पहले आता है।</dd>
+    <dt id="w-ann">ANN</dt><dd>Approximate nearest neighbor search: कम vectors देखकर ज़्यादातर बार सही neighbors ढूँढना। जैसे असली top-10 में से 9 मिलें, तो recall 0.9।</dd>
+    <dt id="w-distance">दूरी</dt><dd>दो vectors के फ़र्क वाले vector की length। जैसे [0.8, 0.2] और [0.9, 0.1] का फ़र्क [0.1, −0.1] है, तो दूरी √(0.01 + 0.01) = 0.14।</dd>
+    <dt id="w-ivf">IVF</dt><dd>Inverted file index: vectors को clusters में बाँटकर query के पास वाले clusters ही देखना। जैसे 10 लाख vectors पर 11,000 तुलनाएँ।</dd>
+    <dt id="w-nprobe">nprobe</dt><dd>IVF में कितने clusters देखने हैं। जैसे 1,000 clusters में nprobe = 10 हो, तो सिर्फ़ 10 clusters के vectors देखना।</dd>
+    <dt id="w-pq">Product quantization (PQ)</dt><dd>Vector को टुकड़ों में काटकर हर टुकड़े की जगह codeword का number रखना। जैसे [0.9, 0.1, 0.2, 0.8] बनता है code (0, 1)।</dd>
+    <dt id="w-codebook">Codebook</dt><dd>हर टुकड़े के नमूना vectors (codewords) की list। जैसे #0 [1, 0], #1 [0, 1], #2 [0.5, 0.5], #3 [0.7, 0.7]।</dd>
+    <dt id="w-proxgraph">Proximity graph</dt><dd>ऐसा graph, जिसमें हर vector अपने पास वाले vectors से जुड़ा हो। जैसे 70 अपने पड़ोसी 65 और 75 से जुड़ा है।</dd>
+    <dt id="w-greedy">Greedy search</dt><dd>हर कदम पर query के सबसे पास वाले neighbor पर जाना, अटकने तक। जैसे query 73 के लिए 70 से 75 पर जाना।</dd>
+    <dt id="w-hnsw">HNSW</dt><dd>Layers वाला proximity graph: ऊपर से greedy चाल, और अटकने पर एक layer नीचे। जैसे query 73 पर 4 कदम।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="09-raptor-graphrag.html">पिछला: Lesson 9</a>
+    <a href="11-bm25.html">अगला: Lesson 11, BM25</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। HNSW वाली slides के चित्र Malkov और Yashunin के paper “Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs” से हैं। “मेरा” लिखे examples और numbers इस lesson के हैं, slides के नहीं।
+</footer>
+</main>
+
+<script src="glossary.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var PTS = [[0.22,0.31],[0.23,0.22],[0.15,0.23],[0.37,0.3],[0.36,0.28],[0.29,0.27],[0.07,0.34],[0.31,0.3],[0.06,0.06],[0.15,0.2],[0.78,0.24],[0.81,0.18],[0.78,0.29],[0.68,0.44],[0.81,0.38],[0.68,0.17],[0.71,0.24],[0.82,0.28],[0.7,0.14],[0.69,0.38],[0.16,0.78],[0.3,0.59],[0.26,0.89],[0.03,0.71],[0.24,0.66],[0.3,0.74],[0.09,0.84],[0.32,0.85],[0.41,0.79],[0.26,0.61],[0.82,0.68],[0.7,0.61],[0.64,0.69],[0.89,0.53],[0.59,0.78],[0.91,0.81],[0.54,0.47],[0.79,0.67],[0.63,0.86],[0.87,0.77]];
+  var CEN = [[0.221,0.251],[0.727,0.292],[0.237,0.746],[0.76,0.711]];
+  var NS = "http://www.w3.org/2000/svg", svg = document.getElementById("iw-svg");
+  var nIn = document.getElementById("iw-n"), nOut = document.getElementById("iw-no"), out = document.getElementById("iw-out");
+  var q = [0.52, 0.3];
+  function d(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+  function nearestC(p) { var best = 0; for (var j = 1; j < CEN.length; j++) if (d(p, CEN[j]) < d(p, CEN[best])) best = j; return best; }
+  var ASSIGN = PTS.map(nearestC);
+  function X(v) { return 10 + v * 300; }
+  function Y(v) { return 310 - v * 300; }
+  function el(tag, a, t) { var e = document.createElementNS(NS, tag); for (var k in a) e.setAttribute(k, a[k]); if (t != null) e.textContent = t; return e; }
+  function render() {
+    var np = Number(nIn.value); nOut.textContent = np;
+    var order = CEN.map(function (c, j) { return j; }).sort(function (a, b) { return d(q, CEN[a]) - d(q, CEN[b]); }).slice(0, np);
+    var cand = [], trueI = 0;
+    PTS.forEach(function (p, i) { if (order.indexOf(ASSIGN[i]) >= 0) cand.push(i); if (d(q, p) < d(q, PTS[trueI])) trueI = i; });
+    var bestI = cand.reduce(function (b, i) { return b < 0 || d(q, PTS[i]) < d(q, PTS[b]) ? i : b; }, -1);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    svg.appendChild(el("rect", { x: 10, y: 10, width: 300, height: 300, "class": "frame" }));
+    PTS.forEach(function (p, i) {
+      var cls = "pt" + (cand.indexOf(i) >= 0 ? " cand" : "") + (i === bestI ? " best" : "");
+      svg.appendChild(el("circle", { cx: X(p[0]), cy: Y(p[1]), r: 5, "class": cls }));
+    });
+    svg.appendChild(el("circle", { cx: X(PTS[trueI][0]), cy: Y(PTS[trueI][1]), r: 9, "class": "pt true" }));
+    CEN.forEach(function (c, j) {
+      svg.appendChild(el("rect", { x: X(c[0]) - 7, y: Y(c[1]) - 7, width: 14, height: 14, "class": "cen" + (order.indexOf(j) >= 0 ? " on" : "") }));
+    });
+    svg.appendChild(el("circle", { cx: X(q[0]), cy: Y(q[1]), r: 7, "class": "q" }));
+    svg.appendChild(el("text", { x: X(q[0]) + 10, y: Y(q[1]) - 8 }, "query"));
+    var found = bestI === trueI;
+    out.innerHTML = "तुलनाएँ: " + CEN.length + " centroids + " + cand.length + " points = <b>" + (CEN.length + cand.length) + "</b> (brute force: " + PTS.length + ")। " +
+      (found ? "असली सबसे पास वाला point <b>मिला</b>।" : "असली सबसे पास वाला point <b>छूट गया</b>, वो किसी और cluster में है।");
+    document.querySelectorAll("#iw-p button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.q === q.join(",") ? "true" : "false"); });
+  }
+  function setFrom(ev) {
+    var pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+    var p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    q = [Math.round(Math.min(1, Math.max(0, (p.x - 10) / 300)) * 100) / 100, Math.round(Math.min(1, Math.max(0, (310 - p.y) / 300)) * 100) / 100];
+    render();
+  }
+  svg.addEventListener("pointerdown", setFrom);
+  nIn.addEventListener("input", render);
+  document.querySelectorAll("#iw-p button").forEach(function (b) { b.addEventListener("click", function () { q = b.dataset.q.split(",").map(Number); render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

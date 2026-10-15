@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="BM25 ने E2 को तीसरे rank पर रखा, dense ने पहले। दोनों lists को एक list में मिलाना है, और फिर ऊपर के passages को query के साथ पढ़कर उनका क्रम सुधारना है।">
+<title>Lesson 14: Hybrid search और reranking</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 14 / 18 · <b>आसान</b> · <a href="14-hybrid-rerank-dense.html">गहरा</a> · <a href="14-hybrid-rerank-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 14 · आसान version</p>
+  <h1>Hybrid search और reranking</h1>
+  <p class="lede"><b>Hybrid search दो retrievers की ranked lists को मिलाकर एक list बनाता है। Reranking उस list के ऊपर वाले passages को एक धीमे लेकिन ज़्यादा सटीक model से दोबारा sort करता है।</b></p>
+  <p class="lede">BM25 ने E2 को तीसरे rank पर रखा, dense ने पहले। Query थी <q>E-4012 upload failed</q>, और उसके दो सही passages हैं। E1 में यही error code हूबहू लिखा है, और E2 में वही बात अलग शब्दों में। <a href="12-dpr.html#limits">Lesson 12</a> इसी बात पर ख़त्म हुआ था कि <button class="def" data-w="w-bm25">BM25</button> की ताकत और कमज़ोरी dense retriever से उल्टी है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 5 पड़ाव हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#complement">BM25 और dense अलग passages चूकते हैं</a><span class="can">बता पाएँगे कि दोनों किस तरह का text चूकते हैं।</span></li>
+      <li><a href="#hybrid">Hybrid search, और scores का सीधा जोड़</a><span class="can">दिखा पाएँगे कि scores जोड़ने पर dense retriever का क्रम क्यों दब जाता है।</span></li>
+      <li><a href="#rrf">Reciprocal rank fusion: scores की जगह ranks</a><span class="can">RRF हाथ से निकाल पाएँगे, और बता पाएँगे कि k = 60 क्या करता है।</span></li>
+      <li><a href="#cross">Cross-encoder: query और passage साथ</a><span class="can">Attention का एक step हाथ से कर पाएँगे, और बता पाएँगे कि cross-encoder धीमा क्यों है।</span></li>
+      <li><a href="#rerank">Shortlist पर reranking</a><span class="can">Reranking का समय निकाल पाएँगे, और बता पाएँगे कि reranker recall क्यों नहीं बढ़ा सकता।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="03-vectors.html">Lesson 3</a> (embedding, cosine), <a href="06-rag-pipeline.html#post">Lesson 6</a> (fusion, rerank), <a href="11-bm25.html">Lesson 11</a> (BM25), <a href="12-dpr.html#biencoder">Lesson 12</a> (bi-encoder, DPR) और <a href="13-metrics.html#mrr">Lesson 13</a> (MRR)। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="complement">
+  <h3><span class="cn">1</span>BM25 और dense retriever अलग-अलग passages चूकते हैं</h3>
+
+  <p><b>BM25 और dense retriever अलग तरह के text पर चूकते हैं, इसलिए एक ही query पर दोनों अलग सही passages छोड़ते हैं।</b> BM25 एक जैसे शब्द गिनता है, और dense retriever, जैसे <button class="def" data-w="w-dpr">DPR</button>, दोनों के <button class="def" data-w="w-embedding">embeddings</button> की तुलना करता है।</p>
+
+  <p>BM25 तब चूकता है, जब passage वही बात दूसरे शब्दों में कहे, और इसे <b class="term">paraphrase</b> कहते हैं। जैसे query में <q>upload failed</q> है, और passage में <q>upload keeps failing</q>। BM25 के लिए failing और failed अलग शब्द हैं, इसलिए उसे सिर्फ़ upload मिलता है।</p>
+
+  <p>Dense retriever तब चूकता है, जब कोई चीज़ हूबहू मिलनी चाहिए, जैसे error code या order ID। ऐसे text को <b class="term">literal</b> कहते हैं। <a href="03-vectors.html#embedding">Lesson 3</a> में दिखा था कि E-4012 और E-4021 वाले passages के embeddings लगभग एक जैसे हो सकते हैं। BM25 के लिए 4012 एक rare शब्द है, जिसका <a href="11-bm25.html#idf">IDF</a> ऊँचा है, इसलिए वो सही passage पकड़ लेता है।</p>
+
+  <p>अब तीन passages पर दोनों retrievers का क्रम देखिए: <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>सही?</th><th>BM25</th><th>Dense</th></tr></thead>
+    <tbody>
+      <tr><td><b>E1</b>, error code वाला<span class="sub">Error E-4012: file larger than 50 MB. Compress the file and upload again.</span></td><td>हाँ</td><td>Rank 1<span class="sub">4012 हूबहू मिला</span></td><td>Rank 2</td></tr>
+      <tr><td><b>E2</b>, अलग शब्दों वाला<span class="sub">If your upload keeps failing on Gradescope, make the file smaller before submitting.</span></td><td>हाँ</td><td>Rank 3<span class="sub">सिर्फ़ upload मिला</span></td><td>Rank 1<span class="sub">vector सबसे पास</span></td></tr>
+      <tr><td><b>E3</b>, दूसरे error वाला<span class="sub">Error E-4021: submission locked after the deadline.</span></td><td>नहीं</td><td>Rank 2<span class="sub">E- वाला code, छोटा passage</span></td><td>Rank 3</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Top-1 पर BM25 सिर्फ़ E1 लाता है, और dense सिर्फ़ E2। दोनों अलग-अलग सही passage चूकते हैं, <b>इसलिए दोनों की lists मिलाने पर दोनों सही passages ऊपर आ सकते हैं।</b></p>
+
+  <p>असली data पर भी यही दिखता है। <a href="12-dpr.html#results">Lesson 12</a> में SQuAD पर top-20 accuracy BM25 की 68.8% थी, और DPR की 63.2%। उसी Stanford slide पर दोनों को मिलाकर बना retriever 71.5% पर है, यानी दोनों से आगे।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Query है <q>refund policy for order #A77-310</q>। इसका कौन सा हिस्सा BM25 पकड़ेगा, और कौन सा dense retriever?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>BM25 rare literal A77-310 को हूबहू पकड़ेगा। Dense retriever refund policy को money back rules वाले passage से भी मिला सकता है, जिसमें एक भी शब्द एक जैसा नहीं है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="hybrid">
+  <h3><span class="cn">2</span>Hybrid search, और scores का सीधा जोड़</h3>
+
+  <p><b>Hybrid search दोनों retrievers चलाता है, और उनकी दो ranked lists को मिलाकर एक list बनाता है।</b> Lists मिलाने को <a href="06-rag-pipeline.html#post">lesson 6</a> में <button class="def" data-w="w-fusion">fusion</button> कहा था। सबसे सीधा तरीका ये है कि हर passage के दोनों scores जोड़ दें: BM25 का score, और dense retriever का <button class="def" data-w="w-cosine">cosine</button>। <span class="mine">scores मेरे बनाए हैं</span></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>E1, E3 और E2 के BM25 scores 7.2, 3.1 और 1.0 हैं, और cosine 0.79, 0.75 और 0.82। दोनों जोड़ें, तो dense का पहला passage E2 किस rank पर आएगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>तीसरे rank पर, सबसे नीचे। हिसाब नीचे की table में है।</p>
+    </details>
+  </div>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">BM25 score</th><th class="numh">Cosine</th><th class="numh">सीधा जोड़</th></tr></thead>
+    <tbody>
+      <tr><td>E1</td><td class="num">7.2</td><td class="num">0.79</td><td class="num">7.99</td></tr>
+      <tr><td>E3 (गलत)</td><td class="num">3.1</td><td class="num">0.75</td><td class="num">3.85</td></tr>
+      <tr class="hi"><td>E2</td><td class="num">1.0</td><td class="num">0.82</td><td class="num">1.82</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>जोड़ के बाद क्रम E1, E3, E2 है, यानी ठीक BM25 वाला। इसकी वजह दोनों scores का पैमाना है। Cosine 0.75 से 0.82 तक फैला है, यानी सिर्फ़ 0.07, और BM25 1.0 से 7.2 तक, यानी 6.2।</p>
+
+  <p><b>BM25 का फैलाव cosine से करीब 90 गुना है, इसलिए जोड़ में cosine का असर लगभग गायब हो जाता है।</b> Cosine हमेशा −1 और 1 के बीच रहता है, जबकि BM25 की कोई ऊपरी हद नहीं है। BM25 को किसी number से भाग दे सकते हैं, लेकिन वो number हर corpus पर अलग होगा, और उसे हर बार ढूँढना पड़ेगा।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="rrf">
+  <h3><span class="cn">3</span>Reciprocal rank fusion: scores की जगह ranks मिलाना</h3>
+
+  <p>Scores के पैमाने अलग हैं, लेकिन ranks का पैमाना हर retriever में एक है: पहला, दूसरा, तीसरा। <b>Reciprocal rank fusion, यानी RRF, हर list में passage के rank से 1 ÷ (60 + rank) बनाता है, और सारी lists के ये numbers जोड़ता है।</b> फिर passages इसी जोड़ के क्रम में लगते हैं।</p>
+
+  <p>E1 BM25 की list में rank 1 पर है, तो उसे 1 ÷ (60 + 1) = 1 ÷ 61 = 0.01639 मिलता है, यानी करीब 0.0164। Dense की list में वो rank 2 पर है, तो 1 ÷ 62 = 0.01613। E1 का RRF इनका जोड़ है: 0.01639 + 0.01613 = 0.03252।</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>BM25 से</th><th>Dense से</th><th class="numh">जोड़</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>E1</td><td>1 ÷ (60 + 1) = 0.01639</td><td>1 ÷ (60 + 2) = 0.01613</td><td class="num">0.03252</td></tr>
+      <tr class="hi"><td>E2</td><td>1 ÷ (60 + 3) = 0.01587</td><td>1 ÷ (60 + 1) = 0.01639</td><td class="num">0.03227</td></tr>
+      <tr><td>E3 (गलत)</td><td>1 ÷ (60 + 2) = 0.01613</td><td>1 ÷ (60 + 3) = 0.01587</td><td class="num">0.03200</td></tr>
+    </tbody>
+  </table></div>
+  <p>नया क्रम E1, E2, E3 है। दोनों सही passages ऊपर आ गए, और E3 नीचे गया, क्योंकि वो किसी list में सबसे ऊपर नहीं था।</p>
+
+  <p>तीनों जोड़ पास-पास हैं, और इसकी वजह fraction का बर्ताव है। 1 ÷ (60 + rank) का नीचे वाला हिस्सा बढ़े, तो fraction घटता है। लेकिन 61 से 62 होने पर नीचे वाला हिस्सा सिर्फ़ 1.6% बढ़ता है, इसलिए fraction भी करीब 1.6% ही घटता है। <b>इसलिए RRF के numbers पास-पास रहते हैं, और उनमें सिर्फ़ क्रम काम का है।</b></p>
+
+  <p>Stanford की slide यही हिसाब एक formula में लिखती है:</p>
+  <div class="formula">RRF(d) = <span class="sum"><span class="op">∑</span><span class="lim"><i>r</i> ∈ <i>R</i></span></span> <span class="frac"><span>1</span><span><i>k</i> + rank<sub><i>r</i></sub>(d)</span></span>, &nbsp; <i>k</i> = 60</div>
+  <dl class="sym">
+    <dt>d</dt><dd>एक passage, जैसे E1।</dd>
+    <dt><i>R</i></dt><dd>Retrievers का set, यहाँ {BM25, dense}। <button class="def" data-w="w-sigma">∑</button> के नीचे <i>r</i> ∈ <i>R</i> का मतलब है: R के हर retriever r का जोड़।</dd>
+    <dt>rank<sub><i>r</i></sub>(d)</dt><dd>Retriever r की list में d का rank। E1 के लिए BM25 में 1, और dense में 2। जिस list में d नहीं है, वहाँ से कुछ नहीं जुड़ता।</dd>
+    <dt><i>k</i></dt><dd>एक तय number, 60। ये top-k वाला k नहीं है।</dd>
+  </dl>
+
+  <figure class="slide">
+    <a href="img/slide-p49.png"><img src="img/slide-p49.png" alt="Stanford slide: Hybrid Search and Reciprocal Rank Fusion" loading="lazy"></a>
+    <figcaption>Stanford की slide: Hybrid Search and Reciprocal Rank Fusion। पहली line पड़ाव 1 है, दूसरी पड़ाव 2, और नीचे RRF का formula। छोटी line कहती है कि RRF को हर corpus पर tuning नहीं चाहिए, और वो कितने भी retrievers के साथ चलता है। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <h4 class="sub" id="whyk">k = 60 का काम</h4>
+
+  <p><b>k = 60 rank 1 और rank 2 का फ़र्क छोटा कर देता है, इसलिए किसी एक list का rank 1 अकेले फ़ैसला नहीं करता।</b> k = 0 पर rank 1 को 1 मिलता, और rank 2 को 0.5, यानी आधा। k = 60 पर दोनों को 0.01639 और 0.01613 मिलते हैं।</p>
+
+  <p>मान लीजिए passage A सिर्फ़ BM25 की list में है, rank 1 पर, और B दोनों lists में rank 3 पर: <span class="mine">मेरा example</span></p>
+  <ul class="plain">
+    <li>k = 0 पर A को 1 ÷ 1 = 1 मिलता है, और B को 1 ÷ 3 + 1 ÷ 3 = 0.667। A जीतता है।</li>
+    <li>k = 60 पर A को 1 ÷ 61 = 0.0164 मिलता है, और B को 1 ÷ 63 + 1 ÷ 63 = 0.0317। B जीतता है।</li>
+  </ul>
+  <p>मतलब k = 60 पर वो passage जीतता है, जिसे दोनों retrievers ऊपर के आस-पास रखते हैं।</p>
+
+  <div class="widget" id="fw">
+    <h4>k खुद बदलिए</h4>
+    <p class="hint">A एक list में rank 1 पर है, और B दोनों lists में rank r पर। k और r बदलकर देखिए कि B कब तक आगे रहता है।</p>
+    <div class="ctl">
+      <label for="fw-k">k</label><input id="fw-k" type="range" min="0" max="100" step="1" value="60"><output id="fw-ko">60</output>
+      <label for="fw-r">B का rank r</label><input id="fw-r" type="range" min="1" max="100" step="1" value="3"><output id="fw-ro">3</output>
+    </div>
+    <div class="btns">
+      <button type="button" data-s="0,3">k = 0, r = 3</button>
+      <button type="button" data-s="60,3">k = 60, r = 3</button>
+      <button type="button" data-s="60,20">k = 60, r = 20</button>
+      <button type="button" data-s="60,61">k = 60, r = 61</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th>हिसाब</th><th class="numh">RRF</th></tr></thead>
+      <tbody id="fw-body"></tbody>
+    </table></div>
+    <p class="out" id="fw-out"></p>
+  </div>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p><a href="06-rag-pipeline.html#post">Lesson 6</a> में original query की list थी: queue log, forum post, office hours page। Rewrite की हुई query की list थी: office hours page, queue log। RRF से क्रम क्या बनता है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Queue log: 1 ÷ 61 + 1 ÷ 62 = 0.03252। Office hours page: 1 ÷ 63 + 1 ÷ 61 = 0.03227। Forum post सिर्फ़ पहली list में है: 1 ÷ 62 = 0.01613। क्रम <b>queue log, office hours page, forum post</b> है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">RRF की कीमत ये है कि वो score की ताकत भूल जाता है। E1 का BM25 score 7.2 हो या 70, rank 1 दोनों बार 1 ÷ 61 ही देता है।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="cross">
+  <h3><span class="cn">4</span>Cross-encoder: query और passage को साथ पढ़ना</h3>
+
+  <p>RRF की list में E1 और E2 सिर्फ़ इसलिए ऊपर हैं कि दोनों retrievers सहमत थे। किसी ने query और passage को साथ नहीं पढ़ा। <button class="def" data-w="w-biencoder">Bi-encoder</button> में passage का vector सवाल आने से पहले बन जाता है, और दोनों सिर्फ़ आख़िरी dot product पर मिलते हैं।</p>
+
+  <p><b>Cross-encoder query और passage को जोड़कर एक ही text की तरह एक model में डालता है, और उस जोड़ी का सीधा एक score देता है।</b> ये model आम तौर पर <button class="def" data-w="w-bert">BERT</button> जैसा encoder होता है।</p>
+
+  <h4 class="sub" id="attention">Attention: हर token दूसरे tokens से अपना vector बदलता है</h4>
+
+  <p>Encoder हर <button class="def" data-w="w-token">token</button> का एक vector बनाता है, और फिर उसे कई बार बदलता है। <b>Attention में हर token बाकी tokens के vectors का वज़न वाला औसत लेकर अपना नया vector बनाता है।</b> वज़न वाले औसत में हर vector को उसके वज़न से गुणा करके जोड़ते हैं, और वज़नों का जोड़ 1 होता है।</p>
+
+  <p>Cross-encoder में query के tokens passage के tokens को भी देखते हैं, और Stanford की slide इसे full attention across both कहती है। नीचे हर vector में 2 numbers हैं: पहला बताता है कि token गिनती वाले data की तरफ़ कितना है, और दूसरा राय की तरफ़ कितना। <span class="mine">numbers मेरे बनाए हैं</span></p>
+
+  <p>Query का token crowded शुरू में [0.5, 0.5] है। Query को queue log के साथ जोड़ें, तो crowded 0.6 वज़न queue log के averaged [1.0, 0.0] को देता है, और 0.4 खुद को:</p>
+  <ol class="plain">
+    <li>पहला number: 0.6 × 1.0 + 0.4 × 0.5 = 0.6 + 0.2 = 0.8।</li>
+    <li>दूसरा number: 0.6 × 0.0 + 0.4 × 0.5 = 0 + 0.2 = 0.2।</li>
+  </ol>
+  <p>Forum post के साथ वही 0.6 वज़न usually [0.0, 1.0] को जाता है, और crowded [0.2, 0.8] बनता है। <b>मतलब query के उसी token का vector हर passage के साथ अलग बनता है।</b> Bi-encoder में attention सिर्फ़ query के अंदर चलता है, इसलिए वहाँ crowded का vector हर passage के लिए एक ही रहता है।</p>
+
+  <p>आख़िर में model पूरी जोड़ी की बात एक vector में समेटकर एक score बनाता है। <a href="06-rag-pipeline.html#post">Lesson 6</a> के reranker ने least crowded वाले सवाल पर queue log को 0.92 दिया, office hours page को 0.41, और forum post को 0.35। Retriever ने queue log और forum post को बराबर 2 दिया था। <span class="mine">lesson 6 के मेरे बनाए scores</span></p>
+
+  <figure class="slide">
+    <a href="img/slide-p50.png"><img src="img/slide-p50.png" alt="Stanford slide: Cross-Encoders and Reranking, bi-encoder और cross-encoder के diagrams" loading="lazy"></a>
+    <figcaption>Stanford की slide: Cross-Encoders and Reranking। बाईं तरफ़ bi-encoder में query (In<sub>x</sub>) और passage (In<sub>y</sub>) अलग encoders से गुज़रते हैं। दाईं तरफ़ cross-encoder में दोनों एक ही Encoder में साथ जाते हैं।</figcaption>
+  </figure>
+
+  <h4 class="sub" id="price">कीमत: पहले से कुछ नहीं बन सकता</h4>
+
+  <p>Cross-encoder का हर vector query पर टिका है, इसलिए passage का कुछ भी सवाल आने से पहले नहीं बन सकता। हर query पर उसे हर passage के साथ पूरा model चलाना पड़ता है, जबकि bi-encoder में model हर query पर 1 बार चलता था।</p>
+
+  <p>Stanford की slide के मुताबिक BERT-base वाला cross-encoder 1,000 passages पर 10,700 ms लेता है, यानी एक passage पर 10.7 ms। BERT-base, BERT का छोटा version है। <a href="02-retrieval.html">Lesson 2</a> की company के 60,000 passages पर एक query के 60,000 × 10.7 ms = 642 seconds लगेंगे, यानी करीब 11 minute।</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="rerank">
+  <h3><span class="cn">5</span>Shortlist पर reranking</h3>
+
+  <p>Retriever तेज़ है लेकिन passage को मोटे तौर पर देखता है, और cross-encoder सटीक है लेकिन धीमा। <b>इसलिए पहले तेज़ retriever ऊपर के कुछ passages निकालता है, जैसे top-100, और फिर cross-encoder सिर्फ़ उन्हीं को दोबारा score देकर sort करता है।</b> इस छोटी list को <b class="term">shortlist</b> कहते हैं, और दूसरे step को <b class="term">reranking</b>।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Step</th><th>किस पर</th><th>समय</th></tr></thead>
+    <tbody>
+      <tr><td>1. BM25 और dense, फिर RRF</td><td>पूरा corpus</td><td>BM25 62 ms<span class="sub">dense दसियों ms, Stanford की slide से</span></td></tr>
+      <tr><td>2. Cross-encoder से reranking</td><td>Top-100 shortlist</td><td>100 × 10.7 = 1,070 ms</td></tr>
+      <tr><td>3. LLM के prompt में</td><td>Rerank के बाद top-5</td><td>–</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>पूरे corpus पर 642 seconds लगते, और shortlist पर करीब 1 second। Accuracy का फ़ायदा Stanford की एक table दिखाती है। उसका data MS MARCO है: Bing search के असली सवाल, और करीब 88 लाख passages। <span class="mine">MS MARCO का परिचय paper से</span></p>
+
+  <p>वहाँ BM25 अकेला <button class="def" data-w="w-mrr">MRR@10</button> 16.7 देता है। Lesson 13 में ये पहले सही passage के rank का उल्टा था, जैसे rank 2 पर 0.5। Table इसे 100 से गुणा करके लिखती है। BM25 के top-1,000 को BERT-base cross-encoder से rerank करें, तो MRR@10 34.7 हो जाता है। <b>यानी reranking से MRR@10 करीब दोगुना होता है: 34.7 ÷ 16.7 = 2.08।</b> <span class="mine">BM25 के top-1,000 वाली बात paper से</span></p>
+
+  <p>Reranker की एक हद है: वो सिर्फ़ shortlist का क्रम बदलता है, और जो passage उसमें नहीं है, उसे नहीं ला सकता। ये <a href="02-retrieval.html#recall-ceiling">lesson 2</a> वाली <button class="def" data-w="w-ceiling">recall ceiling</button> है। 100 में से 60 सवालों की shortlist में सही passage हो, तो reranker भी 60 से ऊपर नहीं जाता।</p>
+
+  <p>इसलिए पहले step का recall ऊँचा होना चाहिए, और hybrid search यही करता है: E1 और E2, दोनों shortlist में पहुँचते हैं।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>हर query के लिए 500 ms का budget है। Retriever 50 ms लेता है, और cross-encoder एक passage पर 10.7 ms। Shortlist में ज़्यादा से ज़्यादा कितने passages रख सकते हैं?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Reranking के लिए 500 − 50 = 450 ms बचते हैं। 450 ÷ 10.7 = 42.06, यानी <b>42 passages</b>।</p>
+    </details>
+  </div>
+
+  <div class="deeper">
+    <h2>गहरे version में और क्या है</h2>
+    <p>गहरे version में ये पूरा lesson है, और उसके बाद Stanford के level वाले 5 पड़ाव:</p>
+    <ul class="plain">
+      <li>पड़ाव 6: RRF का गणित: अलग k पर 1 ÷ (k + rank), और RRF paper का k वाला experiment।</li>
+      <li>पड़ाव 7: Min-max normalisation, उसकी कमज़ोरी, और DPR paper का BM25 + DPR जोड़।</li>
+      <li>पड़ाव 8: Cross-encoder अंदर से: attention के वज़न, score से probability, और training का loss।</li>
+      <li>पड़ाव 9: कीमत का हिसाब: N बार model बनाम एक बार, FLOPs, और असली recall ceiling।</li>
+      <li>पड़ाव 10: Stanford की पाँच slides, जिन्हें आप खुद पढ़ते हैं।</li>
+    </ul>
+    <p><a href="14-hybrid-rerank-dense.html">गहरा version खोलिए</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>BM25 paraphrase चूकता है, और dense retriever rare literals। Hybrid search दोनों चलाकर उनकी lists मिलाता है।</li>
+    <li>Scores के पैमाने अलग हैं, इसलिए RRF सिर्फ़ ranks मिलाता है: हर list से 1 ÷ (60 + rank), फिर जोड़। k = 60 पर वो passage जीतता है, जिसे दोनों lists ऊपर रखती हैं।</li>
+    <li>Cross-encoder query और passage को साथ पढ़ता है, इसलिए सटीक है, लेकिन हर passage पर पूरा चलता है। इसलिए वो सिर्फ़ shortlist को rerank करता है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-paraphrase">Paraphrase</dt><dd>वही बात अलग शब्दों में। जैसे upload failed और upload keeps failing। BM25 इसे चूकता है, क्योंकि वो एक जैसे शब्द गिनता है।</dd>
+    <dt id="w-literal">Literal</dt><dd>ऐसा text, जो हूबहू मिलना चाहिए, जैसे error code E-4012 या order ID A77-310। Dense retriever इसे चूक सकता है, और BM25 इसे rare शब्द मानकर पकड़ता है।</dd>
+    <dt id="w-hybrid">Hybrid search</dt><dd>दोनों retrievers, शब्दों वाला और dense, चलाकर उनकी lists मिलाना। जैसे BM25 की E1, E3, E2 और dense की E2, E1, E3 से एक list बनाना।</dd>
+    <dt id="w-rrf">Reciprocal rank fusion (RRF)</dt><dd>हर list में passage के rank से 1 ÷ (k + rank), फिर सारी lists का जोड़, जहाँ k = 60। जैसे E1: 1 ÷ 61 + 1 ÷ 62 = 0.03252।</dd>
+    <dt id="w-attention">Attention</dt><dd>हर token बाकी tokens के vectors का वज़न वाला औसत लेकर अपना नया vector बनाता है, और वज़नों का जोड़ 1 होता है। जैसे crowded [0.5, 0.5] averaged [1.0, 0.0] को 0.6 वज़न दे, तो [0.8, 0.2] बनता है।</dd>
+    <dt id="w-crossenc">Cross-encoder</dt><dd>Query और passage को जोड़कर एक model में डालने वाला reranker, जो जोड़ी का सीधा score देता है। ये हर passage पर पूरा चलता है, जैसे BERT-base में 10.7 ms per passage।</dd>
+    <dt id="w-reranking">Reranking</dt><dd>तेज़ retriever की shortlist को सटीक model से दोबारा score देकर sort करना। जैसे MS MARCO पर MRR@10 BM25 अकेले 16.7, और BERT-base से rerank के बाद 34.7।</dd>
+    <dt id="w-shortlist">Shortlist</dt><dd>Retriever के ऊपर के कुछ passages, जिन पर reranker चलता है। जैसे 60,000 passages में से top-100, जिन पर cross-encoder 1,070 ms लेता है।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="13-metrics.html">पिछला: Lesson 13</a>
+    <a href="15-colbert.html">अगला: Lesson 15, ColBERT</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Cross-encoder का diagram: Humeau et al., 2020, “Poly-encoders”। MS MARCO की table: Khattab and Zaharia, 2020, “ColBERT”। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var kIn = document.getElementById("fw-k"), rIn = document.getElementById("fw-r");
+  var btns = document.querySelectorAll("#fw .btns button");
+  function f(x) { return x.toFixed(5); }
+  function render() {
+    var k = Number(kIn.value), r = Number(rIn.value);
+    document.getElementById("fw-ko").textContent = k;
+    document.getElementById("fw-ro").textContent = r;
+    var a = 1 / (k + 1), b = 2 / (k + r);
+    document.getElementById("fw-body").innerHTML =
+      '<tr class="' + (a > b ? "hi" : "") + '"><td><b>A</b>, एक list में rank 1</td><td>1 ÷ (' + k + ' + 1)</td><td class="num">' + f(a) + "</td></tr>" +
+      '<tr class="' + (b > a ? "hi" : "") + '"><td><b>B</b>, दोनों lists में rank ' + r + "</td><td>2 × 1 ÷ (" + k + " + " + r + ')</td><td class="num">' + f(b) + "</td></tr>";
+    var win = Math.abs(a - b) < 1e-12 ? "दोनों बराबर हैं" : (b > a ? "B आगे है" : "A आगे है");
+    document.getElementById("fw-out").innerHTML = "<b>" + win + "।</b> k = " + k + " पर B तभी आगे रहता है, जब r ज़्यादा से ज़्यादा " + (k + 1) + " हो।";
+    var key = k + "," + r;
+    btns.forEach(function (bt) { bt.setAttribute("aria-pressed", bt.dataset.s === key ? "true" : "false"); });
+  }
+  kIn.addEventListener("input", render);
+  rIn.addEventListener("input", render);
+  btns.forEach(function (bt) { bt.addEventListener("click", function () { var v = bt.dataset.s.split(","); kIn.value = v[0]; rIn.value = v[1]; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

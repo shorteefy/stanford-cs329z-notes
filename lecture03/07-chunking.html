@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="40 pages का syllabus हर 50 tokens पर कटा, तो milestone की तारीख दो chunks में टूट गई। न काटें, तो पूरे syllabus के एक vector में milestone की 2 lines घुल जाती हैं।">
+<title>Lesson 7: Chunking</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .chunks { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 18px; }
+  .chunk { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 12px; font-family: var(--mono); font-size: 14.5px; line-height: 1.6; overflow-wrap: anywhere; }
+  .chunk.ok { border-color: var(--accent); }
+  .chunk .cid { font-family: var(--sans); font-size: 12.5px; color: var(--muted); display: block; }
+  .chunk .ov { background: var(--panel); border-radius: 3px; }
+  .chunk .fact { text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  .widget .chunks { margin-bottom: 0; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 7 / 18 · <b>आसान</b> · <a href="07-chunking-dense.html">गहरा</a> · <a href="07-chunking-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 7 · आसान version</p>
+  <h1>Chunking: document को retrieval के टुकड़ों में काटना</h1>
+  <p class="lede"><b>Chunking का मतलब है लंबे document को छोटे टुकड़ों में काटना, ताकि retriever हर टुकड़े का एक vector बनाकर index में रख सके।</b> इन टुकड़ों को chunk कहते हैं। Retriever यही chunks ढूँढता और लौटाता है, इसलिए Stanford की slide chunk को retrieval की basic unit कहती है।</p>
+  <p class="lede"><a href="02-retrieval.html">Lesson 2</a> में सवाल <q>when is the project milestone due</q> का जवाब syllabus वाले passage में था: Week 6, Thursday 11:59pm। वो passage हमें पहले से कटा हुआ मिला था, लेकिन असली syllabus 40 pages का है। <a href="06-rag-pipeline.html#naive">Lesson 6</a> की pipeline में index बनाने का पहला step उसे काटना है। हर 50 tokens पर काटिए, तो एक chunk <q>…due Week 6, Thursday</q> पर ख़त्म होता है, और <q>11:59pm.</q> अगले chunk में चला जाता है। काटें ही नहीं, तो 40 pages के एक vector में milestone की 2 lines घुल जाती हैं।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 4 पड़ाव हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#kinds">Chunk का vector: tokens के vectors का औसत</a><span class="can">Mean pooling से chunk का vector हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#size">Chunk का size: छोटा context खोता है, बड़ा औसत में घुलता है</a><span class="can">दिखा पाएँगे कि बड़ा chunk सही बात रखकर भी पीछे क्यों जाता है।</span></li>
+      <li><a href="#overlap">Overlap और stride: boundary पर कटी बात बचाना</a><span class="can">किसी बात को बचाने लायक सबसे कम overlap गिन पाएँगे।</span></li>
+      <li><a href="#strategies">मतलब से काटना: headings, metadata और LLM</a><span class="can">Stanford की दोनों chunking slides पढ़ पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="01-how-llms-answer.html#token">Lesson 1</a> (token), <a href="03-vectors.html#cosine">Lesson 3</a> (vector, embedding, cosine) और <a href="06-rag-pipeline.html#naive">Lesson 6</a> (indexing time)। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="kinds">
+  <h3><span class="cn">1</span>Chunk का vector: tokens के vectors का औसत</h3>
+
+  <p><b>Retrieval को हर chunk का एक vector चाहिए, और ये vector अक्सर chunk के सारे tokens के vectors का औसत होता है।</b> Index हर chunk का यही एक vector रखता है। सवाल आने पर retriever सवाल के vector का हर chunk के vector से <button class="def" data-w="w-cosine">cosine</button> निकालता है, और सबसे बड़े cosine वाले chunks लौटाता है। Lesson 2 के छहों passages भी असल में chunks ही थे।</p>
+
+  <p>पहले देखिए कि tokens के vectors कहाँ से आते हैं। <button class="def" data-w="w-encoder">Encoder</button> हर <button class="def" data-w="w-token">token</button> का अलग vector बनाता है, और उस vector पर आस-पास के शब्दों का भी असर होता है। इसे <b class="term">contextual embedding</b> कहते हैं।</p>
+
+  <p>जैसे late शब्द दो sentences में आता है: <q>Late days may not be applied</q> और <q>late afternoon office hours</q>। मान लीजिए vector का पहला number office hours वाली बात दिखाता है, और दूसरा deadline वाली बात। तब contextual embedding में late के दो अलग vectors बनते हैं। पुराने <b class="term">static word embeddings</b>, जैसे word2vec, हर <b class="term">word type</b> का एक ही vector रखते थे। Word type यानी dictionary का एक शब्द, sentence कोई भी हो। <span class="mine">numbers मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Sentence</th><th>Static: late का vector</th><th>Contextual: late का vector</th></tr></thead>
+    <tbody>
+      <tr><td>Late days may not be applied</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.1, 0.9]</td></tr>
+      <tr><td>late afternoon office hours</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.9, 0.1]</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>अब पूरे chunk का एक vector चाहिए, जिसे <b class="term">passage embedding</b> कहते हैं। सबसे आम तरीका है chunk के सारे token vectors का औसत लेना: हर column के numbers जोड़िए, और tokens की गिनती से भाग दीजिए। इसे <b class="term">mean pooling</b> कहते हैं। तीन tokens वाला एक छोटा chunk लीजिए: <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th>Vector</th></tr></thead>
+    <tbody>
+      <tr><td>Office</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>hours</td><td class="mono">[0.7, 0.3]</td></tr>
+      <tr><td>Tuesday</td><td class="mono">[0.8, 0.2]</td></tr>
+      <tr class="total"><td>Mean pooling: हर column का औसत</td><td class="mono">[0.8, 0.2]</td></tr>
+    </tbody>
+  </table></div>
+  <ol class="plain">
+    <li>पहला column: 0.9 + 0.7 + 0.8 = 2.4, और 2.4 ÷ 3 = 0.8।</li>
+    <li>दूसरा column: 0.1 + 0.3 + 0.2 = 0.6, और 0.6 ÷ 3 = 0.2।</li>
+  </ol>
+  <p>तीनों tokens office hours की तरफ़ थे, इसलिए chunk का vector [0.8, 0.2] भी उसी तरफ़ है। Mean pooling हर token को बराबर वज़न देती है, और पड़ाव 2 में यही बात बड़े chunk को नुकसान पहुँचाती है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Chunk में एक token और जोड़िए: 4pm, जिसका vector [0.8, 0.2] है। अब chunk का vector क्या होगा, और उसमें कितने numbers होंगे?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>[0.8, 0.2], और उसमें अब भी 2 numbers हैं। पहला column: (0.9 + 0.7 + 0.8 + 0.8) ÷ 4 = 3.2 ÷ 4 = 0.8। दूसरा: (0.1 + 0.3 + 0.2 + 0.2) ÷ 4 = 0.8 ÷ 4 = 0.2। Tokens 3 हों या 300, औसत में numbers उतने ही रहते हैं, जितने हर token के vector में हैं। इसलिए हर chunk के vector में numbers की गिनती बराबर रहती है, और index सबकी तुलना कर पाता है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Stanford की embeddings वाली slide यही बात कहती है। उसकी table में पाँच तरह के embeddings हैं, और ऊपर के तीन आपने अभी देखे: static word, contextual और passage। बाकी दो, <button class="def" data-w="w-multimodal">multimodal</button> और <button class="def" data-w="w-graphemb">graph</button>, image और network के vectors हैं। Slide की आख़िरी line retrieval की दो ज़रूरतें बताती है। पहली, हर chunk का एक vector, जिसकी <button class="def" data-w="w-dimension">dimension</button> तय हो। दूसरी, तुलना का एक तरीका, cosine या inner product।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p23.png"><img src="img/slide-p23.png" alt="Stanford slide: What Makes A Good Retriever? Embeddings, पाँच तरह के embeddings की table" loading="lazy"></a>
+    <figcaption>Stanford की slide: What Makes A Good Retriever? Embeddings। Passage वाली row में एक vector एक chunk का है, और ये lesson उसी chunk के बारे में है। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="size">
+  <h3><span class="cn">2</span>Chunk का size: छोटा context खोता है, बड़ा औसत में घुलता है</h3>
+
+  <p><b>बड़ा chunk कई विषयों का औसत बन जाता है, और छोटा chunk अपना context खो देता है।</b> इसलिए chunk का size इन दो उल्टी दिक्कतों के बीच का फ़ैसला है, और Stanford की slide दोनों गिनाती है।</p>
+
+  <h4 class="sub" id="big">बड़ा chunk: विषय औसत में घुल जाते हैं</h4>
+
+  <p>मान लीजिए office hours वाली बात का vector [1, 0] है, और deadline वाली बात का [0, 1]। एक बड़े chunk में दोनों बातें बराबर हों, तो mean pooling का औसत [0.5, 0.5] बनता है। Query <q>office hours</q> का vector [1, 0] है। <span class="mine">मेरा example</span></p>
+
+  <p>Lesson 3 वाला cosine दो vectors का dot product है, जिसे दोनों की <button class="def" data-w="w-length">length</button> के गुणा से भाग देते हैं। सिर्फ़ office hours वाले छोटे chunk [1, 0] का query से cosine 1 है, क्योंकि दोनों एक ही दिशा में हैं। बड़े chunk का cosine तीन steps में निकलता है:</p>
+  <ol class="plain">
+    <li>Dot product: 1 × 0.5 + 0 × 0.5 = 0.5।</li>
+    <li>Length: query की length 1 है, और [0.5, 0.5] की √(0.5² + 0.5²) = √0.5 = 0.707। √ यानी square root, वो number जिसे खुद से गुणा करने पर अंदर वाला number मिले। जाँच: 0.707 × 0.707 = 0.5।</li>
+    <li>Cosine: 0.5 ÷ (1 × 0.707) = 0.71।</li>
+  </ol>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Chunk</th><th>Vector</th><th class="numh">Query से cosine</th></tr></thead>
+    <tbody>
+      <tr><td>सिर्फ़ office hours वाला छोटा chunk</td><td class="mono">[1, 0]</td><td class="num">1.00</td></tr>
+      <tr class="hi"><td>Office hours और deadlines, दोनों वाला बड़ा chunk</td><td class="mono">[0.5, 0.5]</td><td class="num">0.71</td></tr>
+    </tbody>
+  </table></div>
+  <p>बड़े chunk में सही बात मौजूद है, फिर भी उसका cosine 1.00 से 0.71 पर गिर गया, क्योंकि deadline वाला विषय औसत में मिल गया। अब कोई दूसरा chunk, जिसका cosine 0.8 है, इससे ऊपर आ जाएगा। 40 pages के syllabus में office hours, deadlines, grading और project, सब हैं, इसलिए वहाँ cosine और गिरता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>एक chunk में तीन विषय बराबर हैं: [1, 0, 0], [0, 1, 0] और [0, 0, 1]। Mean pooling का vector क्या होगा, और query [1, 0, 0] से उसका cosine कितना होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>औसत [1/3, 1/3, 1/3] है, और query से dot product 1/3। Length √(3 × 1/9) = √(1/3) = 0.577 है। Cosine = (1/3) ÷ (1 × 0.577) = <b>0.58</b>। दो विषयों पर 0.71 था, और तीन पर 0.58, यानी विषय जितने ज़्यादा, cosine उतना नीचे।</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="small" style="margin-top:28px">छोटा chunk: context छूट जाता है</h4>
+
+  <p>अब उल्टा कीजिए, और बहुत छोटे chunks बनाइए। Queue log में 19 शब्द हैं, और उसे 5-5 शब्दों के chunks में काटने पर ये 4 chunks बनते हैं:</p>
+  <div class="chunks">
+    <div class="chunk"><span class="cid">Chunk 1 · 5 शब्द</span><div>Queue log, last 3 weeks:</div></div>
+    <div class="chunk"><span class="cid">Chunk 2 · 5 शब्द</span><div>Tuesday 4pm office hour averaged</div></div>
+    <div class="chunk"><span class="cid">Chunk 3 · 5 शब्द</span><div>14 students waiting; Thursday 9am</div></div>
+    <div class="chunk"><span class="cid">Chunk 4 · 4 शब्द</span><div>office hour averaged 3.</div></div>
+  </div>
+  <p>चौथे chunk में 3 तो है, लेकिन ये नहीं लिखा कि ये किस दिन का office hour है। Thursday 9am तीसरे chunk में चला गया, इसलिए चौथे chunk का vector भी ये नहीं जानता। <a href="02-retrieval.html">Lesson 2</a> वाले सवाल <q>which office hour is least crowded</q> का जवाब अब किसी एक chunk में पूरा नहीं है।</p>
+
+  <p><b class="term">Fixed-size chunking</b> इन दोनों के बीच का रास्ता लेता है: हर chunk में tokens की एक तय गिनती। Stanford की slide इसके लिए 100 से 500 tokens का example देती है।</p>
+
+  <p><b>छोटे chunks बारीक सवालों के लिए अच्छे हैं, लेकिन अपना context खो देते हैं।</b> बड़े chunks को ज़्यादा context मिलता है, लेकिन उनका एक vector कई विषयों का औसत बन जाता है। <a href="08-contextual-retrieval.html">Lesson 8</a> छोटे chunk का खोया context लौटाता है, और <a href="09-raptor-graphrag.html">lesson 9</a> बड़े सवालों के लिए chunks के ऊपर summaries का ढाँचा बनाता है।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="overlap">
+  <h3><span class="cn">3</span>Overlap और stride: boundary पर कटी बात बचाना</h3>
+
+  <p><b>Overlap में हर नया chunk पिछले chunk के आख़िरी कुछ tokens दोहराकर शुरू होता है, ताकि boundary पर कटी बात पूरी बचे।</b> इसकी ज़रूरत इसलिए है, क्योंकि size कुछ भी चुनिए, कोई न कोई बात किसी boundary पर कटेगी। शुरू में 50 tokens पर milestone की तारीख ऐसे ही कटी थी। Stanford की slide 10 से 20% overlap की सलाह देती है।</p>
+
+  <p>दो लगातार chunks की शुरुआत के बीच की दूरी को <b class="term">stride</b> कहते हैं: stride = chunk size − overlap। Chunk size 9 और overlap 6 हो, तो stride 3 है, और chunks शब्द 0, 3, 6, 9, … पर शुरू होते हैं।</p>
+
+  <p>अब नीचे के widget में syllabus का शुरू वाला हिस्सा काटिए। यहाँ हर शब्द को एक token मानिए, और गिनती 0 से कीजिए। Milestone वाली बात, <q>milestone is due Week 6, Thursday 11:59pm.</q>, 7 शब्दों की है, और syllabus में शब्द 3 से शब्द 9 तक है। Chunk size 9 और overlap 0 पर पहला chunk शब्द 0 से 8 तक है, इसलिए 11:59pm. उससे छूट जाता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Chunk size 9 ही रखिए, और overlap 0 से 6 तक बढ़ाइए। किस overlap पर तारीख पहली बार किसी एक chunk में पूरी आएगी? पहले अंदाज़ा लगाइए, फिर widget में देखिए।</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>सिर्फ़ overlap 6 पर। तब stride 3 है, और दूसरा chunk शब्द 3 से 11 तक चलता है, जिसमें पूरी तारीख है। Overlap 1 से 5 तक कोई chunk शब्द 3 पर या उससे पहले शुरू होकर शब्द 9 तक नहीं पहुँचता।</p>
+    </details>
+  </div>
+
+  <div class="widget" id="cw">
+    <h4>Syllabus को chunks में काटिए</h4>
+    <p class="hint">Underline वाली बात, milestone की तारीख, किसी एक chunk में पूरी होनी चाहिए। हल्के background वाले शब्द overlap हैं।</p>
+    <div class="btns" id="cw-mode">
+      <button type="button" data-m="fixed">Fixed-size</button>
+      <button type="button" data-m="head">Headings पर काटिए</button>
+    </div>
+    <div class="btns" id="cw-pre">
+      <button type="button" data-p="9,0">Size 9, overlap 0</button>
+      <button type="button" data-p="9,6">Size 9, overlap 6</button>
+      <button type="button" data-p="10,0">Size 10, overlap 0</button>
+      <button type="button" data-p="20,0">Size 20, overlap 0</button>
+    </div>
+    <div class="ctl" id="cw-ctl">
+      <label for="cw-size">Chunk size (शब्द)</label><input id="cw-size" type="range" min="7" max="20" step="1" value="9"><output id="cw-so">9</output>
+      <label for="cw-ov">Overlap (शब्द)</label><input id="cw-ov" type="range" min="0" max="6" step="1" value="0"><output id="cw-oo">0</output>
+    </div>
+    <p class="out" id="cw-out" style="margin-top:0"></p>
+    <div class="chunks" id="cw-chunks"></div>
+  </div>
+
+  <h4 class="sub" id="rule">कितना overlap काफ़ी है</h4>
+
+  <p>Overlap 6 ही क्यों चाहिए, ये आप गिनकर देख सकते हैं। 9 शब्दों का chunk शब्द 3 से 9 तक की बात तभी पूरी रखता है, जब वो शब्द 1, 2 या 3 पर शुरू हो। Chunks 0, stride, 2 × stride, … पर शुरू होते हैं। इन 3 जगहों में कोई शुरुआत तभी पक्की गिरती है, जब stride 3 या कम हो। Stride 4 पर शुरुआतें 0, 4, 8 हैं, और 1, 2, 3 तीनों छूट जाते हैं। Stride = 9 − overlap है, इसलिए overlap कम से कम 6 चाहिए।</p>
+
+  <p>यही गिनती हर size पर चलती है। Chunk size C हो और बात L शब्दों की, तो chunk के शुरू होने की C − L + 1 सही जगहें होती हैं। यहाँ ये 9 − 7 + 1 = 3 थीं। Stride, यानी C − overlap, इससे ज़्यादा न हो, तो यही नियम निकलता है: <span class="mine">ये नियम slide पर नहीं है, गिनती से निकलता है</span></p>
+  <div class="formula">overlap ≥ L − 1, और chunk size ≥ L</div>
+  <p>यहाँ L = 7, तो overlap कम से कम 6 चाहिए। Chunk ही बात से छोटा हो, तो कोई overlap बात को एक chunk में नहीं ला सकता।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Widget में chunk size 10 और overlap 0 कीजिए। तारीख पूरी दिखती है। क्या ये पक्का बचाव है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>नहीं, ये किस्मत है। पहला chunk शब्द 0 से 9 तक है, और तारीख ठीक शब्द 9 पर ख़त्म होती है। Syllabus की शुरुआत में एक शब्द और होता, तो 11:59pm. शब्द 10 पर जाता, और अगले chunk में चला जाता। L − 1 वाला overlap बात की जगह कहीं भी हो, उसे बचाता है।</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="cost" style="margin-top:28px">Overlap की कीमत</h4>
+
+  <p>Overlap मुफ़्त नहीं है, क्योंकि दोहराए गए tokens दो chunks में जाते हैं। 1,000 tokens के document को 50 tokens के chunks में काटिए, तो बिना overlap 1,000 ÷ 50 = 20 chunks बनते हैं। 10 tokens के overlap पर, यानी 20% पर, stride 40 है। तब chunks token 0, 40, …, 960 पर शुरू होते हैं, क्योंकि 960 वाला chunk document के अंत तक पहुँच जाता है। ये 960 ÷ 40 + 1 = 25 chunks हैं।</p>
+  <p><b>यानी 20% overlap पर 25% ज़्यादा embeddings बनाने और index में रखने पड़ते हैं।</b></p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="strategies">
+  <h3><span class="cn">4</span>मतलब से काटना: headings, metadata और LLM</h3>
+
+  <p><b>Semantic chunking text को वहाँ काटता है, जहाँ text खुद बँटा है, जैसे sentence या section के आख़िर में।</b> इसकी ज़रूरत इसलिए है, क्योंकि fixed-size chunking गिनती से काटता है, और text का ढाँचा नहीं देखता। Widget में chunk size 20 और overlap 0 कीजिए। दूसरा chunk <q>final report is due Week 10.</q> से शुरू होकर office hours वाली बात में चला जाता है, यानी एक chunk में दो विषय।</p>
+
+  <p>Syllabus के हर हिस्से की अपनी heading है: Grading, Office hours और Project। Headings पर काटना semantic chunking का सबसे सीधा रूप है। Widget में <q>Headings पर काटिए</q> दबाइए। Syllabus 3 chunks में बँटता है, जिनमें 26, 16 और 12 शब्द हैं, और हर chunk एक ही विषय का है। Chunks का size अब बराबर नहीं है, और यही इस तरीके की कीमत है।</p>
+
+  <p>छोटा chunk फिर भी अपना context खो सकता है। <q>Late days may not be applied to the milestone.</q> अकेले ये नहीं बताता कि बात किस course की है। <b class="term">Context-enriched chunking</b> इसके लिए हर chunk के साथ extra जानकारी रखता है, जैसे metadata या एक छोटी summary।</p>
+
+  <p><b class="term">Metadata</b> यानी data के बारे में data: document का नाम, section और तारीख। Context-enriched chunk कुछ ऐसा दिख सकता है: <span class="mine">मेरा example</span></p>
+  <div class="sentence">[Source: CS 329Z syllabus, section: Grading, updated: 30 Sep 2026]<br>Late days may not be applied to the milestone.</div>
+  <p>अब छोटा chunk भी बताता है कि वो किस course और किस section का है। <a href="08-contextual-retrieval.html">Lesson 8</a> इसी idea का सबसे असरदार रूप दिखाता है, जिसमें LLM हर chunk के लिए context लिखता है।</p>
+
+  <p>आख़िरी तरीका <b class="term">AI-driven dynamic chunking</b> है। ये LLM से पूछता है कि text में बात कहाँ बदलती है, और वहीं काटता है। ये headings न होने पर भी चलता है। लेकिन हर document को एक बार LLM से गुज़ारना पड़ता है, और उसमें समय और पैसा लगता है।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>तरीका</th><th>फ़ायदा</th><th>कीमत</th></tr></thead>
+    <tbody>
+      <tr><td>Fixed-size</td><td>आसान, हर chunk बराबर</td><td>बात बीच से टूट सकती है</td></tr>
+      <tr><td>Fixed-size + overlap</td><td>टूटी बात दूसरे chunk में पूरी</td><td>ज़्यादा chunks, दोहराई हुई बातें</td></tr>
+      <tr><td>Semantic, जैसे headings</td><td>हर chunk एक विषय का</td><td>Chunks का size ऊपर-नीचे होता है</td></tr>
+      <tr><td>Context-enriched</td><td>छोटे chunk को भी context मिलता है</td><td>Metadata या summary बनानी पड़ती है</td></tr>
+      <tr><td>AI-driven</td><td>बिना headings के भी मतलब वाली boundaries</td><td>हर document पर LLM calls, धीमा और महँगा</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>अब शुरू वाले सवाल पर लौटिए। Headings पर काटने से Grading वाले chunk में milestone की पूरी तारीख है, और उसमें एक ही विषय है। <b>यानी टूटी तारीख और घुला हुआ vector, दोनों दिक्कतें इस document पर एक साथ हल हो जाती हैं।</b> हर document में साफ़ headings नहीं होतीं, इसलिए बाकी तरीके भी काम आते हैं।</p>
+
+
+  <p style="margin-top:22px">अब आप Stanford की दोनों chunking slides पढ़ सकते हैं। पहली slide चारों तरीके गिनाती है, और दूसरी हमारे syllabus को तीन तरह से काटती है।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p24.png"><img src="img/slide-p24.png" alt="Stanford slide: Chunking: Basic Unit in Retrieval, चार तरह की chunking" loading="lazy"></a>
+    <figcaption>Stanford की slide: Chunking: Basic Unit in Retrieval। ऊपर fixed-size chunking और overlap हैं (पड़ाव 2 और 3), और नीचे बाकी तीन तरीके (पड़ाव 4)।</figcaption>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p25.png"><img src="img/slide-p25.png" alt="Stanford slide: Chunking: Same Text, Three Splits" loading="lazy"></a>
+    <figcaption>Stanford की slide: Chunking: Same Text, Three Splits। ऊपर हमारा syllabus है। नीचे बाएँ 50 tokens पर टूटी तारीख है, बीच में overlap से बची तारीख, और दाएँ headings पर कटा और साफ़ करके दोबारा लिखा chunk।</figcaption>
+  </figure>
+
+  <div class="deeper">
+    <h2>गहरे version में और क्या है</h2>
+    <p>गहरे version में ये पूरा lesson है, और उसके बाद 4 पड़ाव और, जो Stanford की slides के level तक ले जाते हैं:</p>
+    <ul class="plain">
+      <li>पड़ाव 5: mean pooling का गणित। k बराबर विषयों पर cosine 1/√k, और थोड़े हिस्से वाली बात का घुलना।</li>
+      <li>पड़ाव 6: overlap का पूरा हिसाब। कम overlap पर बात बचने का chance, slide की 10 से 20% वाली सलाह, और chunks गिनने का formula।</li>
+      <li>पड़ाव 7: तरीके अंदर से। Databricks guide की sizes, recursive splitting, sentence vectors से boundary, और LLM chunking की कीमत।</li>
+      <li>पड़ाव 8: Stanford की तीनों slides, जिन्हें आप खुद पढ़ते हैं।</li>
+    </ul>
+    <p><a href="07-chunking-dense.html">गहरा version खोलिए</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Retrieval को हर chunk का एक vector चाहिए, और ये अक्सर contextual token vectors का औसत होता है, यानी mean pooling। Tokens कितने भी हों, vector में numbers उतने ही रहते हैं।</li>
+    <li>छोटा chunk context खोता है, और बड़ा chunk कई विषयों का औसत बनकर cosine गिराता है, जैसे 1.00 से 0.71।</li>
+    <li>L tokens की बात बचाने के लिए overlap कम से कम L − 1 चाहिए, जैसे 7 शब्दों की तारीख के लिए 6। Headings पर काटने से बात टूटती ही नहीं, और metadata छोटे chunk को उसका context देता है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-wordtype">Word type और token in context</dt><dd>Dictionary का एक शब्द, और किसी sentence में उसका एक इस्तेमाल। जैसे late एक word type है, और <q>Late days may not be applied</q> में उसका इस्तेमाल एक token in context।</dd>
+    <dt id="w-static">Static word embedding</dt><dd>हर word type का एक ही vector, context कुछ भी हो। जैसे word2vec और GloVe। Late का vector दोनों sentences में [0.5, 0.5] रहता है। <span class="mine">मेरे numbers</span></dd>
+    <dt id="w-contextual">Contextual embedding</dt><dd>हर token का अपने sentence के हिसाब से अलग vector। जैसे BERT। <q>Late days may not be applied</q> में late [0.1, 0.9] है, और <q>late afternoon office hours</q> में [0.9, 0.1]। <span class="mine">मेरे numbers</span></dd>
+    <dt id="w-passageemb">Passage embedding</dt><dd>पूरे chunk का एक vector, जिसे retrieval का index रखता है। जैसे Sentence-BERT, DPR और E5 के vectors।</dd>
+    <dt id="w-multimodal">Multimodal embedding</dt><dd>Text और image, दोनों के vectors एक ही space में। जैसे CLIP। Whiteboard पर लिखे office hours की photo और text <q>office hours schedule</q> के vectors पास आ सकते हैं।</dd>
+    <dt id="w-graphemb">Graph embedding</dt><dd>किसी network के node या relation का vector। जैसे node2vec। Course के graph में TA, office hours, और उनके बीच का runs वाला relation।</dd>
+    <dt id="w-pooling">Mean pooling</dt><dd>कई token vectors का औसत लेकर एक vector बनाना। जैसे [0.9, 0.1], [0.7, 0.3] और [0.8, 0.2] का औसत [0.8, 0.2]।</dd>
+    <dt id="w-chunk">Chunk</dt><dd>Retrieval के लिए document का एक टुकड़ा, और retrieval की basic unit। जैसे 40 pages के syllabus का Grading वाला हिस्सा।</dd>
+    <dt id="w-fixed">Fixed-size chunking</dt><dd>तय गिनती के tokens पर काटना, चाहे बात बीच में टूटे। जैसे हर 50 tokens पर।</dd>
+    <dt id="w-chunkoverlap">Overlap</dt><dd>नया chunk पिछले chunk के आख़िरी कुछ tokens दोहराकर शुरू हो। L tokens की बात बचाने के लिए कम से कम L − 1। जैसे 7 शब्दों की तारीख के लिए 6।</dd>
+    <dt id="w-stride">Stride</dt><dd>दो लगातार chunks की शुरुआत के बीच की दूरी: chunk size − overlap। जैसे 9 − 6 = 3।</dd>
+    <dt id="w-semantic">Semantic chunking</dt><dd>Sentence या section जैसी logical boundaries पर काटना। जैसे syllabus को Grading, Office hours और Project वाली headings पर।</dd>
+    <dt id="w-enriched">Context-enriched chunking</dt><dd>हर chunk के साथ metadata या summary रखना। जैसे हर chunk के ऊपर <q>Source: CS 329Z syllabus, section: Grading</q>।</dd>
+    <dt id="w-metadata">Metadata</dt><dd>Data के बारे में data: नाम, section, तारीख। जैसे <q>CS 329Z syllabus, Grading, 30 Sep 2026</q>।</dd>
+    <dt id="w-aichunk">AI-driven dynamic chunking</dt><dd>LLM से पूछकर काटना कि text में बात कहाँ बदलती है। हर document पर LLM calls लगती हैं।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="06-rag-pipeline.html">पिछला: Lesson 6</a>
+    <a href="08-contextual-retrieval.html">अगला: Lesson 8, खोया context</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं।
+</footer>
+</main>
+
+<script src="glossary.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var L = { words: " शब्द", sep: "। ", stride: "Stride", whole: "Milestone की तारीख chunk {n} में <b>पूरी है</b>।", cut: "Milestone की तारीख <b>टूट गई</b>, किसी एक chunk में पूरी नहीं है।" };
+  var TEXT = "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10. Office hours. Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs. Project. Proposal due on Oct 9. Teams of 1-3 people are recommended.";
+  var W = TEXT.split(" ");
+  var FACT_A = 3, FACT_B = 9; /* "milestone ... 11:59pm." */
+  var HEADS = [[0, 25], [26, 41], [42, W.length - 1]];
+  var mode = "fixed";
+  var sizeIn = document.getElementById("cw-size"), ovIn = document.getElementById("cw-ov");
+  var so = document.getElementById("cw-so"), oo = document.getElementById("cw-oo");
+  var box = document.getElementById("cw-chunks"), out = document.getElementById("cw-out");
+  var ctl = document.getElementById("cw-ctl");
+  var modeBtns = document.querySelectorAll("#cw-mode button"), preBtns = document.querySelectorAll("#cw-pre button");
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function spans() {
+    if (mode === "head") return HEADS.map(function (h) { return { a: h[0], b: h[1], ov: -1 }; });
+    var C = Number(sizeIn.value), O = Math.min(Number(ovIn.value), C - 1), S = C - O, res = [];
+    for (var s = 0; ; s += S) {
+      var e = Math.min(s + C - 1, W.length - 1);
+      res.push({ a: s, b: e, ov: s === 0 ? -1 : Math.min(s + O - 1, e) });
+      if (e >= W.length - 1) break;
+    }
+    return res;
+  }
+  function render() {
+    so.textContent = sizeIn.value; oo.textContent = ovIn.value;
+    ctl.style.display = mode === "head" ? "none" : "";
+    modeBtns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.m === mode ? "true" : "false"); });
+    var key = sizeIn.value + "," + ovIn.value;
+    preBtns.forEach(function (b) { b.setAttribute("aria-pressed", mode === "fixed" && b.dataset.p === key ? "true" : "false"); });
+    var sp = spans(), found = -1;
+    box.innerHTML = sp.map(function (c, i) {
+      var ok = c.a <= FACT_A && c.b >= FACT_B;
+      if (ok && found < 0) found = i;
+      var html = "";
+      for (var k = c.a; k <= c.b; k++) {
+        var cls = [];
+        if (k <= c.ov) cls.push("ov");
+        if (k >= FACT_A && k <= FACT_B) cls.push("fact");
+        html += (k > c.a ? " " : "") + (cls.length ? '<span class="' + cls.join(" ") + '">' + esc(W[k]) + "</span>" : esc(W[k]));
+      }
+      return '<div class="chunk' + (ok ? " ok" : "") + '"><span class="cid">Chunk ' + (i + 1) + " · " + (c.b - c.a + 1) + L.words + "</span>" + html + "</div>";
+    }).join("");
+    var head = mode === "fixed" ? L.stride + " = " + sizeIn.value + " − " + ovIn.value + " = " + (sizeIn.value - ovIn.value) + " · " : "";
+    out.innerHTML = head + sp.length + " chunks" + L.sep + (found >= 0 ? L.whole.replace("{n}", found + 1) : L.cut);
+  }
+  sizeIn.addEventListener("input", render); ovIn.addEventListener("input", render);
+  modeBtns.forEach(function (b) { b.addEventListener("click", function () { mode = b.dataset.m; render(); }); });
+  preBtns.forEach(function (b) { b.addEventListener("click", function () { var v = b.dataset.p.split(","); mode = "fixed"; sizeIn.value = v[0]; ovIn.value = v[1]; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

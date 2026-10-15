@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Lesson 2's word overlap gave the queue log and the old forum post the same score of 2. Weighting each word by rarity, count and length breaks this tie, and at the end you read Stanford's BM25 slides yourself.">
+<title>Lesson 11: BM25 (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 11 / 18 · <a href="11-bm25-en.html">Easy</a> · <b>Dense</b> · <a href="11-bm25-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 11 · Dense version</p>
+  <h1>BM25: a score built from rare words, counts and length</h1>
+  <p class="lede"><b>BM25 is a retriever that gives a passage a weight for each word of the query. The sum of these weights is the passage's score.</b> Each weight comes from three things: how rare the word is in the whole corpus, how many times it appears in the passage, and how long the passage is. Stanford's slide calls it the most widely used retriever, even today.</p>
+  <p class="lede">The need for it showed up in <a href="02-retrieval-dense-en.html#retriever">lesson 2</a>. <button class="def" data-w="w-overlap">Word overlap</button> counts how many query words also appear in a passage. For the query <q>which office hour is least crowded</q> it gave two passages the same score of 2. One is the queue log, which holds the crowd data and the answer. The other is an old forum post from 2024, which holds only an opinion. This lesson adds BM25's three parts one at a time and checks the tie each time.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 10 steps. The first 5 are the same as in the easy version, and the Stanford level starts at step 6. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#idf">IDF: more weight for rare terms</a><span class="can">Compute IDF by hand, and say which way IDF alone breaks the tie.</span></li>
+      <li><a href="#tf">Term frequency and saturation</a><span class="can">Explain why a term that appears twice does not get twice the weight.</span></li>
+      <li><a href="#length">Length normalization</a><span class="can">Compute the average length and the length factor by hand.</span></li>
+      <li><a href="#bm25">All three parts in one formula</a><span class="can">Compute a BM25 score by hand, and read Stanford's BM25 slide.</span></li>
+      <li><a href="#index">The inverted index, and where BM25 fails</a><span class="can">Explain why BM25 is fast, and where it wins and fails.</span></li>
+      <li class="lvl">From here: the Stanford level</li>
+      <li value="6"><a href="#notation">Every symbol of the slide's formula</a><span class="can">Tie every symbol of both formulas to its number, and shrink a count by length by hand.</span></li>
+      <li><a href="#graphs">The edges of IDF, and both graphs on the slide</a><span class="can">Explain negative IDF, TF-IDF and both graphs with numbers, and where the 0.5 comes from.</span></li>
+      <li><a href="#tuning">Who picks k1 and b</a><span class="can">Explain how these knobs are chosen, and at which values the queue log comes out on top.</span></li>
+      <li><a href="#scale">BM25 at real scale</a><span class="can">Say what data the 62 ms was measured on, and write BM25 as a dot product of sparse vectors.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line of all four BM25 slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="02-retrieval-dense-en.html#retriever">Lesson 2</a> (corpus, word overlap, stopwords, score), <a href="03-vectors-dense-en.html#embedding">Lesson 3</a> (vector, dot product, embedding) and <a href="04-probability-tools-dense-en.html#loss">Lesson 4</a> (e and ln). If you already know a step, skip to the next one. If you get stuck, go back one step. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="idf">
+  <h3><span class="cn">1</span>IDF: more weight for rare terms</h3>
+
+  <p><b>IDF gives every word a weight, and the fewer passages a word appears in, the bigger its weight.</b> In search, each such word of the query is called a <b class="term">term</b>. <button class="def" data-w="w-stopwords">Stopwords</button> are very common words such as which and is, which are removed before counting. After removing them, our query has four terms left: office, hour, least and crowded.</p>
+
+  <p>Office appears in two passages, and least and crowded only in the forum post, yet word overlap counts all four the same. The number of passages a term appears in is called its <b class="term">document frequency</b>, written n. Our corpus has N = 6 passages, and milestone appears only in the syllabus, so n = 1. Its IDF takes three steps:</p>
+  <ol class="plain">
+    <li>Count the passages without the term and add 0.5: 6 − 1 + 0.5 = 5.5.</li>
+    <li>Count the passages with the term and add 0.5 as well: 1 + 0.5 = 1.5.</li>
+    <li>Divide the first number by the second, 5.5 ÷ 1.5 = 3.667, and take its ln: ln 3.667 = 1.299.</li>
+  </ol>
+  <p>The ratio in step 3 says how many passages lack the term for each passage that has it. The 0.5 is added so that the ratio still exists when a count is 0.</p>
+
+  <p>The <button class="def" data-w="w-ln">ln</button> in step 3 comes from lesson 4. ln x is the power you raise e = 2.718 to in order to get x. Check: e<sup>1.2993</sup> = 3.667, so ln 3.667 = 1.299. One rule will be useful below: ln 1 = 0, because e<sup>0</sup> = 1.</p>
+
+  <p>This weight is called <b class="term">IDF</b>, short for inverse document frequency: the smaller n is, the bigger the IDF. The formula holds the same three steps:</p>
+  <div class="formula">IDF = ln <span class="frac"><span>N − n + 0.5</span><span>n + 0.5</span></span></div>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Term, and the passages it is in</th><th class="numh">n</th><th>Arithmetic</th><th class="numh">IDF</th></tr></thead>
+    <tbody>
+      <tr><td>milestone<span class="sub">syllabus</span></td><td class="num">1</td><td>ln(5.5 ÷ 1.5)</td><td class="num">1.299</td></tr>
+      <tr><td>office<span class="sub">office hours page, queue log</span></td><td class="num">2</td><td>ln(4.5 ÷ 2.5)</td><td class="num">0.588</td></tr>
+      <tr><td>thursday<span class="sub">syllabus, office hours page, queue log</span></td><td class="num">3</td><td>ln(3.5 ÷ 3.5)</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Thursday is in half the passages, so its ratio is 1, and since ln 1 = 0, its weight is 0.</p>
+
+  <p>Now take the terms of our query. Office has an IDF of 0.588. Hour appears only in the queue log, because the office hours page says hours, not hour, and the retriever treats these as different words. So hour, least and crowded all have n = 1 and an IDF of 1.299.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>For now, count each term only once and add up its IDF. What do the forum post and the queue log score, and which way does the tie break?</p>
+    <details><summary>Show the answer</summary>
+      <p>With the IDFs to 4 decimals, the forum post gets 1.2993 + 1.2993 = 2.599, and the queue log 0.5878 + 1.2993 = 1.887. The tie breaks, but towards the forum post, because both of its terms are rare, while the queue log's office is common.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">But office hour appears twice in the queue log, for Tuesday and for Thursday, and IDF counts it only once. The next step adds this count.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="tf">
+  <h3><span class="cn">2</span>Term frequency and saturation: a count that pays off only up to a ceiling</h3>
+
+  <p><b>The term frequency f is how many times a term appears in one passage.</b> In the queue log, office and hour both have f = 2. But the first appearance tells you the passage is about that term, and the tenth adds very little to that. So BM25 does not simply multiply by f.</p>
+
+  <p>It turns f into a new number, which this lesson calls the <b class="term">TF part</b>. Leave passage length aside for now, it comes in step 3:</p>
+  <div class="formula">TF part = <span class="frac"><span>f × 2.2</span><span>f + 1.2</span></span></div>
+  <p>For f = 2 the arithmetic takes three steps:</p>
+  <ol class="plain">
+    <li>Top: 2 × 2.2 = 4.4.</li>
+    <li>Bottom: 2 + 1.2 = 3.2.</li>
+    <li>Divide: 4.4 ÷ 3.2 = 1.375.</li>
+  </ol>
+  <p>Check: at f = 1 the top is 2.2 and the bottom is 2.2, so the TF part is exactly 1. Now let f grow:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">f</th><th class="numh">TF part</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td class="num">1.000</td></tr>
+      <tr><td class="num">2</td><td class="num">1.375</td></tr>
+      <tr><td class="num">5</td><td class="num">1.774</td></tr>
+      <tr><td class="num">10</td><td class="num">1.964</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Going from 1 to 2 appearances adds 0.375, while going from 5 to 10 adds only 0.190. As f grows, the 1.2 in the bottom becomes small next to it, so the TF part gets close to 2.2 but never reaches it. This is called <b class="term">saturation</b>: each extra appearance adds less than the one before, and the TF part never goes above a ceiling.</p>
+
+  <p>The 1.2 in the formula is a knob called k1, and the ceiling 2.2 is really k1 + 1. A small k1 means a low ceiling that fills up quickly. <span class="mine">k1 = 1.2 is my choice, and the slide's graph has this line too</span></p>
+
+  <p>Now back to the queue log. Office and hour both appear twice, so both have a TF part of 1.375, and the score is 0.588 × 1.375 + 1.299 × 1.375 = 2.595. Both of the forum post's terms appear once, so its score stays at 2.599. <b>Adding the count brings the queue log almost level, with a gap of only 0.004.</b></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>What does the TF part become when k1 = 0? How does that relate to the scores in step 1?</p>
+    <details><summary>Show the answer</summary>
+      <p>The formula becomes f × 1 ÷ (f + 0), that is, f ÷ f = 1, as long as f is at least 1. That is the word overlap of lesson 2, only with IDF weights. The 2.599 and 1.887 from step 1 were exactly these k1 = 0 scores.</p>
+    </details>
+  </div>
+
+  <figure class="slide" style="margin-top:28px">
+    <a href="img/slide-p42.png"><img src="img/slide-p42.png" alt="Stanford slide: BM25 IDF compared with standard IDF, and term frequency saturation curves" loading="lazy"></a>
+    <figcaption>Stanford's slide: the TF part for four values of k1 on the right, and IDF on the left.</figcaption>
+  </figure>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="length">
+  <h3><span class="cn">3</span>Length normalization: less weight for a term in a long passage</h3>
+
+  <p><b>Length normalization lowers the TF part of a term in a long passage, and raises it for a term in a short passage.</b> Office appearing once in a 1,000-word document says less than office appearing once in a 20-word passage.</p>
+
+  <p>For this, BM25 compares each passage's length with the average length in the corpus. A passage's length in words is written |D|, and the average length is avgdl. An average is the sum of all the lengths divided by the number of passages:</p>
+  <div class="formula">avgdl = (27 + 16 + 19 + 14 + 8 + 13) ÷ 6 = 97 ÷ 6 = 16.17</div>
+  <p>Check: 16.17 × 6 = 97.02, which is about 97. Now BM25 multiplies the k1 in the bottom of the TF part by this factor:</p>
+  <div class="formula">factor = 1 − b + b × <span class="frac"><span>|D|</span><span>avgdl</span></span></div>
+  <p>|D| ÷ avgdl says how many times the average a passage is. b is a second knob, between 0 and 1, that sets how much length matters. For the queue log, with b = 0.75, the factor takes three steps: <span class="mine">b = 0.75 is my choice</span></p>
+  <ol class="plain">
+    <li>|D| ÷ avgdl = 19 ÷ 16.17 = 1.175.</li>
+    <li>Multiply by b: 0.75 × 1.175 = 0.881.</li>
+    <li>Add 1 − b: 0.25 + 0.881 = 1.131.</li>
+  </ol>
+  <p>Check: at average length the factor is 0.25 + 0.75 = 1, so nothing changes. A longer passage has a factor above 1, so its TF part shrinks. At f = 1, for example, a passage twice the average length drops from 1.000 to 0.710.</p>
+
+  <p>This is called <b class="term">length normalization</b>. With b = 0 the factor is always 1, so length has no effect, and with b = 1 length has its full effect. In our corpus the queue log has 19 words, more than average, so its factor is 1.131. The forum post has 14 words, so its factor is 0.25 + 0.75 × 14 ÷ 16.17 = 0.899.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Say b = 1 and the passage is twice the average length. What is the TF part at f = 1 and k1 = 1.2?</p>
+    <details><summary>Show the answer</summary>
+      <p>Factor = 1 − 1 + 1 × 2 = 2. TF part = 2.2 ÷ (1 + 1.2 × 2) = 2.2 ÷ 3.4 = <b>0.647</b>. That is even less than the 0.710 at b = 0.75, because length now has its full effect.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="bm25">
+  <h3><span class="cn">4</span>All three parts in one formula: BM25</h3>
+
+  <p><b>The BM25 score multiplies each query term's IDF by its TF part, and adds this up over all the terms.</b> A term that is not in the passage contributes 0. Do the whole calculation for office in the queue log: f = 2, and the factor from step 3, 1.1314 to 4 decimals.</p>
+  <ol class="plain">
+    <li>Bottom: 2 + 1.2 × 1.1314 = 2 + 1.3577 = 3.3577.</li>
+    <li>Top: 2 × 2.2 = 4.4.</li>
+    <li>TF part: 4.4 ÷ 3.3577 = 1.3104.</li>
+    <li>Multiply by the IDF: 0.5878 × 1.3104 = 0.7703.</li>
+  </ol>
+  <p>For least in the forum post the factor is 0.8995, so the TF part is 2.2 ÷ (1 + 1.2 × 0.8995) = 2.2 ÷ 2.0794 = 1.0580. For the query <q>which office hour is least crowded</q>, with k1 = 1.2 and b = 0.75, the full calculation is:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">|D|</th><th>Weight of each term</th><th class="numh">Score</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Old forum post</td><td class="num">14</td><td>least: 1.2993 × 1.0580 = 1.3747<br>crowded: 1.2993 × 1.0580 = 1.3747</td><td class="num">2.749</td></tr>
+      <tr><td>Queue log</td><td class="num">19</td><td>office (f = 2): 0.5878 × 1.3104 = 0.7703<br>hour (f = 2): 1.2993 × 1.3104 = 1.7026</td><td class="num">2.473</td></tr>
+      <tr><td>Office hours page</td><td class="num">16</td><td>office: 0.5878 × ? = ?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <p><b>BM25 ranks the old forum post above the queue log, 2.749 against 2.473.</b> Length widened the gap of 0.004 from step 2 to 0.276. The formula only counts words, and no part of it can tell that the forum post is a 2024 opinion and the queue log is fresh data.</p>
+
+  <p>Stanford's slide writes the same calculation as one formula:</p>
+  <div class="formula">score(D, Q) = <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i> = 1 … <i>n</i></span></span> IDF(q<sub><i>i</i></sub>) · <span class="frac"><span>f(q<sub><i>i</i></sub>, D) · (k1 + 1)</span><span>f(q<sub><i>i</i></sub>, D) + k1 · (1 − b + b · |D| ÷ avgdl)</span></span></div>
+  <p>The <button class="def" data-w="w-sigma">∑</button> comes from lesson 3. It means: for every i from the number written below up to the n written above, work out what follows, and add it all up. Here i runs from 1 to 4: 0.7703 + 1.7026 + 0 + 0 = 2.473. The “·” in the formula is a multiplication sign, D is the passage being scored, and q<sub><i>i</i></sub> is the i-th query term. The other parts come from steps 1 to 3.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p41.png"><img src="img/slide-p41.png" alt="Stanford slide: the BM25 formula and the IDF formula" loading="lazy"></a>
+    <figcaption>Stanford's slide: BM25, the most widely used. The coloured parts are IDF, f and |D| ÷ avgdl, and below is the IDF formula from step 1.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Work out the office hours page's row</p>
+    <p>The office hours page has 16 words, and office appears in it once. What are its factor, TF part and score?</p>
+    <details><summary>Show the answer</summary>
+      <p>16 ÷ 16.17 = 0.9897, so the factor is 0.25 + 0.75 × 0.9897 = 0.9923. TF part = 2.2 ÷ (1 + 1.2 × 0.9923) = 2.2 ÷ 2.1908 = 1.0042. Score = 0.5878 × 1.0042 = <b>0.590</b>.</p>
+    </details>
+  </div>
+
+  <div class="widget" id="bw">
+    <h4>BM25 calculator</h4>
+    <p class="hint">Pick a query and change k1 and b. The three buttons are the first three steps, and each cell shows the term's f and its weight.</p>
+    <div class="btns" id="bw-q"></div>
+    <div class="btns" id="bw-p">
+      <button type="button" data-k1="0" data-b="0.75">IDF only: k1 = 0</button>
+      <button type="button" data-k1="1.2" data-b="0">Count added: k1 = 1.2, b = 0</button>
+      <button type="button" data-k1="1.2" data-b="0.75">Full BM25: k1 = 1.2, b = 0.75</button>
+    </div>
+    <div class="ctl">
+      <label for="bw-k1">k1</label><input id="bw-k1" type="range" min="0" max="3" step="0.1" value="1.2"><output id="bw-k1o">1.2</output>
+      <label for="bw-b">b</label><input id="bw-b" type="range" min="0" max="1" step="0.05" value="0.75"><output id="bw-bo">0.75</output>
+    </div>
+    <p class="note" id="bw-idf"></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="numh">|D|</th><th>Terms</th><th class="numh">Score</th></tr></thead>
+      <tbody id="bw-body"></tbody>
+    </table></div>
+    <p class="out" id="bw-out"></p>
+  </div>
+
+  <p style="margin-top:22px">On the third query, <q>when can I get help from a TA</q>, every score is 0, and the reason comes in step 5.</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="index">
+  <h3><span class="cn">5</span>The inverted index: why BM25 is fast, and where it fails</h3>
+
+  <p><b>An inverted index is a list, for each term, of the passages that contain it.</b> BM25 builds these lists <button class="def" data-w="w-offline">offline</button>, that is, once, before any question arrives. The lists for our query's terms look like this:</p>
+  <ul class="plain">
+    <li>office → office hours page, queue log</li>
+    <li>hour → queue log</li>
+    <li>least → old forum post</li>
+    <li>crowded → old forum post</li>
+  </ul>
+  <p>When a question arrives, BM25 opens only these 4 lists and never touches the other 3 passages. That is why it is fast: on Stanford's comparison slide it answers in 62 ms on a large dataset.</p>
+
+  <p>To BM25, every passage is a long vector with one slot for each word in the vocabulary. The forum post has 14 of our 69 words, so 55 of its slots are 0, and a vector like this is called <b class="term">sparse</b>. The <button class="def" data-w="w-embedding">embeddings</button> of lesson 3 are dense: 768 numbers, almost none of them 0.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p54-bm25.png"><img src="img/slide-p54-bm25.png" alt="The BM25 row of Stanford's comparison slide: inverted index, 62 ms, wins on exact terms, breaks on paraphrase" loading="lazy"></a>
+    <figcaption>Stanford's slide: Fast vs Slow Retrievers, its BM25 row. The other rows come in lessons 12, 14 and 15.</figcaption>
+  </figure>
+
+  <p>According to the same row, BM25 wins on exact terms, such as IDs, names and error codes. A code like E-4012 is either in a passage or not, and because it is rare, its IDF is high.</p>
+
+  <p>BM25 breaks on paraphrase and synonyms, that is, the same thing said in other words. The answer to the widget's third query is on the office hours page, but that page says TAs, not ta, and help appears nowhere. So every score is 0.</p>
+
+  <p>The forum post mistake comes from the same place, because BM25 only counts words. <a href="12-dpr-dense-en.html">Lesson 12</a> builds a retriever that learns from question-passage pairs, and <a href="14-hybrid-rerank-dense-en.html">lesson 14</a> combines both lists.</p>
+
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The steps above are the same as in the easy version. The steps below take you to the level of the Stanford slides: symbols, graphs, k1 and b, real scale, and all four slides.</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="notation">
+  <h3><span class="cn">6</span>Every symbol of the slide's formula</h3>
+
+  <p><b>The slide writes BM25 as two formulas: one for the whole score, and one for IDF.</b> You read the score formula in step 4. This step ties every symbol of both formulas to a number from the queue log.</p>
+  <div class="formula">score(D, Q) = <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i> = 1 … <i>n</i></span></span> IDF(q<sub><i>i</i></sub>) · <span class="frac"><span>f(q<sub><i>i</i></sub>, D) · (k<sub>1</sub> + 1)</span><span>f(q<sub><i>i</i></sub>, D) + k<sub>1</sub> · (1 − b + b · |D| ÷ avgdl)</span></span></div>
+  <div class="formula">IDF(q<sub><i>i</i></sub>) = ln <span class="frac"><span>N − n(q<sub><i>i</i></sub>) + 0.5</span><span>n(q<sub><i>i</i></sub>) + 0.5</span></span></div>
+  <p>Some parts of the slide carry coloured labels. The table below includes those labels too:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>Meaning</th><th>In our example</th></tr></thead>
+    <tbody>
+      <tr><td>Q, D</td><td>The query, and the passage being scored</td><td>Our query, and D = the queue log</td></tr>
+      <tr><td>∑, <i>i</i> = 1 … <i>n</i></td><td>Sum over all n query terms</td><td>n = 4</td></tr>
+      <tr><td>q<sub><i>i</i></sub></td><td>The i-th query term</td><td>q<sub>1</sub> = office, q<sub>2</sub> = hour, q<sub>3</sub> = least, q<sub>4</sub> = crowded</td></tr>
+      <tr><td>IDF(q<sub><i>i</i></sub>)</td><td>The term's weight, label <q>How rare q<sub>i</sub> is</q></td><td>0.588 for office</td></tr>
+      <tr><td>f(q<sub><i>i</i></sub>, D)</td><td>How many times the term is in the passage, label <q>How often q<sub>i</sub> occurs in D</q></td><td>office 2, hour 2, least 0, crowded 0</td></tr>
+      <tr><td>k<sub>1</sub></td><td>The saturation knob</td><td>1.2</td></tr>
+      <tr><td>b</td><td>The knob for how much length matters</td><td>0.75</td></tr>
+      <tr><td>|D| ÷ avgdl</td><td>Passage length against the average, label <q>Doc length vs. the average</q></td><td>19 ÷ 16.17 = 1.175</td></tr>
+      <tr><td>N</td><td>Total documents in the corpus, label <q>Docs in the collection</q></td><td>6</td></tr>
+      <tr><td>n(q<sub><i>i</i></sub>)</td><td>How many documents contain the term, label <q>Docs that contain q<sub>i</sub></q></td><td>2 for office</td></tr>
+      <tr><td>0.5</td><td>A small number added to each count</td><td>4.5 ÷ 2.5 for office</td></tr>
+      <tr><td>score(D, Q)</td><td>The sum of all the term weights</td><td>0.7703 + 1.7026 + 0 + 0 = 2.473</td></tr>
+    </tbody>
+  </table></div>
+  <p>Note that n appears twice on the slide. The n above the ∑ is the number of query terms, and the n(q<sub><i>i</i></sub>) in the IDF formula is the document frequency. They are different things.</p>
+
+  <h4 class="sub" id="kplus1">What the k<sub>1</sub> + 1 on top does</h4>
+
+  <p>The k1 + 1 in the numerator multiplies every term's TF part by the same number, 2.2. So every passage's whole score is multiplied by 2.2 as well, and the order of the passages does not change. If you drop k1 + 1, for example, the forum post comes to 2.749 ÷ 2.2 = 1.250 and the queue log to 2.473 ÷ 2.2 = 1.124. The forum post is still on top.</p>
+
+  <p>According to Robertson and Zaragoza, many versions keep k1 + 1 so that a term that appears once in an average-length passage gets exactly its IDF as its weight. <span class="mine">from the paper</span> With our numbers: at f = 1 and factor = 1 the TF part is 2.2 ÷ 2.2 = 1, so the weight is IDF × 1.</p>
+
+  <h4 class="sub" id="lentable">The effect of length: the full table</h4>
+
+  <p>Step 3 gave the TF part for two lengths. Here is the full table for three lengths, at f = 1, k1 = 1.2 and b = 0.75:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage length</th><th>Factor</th><th class="numh">TF part</th></tr></thead>
+    <tbody>
+      <tr><td>Half the average</td><td>0.25 + 0.75 × 0.5 = 0.625</td><td class="num">1.257</td></tr>
+      <tr><td>The average</td><td>0.25 + 0.75 × 1 = 1</td><td class="num">1.000</td></tr>
+      <tr><td>Twice the average</td><td>0.25 + 0.75 × 2 = 1.75</td><td class="num">0.710</td></tr>
+    </tbody>
+  </table></div>
+  <p>The same single appearance earns 1.257 in a short passage and 0.710 in a long one. At twice the length, for example: 2.2 ÷ (1 + 1.2 × 1.75) = 2.2 ÷ 3.1 = 0.710. For the queue log, |D| ÷ avgdl = 1.175, so it is 17.5% longer than average.</p>
+
+  <h4 class="sub" id="soft">Shrinking the count by length</h4>
+
+  <p>There is a second way to read the length factor. It needs one rule about ratios: dividing the top and the bottom by the same number does not change a ratio. For example, 6 ÷ 3 = 2, and (6 ÷ 2) ÷ (3 ÷ 2) = 3 ÷ 1.5 = 2.</p>
+  <p>Divide the top and the bottom of the TF part by the factor. The k1 × factor in the bottom becomes just k1, and f is replaced by f ÷ factor:</p>
+  <div class="formula"><span class="frac"><span>f · (k<sub>1</sub> + 1)</span><span>f + k<sub>1</sub> · factor</span></span> = <span class="frac"><span>(f ÷ factor) · (k<sub>1</sub> + 1)</span><span>(f ÷ factor) + k<sub>1</sub></span></span></div>
+  <p>So BM25 first shrinks the count by length, and then applies the saturation from step 2. Robertson and Zaragoza write BM25 exactly this way. <span class="mine">from the paper</span> For office in the queue log it takes three steps:</p>
+  <ol class="plain">
+    <li>The shrunk count: 2 ÷ 1.1314 = 1.7677.</li>
+    <li>The formula from step 2: top 1.7677 × 2.2 = 3.8889, bottom 1.7677 + 1.2 = 2.9677.</li>
+    <li>Divide: 3.8889 ÷ 2.9677 = 1.3104, the same TF part as in step 4.</li>
+  </ol>
+  <p>In the forum post, the single count of least becomes 1 ÷ 0.8995 = 1.1117, and 1.1117 × 2.2 ÷ (1.1117 + 1.2) = 2.4457 ÷ 2.3117 = 1.0580. Length turned the queue log's 2 counts into something like 1.77, and the forum post's 1 count into something like 1.11.</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="graphs">
+  <h3><span class="cn">7</span>The edges of IDF, and both graphs on the slide</h3>
+
+  <p><b>The left graph on the slide shows BM25's IDF and the older IDF, and the right graph shows the TF part for four values of k1.</b> To read them, first look at the edges of IDF: very common and very rare terms. Exact numbers are hard to read off a graph, so this step works out the same numbers from the formulas. <span class="mine">my arithmetic</span></p>
+
+  <h4 class="sub" id="idfedges">The edges of IDF: two more ln rules, negative IDF and TF-IDF</h4>
+
+  <p>Step 1 gave one rule of ln: ln 1 = 0. Reading the slide's IDF graph needs two more:</p>
+  <ul class="plain">
+    <li>The ln of a number below 1 is negative, and flipping a ratio only flips the sign of its ln. For example, ln 2 = 0.693, so ln(1 ÷ 2) = −0.693, because e<sup>−0.693</sup> = 0.5.</li>
+    <li>The ln of a product is the sum of the lns: ln(a × b) = ln a + ln b. For example, ln 4 = ln(2 × 2) = 0.693 + 0.693 = 1.386.</li>
+  </ul>
+  <p>The second rule means that when a ratio grows 10 times, its ln grows by only ln 10 = 2.303. So ln squeezes very large ratios into small weights. A term that appears in just 1 of 10,000 passages has a ratio of 9,999.5 ÷ 1.5 = 6,666, but an IDF of only 8.805.</p>
+  <p>The first rule produces negative IDF. A term that appears in more than half the passages has a ratio below 1. A term in 5 of the 6 passages, for example, has the ratio 1.5 ÷ 5.5, which is milestone's ratio 5.5 ÷ 1.5 flipped, so its IDF is −1.299. At the other end, for a term that appears in no passage, the ratio without the 0.5 would be 6 ÷ 0, which has no value.</p>
+  <p>The older <b class="term">TF-IDF</b>, which came before BM25, uses the weight ln(N ÷ n). N ÷ n says the term appears in one passage out of how many. Office is in 2 of 6 passages, that is, 1 in every 3, so its weight is ln 3 = 1.099. This weight is never negative, and TF-IDF multiplies it directly by the count: for office in the queue log, 2 × 1.099 = 2.20.</p>
+
+  <h4 class="sub" id="idfgraph">The left graph: BM25's IDF and the older IDF</h4>
+
+  <p>The left graph uses N = 10,000 documents. The blue line is BM25's IDF, and the green dashed line is the standard IDF, that is, the ln(N ÷ n) of TF-IDF. The graph's source code uses exactly these two formulas. <span class="mine">from the figure's source</span> The x-axis shows the share of documents that contain the term. For example, 10% means 1,000 of the 10,000 documents.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Documents with the term</th><th class="numh">BM25 IDF</th><th class="numh">ln(N ÷ n)</th></tr></thead>
+    <tbody>
+      <tr><td>0.01%<span class="sub">n = 1</span></td><td class="num">8.805</td><td class="num">9.210</td></tr>
+      <tr><td>1%<span class="sub">n = 100</span></td><td class="num">4.590</td><td class="num">4.605</td></tr>
+      <tr><td>10%<span class="sub">n = 1,000</span></td><td class="num">2.197</td><td class="num">2.303</td></tr>
+      <tr class="hi"><td>50%<span class="sub">n = 5,000</span></td><td class="num">0</td><td class="num">0.693</td></tr>
+      <tr><td>90%<span class="sub">n = 9,000</span></td><td class="num">−2.197</td><td class="num">0.105</td></tr>
+      <tr><td>100%<span class="sub">n = 10,000</span></td><td class="num">−9.904</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+  <p>The arithmetic for the 10% row: for BM25, (10,000 − 1,000 + 0.5) ÷ (1,000 + 0.5) = 9,000.5 ÷ 1,000.5 = 8.996, and ln 8.996 = 2.197. For the standard IDF, 10,000 ÷ 1,000 = 10, and ln 10 = 2.303. The table shows these points:</p>
+  <ul class="plain">
+    <li>For rare terms the two are almost equal, which is why the two lines run together on the left of the graph.</li>
+    <li>At 50%, BM25's IDF is exactly 0, because the top and the bottom are both 5,000.5, and ln 1 = 0. The graph's red dashed line is this 50% threshold.</li>
+    <li>Past 50%, BM25's IDF is negative, and that is the graph's <q>Negative IDF region</q>. The 90% ratio is the 10% ratio flipped, so by the flipped-ratio rule the IDF only changes sign: from +2.197 to −2.197.</li>
+    <li>The standard IDF never goes below 0, because n is never larger than N, and at 100% it is ln 1 = 0.</li>
+  </ul>
+  <p>A negative IDF means that finding such a term lowers a passage's score. According to the figure's source, many implementations therefore clamp negative IDF at 0, or drop such terms before scoring. <span class="mine">from the figure's source</span> In our corpus the stopword the is in 3 passages, exactly half, so its IDF is 0.</p>
+
+  <details class="more">
+    <summary>Where the 0.5 comes from: the RSJ weight worked out in full</summary>
+    <p>BM25's IDF comes from an older weight by Robertson and Spärck Jones, called the RSJ weight. <span class="mine">from the paper</span> The RSJ weight is built from four counts. N and n are the same as before. R is the number of documents that are really useful for the query, called relevant. r is how many of those relevant documents contain the term.</p>
+    <div class="formula">w = ln <span class="frac"><span>(r + 0.5) · (N − R − n + r + 0.5)</span><span>(n − r + 0.5) · (R − r + 0.5)</span></span></div>
+    <p>First, suppose we know that the syllabus is relevant to a question about the milestone. Then R = 1 and r = 1, with N = 6 and n = 1:</p>
+    <ol class="plain">
+      <li>r + 0.5 = 1.5.</li>
+      <li>N − R − n + r + 0.5 = 6 − 1 − 1 + 1 + 0.5 = 5.5.</li>
+      <li>n − r + 0.5 = 1 − 1 + 0.5 = 0.5.</li>
+      <li>R − r + 0.5 = 1 − 1 + 0.5 = 0.5.</li>
+      <li>Divide: (1.5 × 5.5) ÷ (0.5 × 0.5) = 8.25 ÷ 0.25 = 33, and ln 33 = 3.497.</li>
+    </ol>
+    <p>BM25 does not know which documents are relevant. Then R = 0 and r = 0:</p>
+    <ol class="plain">
+      <li>r + 0.5 = 0.5.</li>
+      <li>N − R − n + r + 0.5 = 6 − 0 − 1 + 0 + 0.5 = 5.5.</li>
+      <li>n − r + 0.5 = 1 + 0.5 = 1.5.</li>
+      <li>R − r + 0.5 = 0.5.</li>
+      <li>Divide: (0.5 × 5.5) ÷ (1.5 × 0.5) = 2.75 ÷ 0.75 = 3.667, and ln 3.667 = 1.299, exactly milestone's IDF.</li>
+    </ol>
+    <p>In the second calculation the 0.5 on top and the 0.5 below cancel, and ln((N − n + 0.5) ÷ (n + 0.5)) is left. Without the 0.5s this calculation would be (0 × 5) ÷ (1 × 0) = 0 ÷ 0, which has no value. That is why the paper adds 0.5 to every count, so that the ratio and the log never break. <span class="mine">from the paper</span></p>
+  </details>
+
+  <h4 class="sub" id="curves">The right graph: four values of k1, four curves</h4>
+
+  <p>The right graph shows the TF part from step 2 for four values of k1, without length, that is, at factor = 1. Each curve's ceiling is k1 + 1. Some points from the formula:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>k1</th><th class="numh">f = 2</th><th class="numh">f = 10</th><th class="numh">f = 20</th></tr></thead>
+    <tbody>
+      <tr><td>0.5<span class="sub">ceiling 1.5</span></td><td class="num">1.200</td><td class="num">1.429</td><td class="num">1.463</td></tr>
+      <tr class="hi"><td>1.2<span class="sub">ceiling 2.2</span></td><td class="num">1.375</td><td class="num">1.964</td><td class="num">2.075</td></tr>
+      <tr><td>2.0<span class="sub">ceiling 3</span></td><td class="num">1.500</td><td class="num">2.500</td><td class="num">2.727</td></tr>
+      <tr><td>5.0<span class="sub">ceiling 6</span></td><td class="num">1.714</td><td class="num">4.000</td><td class="num">4.800</td></tr>
+    </tbody>
+  </table></div>
+  <p>The arithmetic for the cell at k1 = 5 and f = 20: top 20 × 6 = 120, bottom 20 + 5 = 25, and 120 ÷ 25 = 4.8. In the graph every curve starts at 0 for f = 0, passes through 1 at f = 1, and then bends towards its ceiling. The k1 = 0.5 curve flattens early, and at f = 20 it is very close to its ceiling of 1.5. The k1 = 5 curve is still climbing at f = 20, because 4.8 is well below its ceiling of 6.</p>
+  <p>At f = 1 every curve is at 1, because the top and the bottom are both 1 + k1. No curve ever reaches its ceiling: at k1 = 1.2, even f = 100 gives 220 ÷ 101.2 = 2.174. Also look at how much each extra appearance adds: the first adds 1.000, the second 0.375, the third 1.571 − 1.375 = 0.196, and the tenth 1.964 − 1.941 = 0.023.</p>
+  <p>According to the paper, this formula did not come straight out of a deeper model. BM25's authors saw a saturating shape in a probability model of term counts, and fitted the simplest formula with that shape, f ÷ (k + f). <span class="mine">from the paper</span></p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="tuning">
+  <h3><span class="cn">8</span>Who picks k1 and b</h3>
+
+  <p><b>k1 and b are hyperparameters: BM25 does not learn them from data, the person building the search picks them.</b> A <b class="term">hyperparameter</b> is a number in a formula or model that training does not change. BM25 has no training at all, so k1 and b are the only numbers in it that anyone chooses.</p>
+
+  <p>The usual method is to set aside some questions whose correct passages are known. Then try many values of k1 and b, see how high the correct passages come out, and keep the best pair. Such a set of questions is called a dev set, short for development set. <a href="13-metrics-dense-en.html">Lesson 13</a> teaches how to measure whether the correct passages came out on top.</p>
+
+  <p>According to Robertson and Zaragoza, many experiments find that b from 0.5 to 0.8 and k1 from 1.2 to 2 work well. They also say the best values depend on the kind of documents and queries. <span class="mine">from the paper</span></p>
+
+  <p>The paper also explains why b sits between 0 and 1. A document can be long for two reasons. One, the author says the same thing in more words, and then dividing the count fully by length is right, that is, b = 1. Two, the document really covers more topics, and then dividing by length is wrong, that is, b = 0. Real documents mix both reasons. <span class="mine">from the paper</span></p>
+
+  <p>The DPR paper ran Lucene's BM25 on Wikipedia passages and picked k1 = 0.9 and b = 0.4 on its dev sets. Both values lie outside the range above. <span class="mine">from the paper</span> Even with these values the order on our query stays the same: forum post 2.666, queue log 2.420. <span class="mine">my arithmetic</span></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>In the widget from step 4, set b = 0 and move k1 from 1.2 to 1.3. What happens to the forum post and the queue log, and why?</p>
+    <details><summary>Show the answer</summary>
+      <p>The queue log, at 2.630, moves above the forum post (2.599). With b = 0 length has no effect, and a larger k1 gives more weight to the queue log's two-times counts. With b = 0 the order flips at k1 ≈ 1.21.</p>
+      <p>With b = 0.75 the flip needs k1 of about 3.13. The widget's slider stops at 3, where the forum post is still ahead, 2.810 against 2.799.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">This flip does not happen because of the queue log's data. The queue log writes office hour twice, and a larger k1 gave more weight to repetition. The person building the search picks k1 and b once for the whole corpus, not separately for each question. A setting that lifts the queue log on this question can lift, on other questions, passages that repeat a word over and over.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Your company's help center has a <q>Complete user guide</q> that is 10 times as long as the average article. Every common term appears in it about 20 times, and it comes out on top for almost every query. Which way should k1 and b move?</p>
+    <details><summary>Show the answer</summary>
+      <p><b>Raise b and lower k1.</b> With k1 = 1.2 and b = 0.75 the guide's factor is 0.25 + 0.75 × 10 = 7.75, and its TF part is 20 × 2.2 ÷ (20 + 1.2 × 7.75) = 44 ÷ 29.3 = 1.502. An average-length article with the term once has a TF part of 1.000.</p>
+      <p>With b = 1 the guide's factor is 10, and its TF part is 44 ÷ (20 + 12) = 1.375. Setting k1 = 0.5 as well gives 20 × 1.5 ÷ (20 + 0.5 × 10) = 30 ÷ 25 = 1.200. The article stays at 1.000, so the gap shrinks from 0.502 to 0.200. Then measure on a dev set whether the right articles come out on top.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="scale">
+  <h3><span class="cn">9</span>BM25 at real scale</h3>
+
+  <p><b>In a real inverted index, every entry in a term's list stores the passage together with its f.</b> The lists for our query's terms look like this:</p>
+  <ul class="plain">
+    <li>office → (office hours page, f = 1), (queue log, f = 2)</li>
+    <li>hour → (queue log, f = 2)</li>
+    <li>least → (old forum post, f = 1)</li>
+    <li>crowded → (old forum post, f = 1)</li>
+  </ul>
+  <p>The length of a list is n. Office's list has 2 entries, for example, so n = 2, and the IDF follows from that. The index also stores each passage's |D| and the corpus's avgdl. When a question arrives, BM25 reads 5 entries across 4 lists and scores only 3 passages.</p>
+
+  <h4 class="sub" id="sparsedot">BM25 as a dot product of sparse vectors</h4>
+
+  <p>According to the DPR paper, TF-IDF and BM25 treat the question and the passage as very long sparse vectors, with a weight for each word. <span class="mine">from the paper</span> To see this you need the <button class="def" data-w="w-dot">dot product</button> from lesson 3. A dot product multiplies the numbers in the same position of two vectors and adds them up. For example, the dot product of [1, 0, 1] and [2, 5, 3] is 1 × 2 + 0 × 5 + 1 × 3 = 5.</p>
+  <p>For our corpus, make a vector with 69 numbers, one for each word in the vocabulary. In a passage's vector, each word's slot holds its weight, IDF × TF part, and the slot of a word not in the passage holds 0. In the query's vector, the slots of the 4 query terms hold 1, and the other 65 slots hold 0.</p>
+  <p>The dot product of these two vectors is exactly the BM25 score, because a product is non-zero only where both vectors have a number. For the forum post those are the two slots for least and crowded: 1 × 1.3747 + 1 × 1.3747 = 2.749. In the other 67 slots, at least one side is 0. An inverted index is really a way of storing these sparse vectors by term, so that the zero slots never have to be read.</p>
+
+  <h4 class="sub" id="speed">What data the 62 ms was measured on</h4>
+
+  <p>Below Stanford's comparison slide it says the latencies come from Khattab and Zaharia (2020), the ColBERT paper, on MS MARCO. In that paper, 62 ms is the number for Anserini's BM25, and Anserini is a search toolkit built on Lucene. <span class="mine">from the paper</span></p>
+  <p>MS MARCO holds 8.8 million passages from web pages, gathered from Bing's results for 1 million real questions. In the paper each query returned the top 1,000 of these 8.8 million passages, and latency was measured on one CPU thread. According to the paper, BM25 is this fast because its steps are cheap and this kind of search has been optimized for decades. <span class="mine">from the paper</span></p>
+  <p>In the DPR paper, Lucene's BM25 handles 23.7 questions per second on one CPU thread. Since 1 second = 1,000 ms, that is 1,000 ÷ 23.7 = 42 ms per question. Its inverted index over 21 million passages takes about 30 minutes to build, while DPR's vectors and index take 8.8 + 8.5 = 17.3 hours. <span class="mine">from the paper</span> The two papers use different hardware and corpora, so 62 ms and 42 ms cannot be compared directly, only that both are in the tens of milliseconds.</p>
+
+  <h4 class="sub" id="examples">BM25's strength and weakness in the papers</h4>
+
+  <p>The DPR paper says methods like BM25 are sensitive to highly selective keywords and phrases. <span class="mine">from the paper</span> The IDs, names and error codes in the slide's row are words of this kind. An example from the same paper shows the weakness. The question is: <q>Who is the bad guy in lord of the rings?</q> Its answer is in this passage: <q>Sala Baker is best known for portraying the villain Sauron in the Lord of the Rings trilogy.</q></p>
+  <p>The question says bad guy, and the passage says villain. So, according to the paper, a term-based system would have difficulty finding this passage, while a dense retriever can bring the vectors for bad guy and villain close together. <span class="mine">from the paper</span> This is a real example of the slide's <q>Breaks on: Paraphrase, synonyms</q>.</p>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are the four BM25 slides, exactly as they are. Under each slide are a few questions. Think of the answer first, then open it. If a symbol stops you, go back to the step named in the answer.</p>
+  <p class="note">If a slide looks small on a phone, click the image. It opens at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p40.png"><img src="img/slide-p40.png" alt="Stanford slide: three types of retrievers, word-overlap, vector retrieval and other neural systems" loading="lazy"></a>
+    <figcaption>Stanford's slide: Different Types of Retrievers.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the slide on types of retrievers</p>
+    <ol class="plain">
+      <li>
+        <p>The slide calls BM25 word-overlap. What three things does BM25 add to the word overlap of lesson 2?</p>
+        <details><summary>Show the answer</summary>
+          <p>More weight for rare terms (IDF), a count that pays off only up to a ceiling (k1), and a lower TF part for long passages (b). With k1 = 0, BM25 is just word overlap with IDF weights. (Steps 1, 2 and 3)</p>
+        </details>
+      </li>
+      <li>
+        <p>What is the score built from in word-overlap and in vector retrieval?</p>
+        <details><summary>Show the answer</summary>
+          <p>In BM25 the score comes only from terms that appear exactly in both the query and the passage, a dot product of long sparse vectors. In vector retrieval an encoder turns each text into a short dense vector, and the score is the dot product of those vectors. (Steps 5 and 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p41.png"><img src="img/slide-p41.png" alt="Stanford slide: the BM25 formula and the IDF formula, with coloured labels" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p41-score.png"><img src="img/slide-p41-score.png" alt="The BM25 formula from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p41-idf.png"><img src="img/slide-p41-idf.png" alt="The IDF formula from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: BM25, the most widely used, and below it both formulas, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the BM25 slide</p>
+    <ol class="plain">
+      <li>
+        <p>What is the IDF(q<sub>i</sub>) in the yellow box for hour? What are the numbers in the green and pink boxes?</p>
+        <details><summary>Show the answer</summary>
+          <p>Green is N = 6, and pink is n(hour) = 1, because hour appears only in the queue log. IDF = ln((6 − 1 + 0.5) ÷ (1 + 0.5)) = ln(5.5 ÷ 1.5) = 1.299. (Steps 1 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>What is the blue box's |D| ÷ avgdl for the queue log, and what does the whole bracket around it come to?</p>
+        <details><summary>Show the answer</summary>
+          <p>19 ÷ 16.17 = 1.175. The bracket is 1 − 0.75 + 0.75 × 1.175 = 1.131, the factor from step 3. (Step 3)</p>
+        </details>
+      </li>
+      <li>
+        <p>If you drop the (k<sub>1</sub> + 1) on top, does the order of the passages change?</p>
+        <details><summary>Show the answer</summary>
+          <p>No. Every term's part is divided by 2.2, so every score is divided by 2.2. The forum post comes to 1.250 and the queue log to 1.124, and the order stays the same. (Step 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p42.png"><img src="img/slide-p42.png" alt="Stanford slide: BM25 IDF compared with standard IDF, and term frequency saturation curves" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p42-idf.png"><img src="img/slide-p42-idf.png" alt="The IDF graph from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p42-tf.png"><img src="img/slide-p42-tf.png" alt="The saturation graph from the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: IDF Comparison and Term Frequency Saturation, and below it both graphs, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the slide with the graphs</p>
+    <ol class="plain">
+      <li>
+        <p>Why does the blue line in the left graph cross 0 exactly at 50%?</p>
+        <details><summary>Show the answer</summary>
+          <p>At 50%, n = N ÷ 2, so the top, N − n + 0.5, equals the bottom, n + 0.5. The ratio is 1, and ln 1 = 0. (Steps 1 and 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Why does the green dashed line never go below 0, and where are the two lines at 100%?</p>
+        <details><summary>Show the answer</summary>
+          <p>The green line is ln(N ÷ n), and n is never larger than N, so the ratio is at least 1. At 100% it sits at ln 1 = 0. The blue line there falls, by the formula, to ln(0.5 ÷ 10,000.5) = −9.904. (Step 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Why do all four lines in the right graph pass through the same point at f = 1? And what height is the k1 = 5 line heading for?</p>
+        <details><summary>Show the answer</summary>
+          <p>At f = 1 the TF part is (k1 + 1) ÷ (1 + k1) = 1, whatever k1 is. The k1 = 5 line is heading for its ceiling of 6, and at f = 20 it is at 4.8. The graph has no length in it, so it shows the factor = 1 case. (Steps 2 and 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p54.png"><img src="img/slide-p54.png" alt="Stanford slide: table comparing fast and slow retrievers" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p54-bm25.png"><img src="img/slide-p54-bm25.png" alt="The BM25 row of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: Fast vs Slow Retrievers, and below it the BM25 row, enlarged. The other rows come in lessons 12, 14 and 15.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the comparison slide</p>
+    <ol class="plain">
+      <li>
+        <p>The Precomputed offline column says Inverted index for BM25. In our corpus, what is already built before a query arrives?</p>
+        <details><summary>Show the answer</summary>
+          <p>A list for each term, where each entry holds a passage and its f. The length of a list gives n, and n gives the IDF. Also each passage's |D| and avgdl = 16.17. (Steps 5 and 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>Under what conditions was the 62 ms measured, and how fast was BM25 in the DPR paper?</p>
+        <details><summary>Show the answer</summary>
+          <p>Anserini's BM25, the 8.8 million passages of MS MARCO, the top 1,000 per query, and one CPU thread. In the DPR paper, Lucene's BM25 handles 23.7 questions per second, about 42 ms per question. The slide itself notes that the DPR numbers come from different hardware. (Step 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>Show the Wins on and Breaks on cells with our corpus.</p>
+        <details><summary>Show the answer</summary>
+          <p>If a rare code like E-4012 is in a single passage, its IDF is high and that passage comes out on top. On <q>when can I get help from a TA</q> every score is 0, because the page with the answer says TAs, and help is not there at all. (Steps 1 and 5)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>BM25 score = each query term's IDF × its TF part, summed over the terms. IDF gives weight to rare terms, k1 makes the count saturate, and b shrinks the count by length.</li>
+    <li>k1 and b are hyperparameters, picked once for the whole corpus on a dev set. On our query the usual values keep the forum post on top. With b = 0 and k1 = 1.3 the queue log comes out on top, but only because of repetition.</li>
+    <li>Because of the inverted index, BM25 reads only the lists of the query's terms, so it runs in tens of milliseconds and is reliable on exact terms. It fails on queries in different words, and it does not see whether a passage holds data or an opinion.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-term">Term</dt><dd>One word of the query in search. For example, office and hour in <q>which office hour</q>.</dd>
+    <dt id="w-df">Document frequency, n(q)</dt><dd>How many documents contain term q. For example, n = 1 for milestone and 2 for office.</dd>
+    <dt id="w-idf">IDF</dt><dd>ln((N − n + 0.5) ÷ (n + 0.5)), a bigger weight for a rarer term. For example, 1.299 for milestone and 0.588 for office.</dd>
+    <dt id="w-tfidf">TF-IDF</dt><dd>The term's count × ln(N ÷ n), an older method than BM25. For example, N = 6, n = 2, f = 2 gives 2 × ln 3 = 2.20.</dd>
+    <dt id="w-tf">Term frequency, f(q, D)</dt><dd>How many times term q appears in document D. For example, office has f = 2 in the queue log.</dd>
+    <dt id="w-saturation">Saturation and k1</dt><dd>As the count grows, the gain fills up slowly towards a ceiling of k1 + 1. For example, with k1 = 1.2 the TF part for f = 1, 2, 10 is 1.000, 1.375, 1.964.</dd>
+    <dt id="w-lengthnorm">Length normalization, b and avgdl</dt><dd>Lowering the TF part of documents longer than average, by an amount set by b. For example, with avgdl = 16.17 and b = 0.75, a document twice the average length gets 0.710.</dd>
+    <dt id="w-bm25">BM25</dt><dd>Each query term's IDF × its TF part, summed over the terms. For example, 2.749 for the forum post and 2.473 for the queue log.</dd>
+    <dt id="w-hyperparam">Hyperparameter</dt><dd>A number in a formula or model that training does not change, picked by trying values on a dev set. For example, BM25's k1 and b, which the DPR paper set to 0.9 and 0.4.</dd>
+    <dt id="w-inverted">Inverted index</dt><dd>For each term, the list of documents that contain it. For example, office → office hours page, queue log.</dd>
+    <dt id="w-sparse">Sparse and dense vector</dt><dd>A long vector that is mostly zeros, and a short one that is almost full. For example, 55 of the 69 slots in the forum post's vector are 0.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="10-vector-search-dense-en.html">Previous: Lesson 10</a>
+    <a href="12-dpr-dense-en.html">Next: Lesson 12, DPR</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Papers: Robertson and Zaragoza, 2009, “The Probabilistic Relevance Framework: BM25 and Beyond”. Khattab and Zaharia, 2020, “ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT”. Karpukhin et al., 2020, “Dense Passage Retrieval for Open-Domain Question Answering”. The source of the IDF and saturation graphs is the BM25 article on mbrenndoerfer.com, which the slide credits. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the papers but not on the slides, and points marked “from the figure's source” are in that article.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var P = [
+    { name: "Syllabus", text: "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10." },
+    { name: "Office hours page", text: "Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs." },
+    { name: "Queue log", text: "Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3." },
+    { name: "Old forum post", text: "Old forum post (2024): midweek afternoons are usually the least crowded time to visit." },
+    { name: "Homework 1 announcement", text: "Homework 1 will be released on Oct 5." },
+    { name: "Project page", text: "Project proposal due on Oct 9. Teams of 1-3 people are recommended." }
+  ];
+  var L = { none: "no query term", top: "On top: ", zero: "Every passage scores 0. No query term is in the corpus.", end: "." };
+  var QUERIES = ["which office hour is least crowded", "when is the project milestone due", "when can I get help from a TA"];
+  var STOP = ["which", "is", "the", "when", "can", "i", "get", "from", "a", "an", "to", "of", "on", "in", "it", "and", "are", "be", "this", "what", "how", "do"];
+  function words(s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+  var DOCS = P.map(function (p) { return words(p.text); });
+  var N = DOCS.length, AVG = DOCS.reduce(function (a, d) { return a + d.length; }, 0) / N;
+  function n(t) { return DOCS.filter(function (d) { return d.indexOf(t) >= 0; }).length; }
+  function idf(t) { var k = n(t); return Math.log((N - k + 0.5) / (k + 0.5)); }
+  function count(d, t) { return d.filter(function (w) { return w === t; }).length; }
+  var qi = 0, qBox = document.getElementById("bw-q"), pBox = document.getElementById("bw-p");
+  var k1In = document.getElementById("bw-k1"), bIn = document.getElementById("bw-b");
+  qBox.innerHTML = QUERIES.map(function (q, i) { return '<button type="button" data-i="' + i + '">' + q + "</button>"; }).join("");
+  qBox.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); }); });
+  pBox.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { k1In.value = b.dataset.k1; bIn.value = b.dataset.b; render(); }); });
+  k1In.addEventListener("input", render); bIn.addEventListener("input", render);
+  function render() {
+    var k1 = Number(k1In.value), b = Number(bIn.value);
+    document.getElementById("bw-k1o").textContent = k1.toFixed(1);
+    document.getElementById("bw-bo").textContent = b.toFixed(2);
+    qBox.querySelectorAll("button").forEach(function (x, i) { x.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    pBox.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", Number(x.dataset.k1) === k1 && Number(x.dataset.b) === b ? "true" : "false"); });
+    var terms = words(QUERIES[qi]).filter(function (w) { return STOP.indexOf(w) < 0; });
+    document.getElementById("bw-idf").innerHTML = "IDF: " + terms.map(function (t) { return "<b>" + t + "</b> (n = " + n(t) + ") " + idf(t).toFixed(3); }).join(", ") + L.end + " avgdl = " + AVG.toFixed(2);
+    var rows = P.map(function (p, i) {
+      var d = DOCS[i], len = d.length, total = 0, parts = [];
+      terms.forEach(function (t) {
+        var f = count(d, t);
+        if (!f) return;
+        var tfc = f * (k1 + 1) / (f + k1 * (1 - b + b * len / AVG));
+        var c = idf(t) * tfc;
+        total += c;
+        parts.push(t + " (f = " + f + "): " + c.toFixed(3));
+      });
+      return { p: p, len: len, total: total, parts: parts, i: i };
+    }).sort(function (a, b2) { return b2.total - a.total || a.i - b2.i; });
+    document.getElementById("bw-body").innerHTML = rows.map(function (r, i) {
+      return '<tr class="' + (i === 0 && r.total > 0 ? "hi" : "") + '"><td>' + r.p.name + '</td><td class="num">' + r.len + "</td><td>" + (r.parts.join("<br>") || L.none) + '</td><td class="num">' + r.total.toFixed(3) + "</td></tr>";
+    }).join("");
+    document.getElementById("bw-out").innerHTML = rows[0].total > 0 ? L.top + "<b>" + rows[0].p.name + "</b>" + L.end : L.zero;
+  }
+  render();
+})();
+</script>
+</body>
+</html>

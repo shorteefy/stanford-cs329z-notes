@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="At the end of lesson 4 the retriever gave the old forum post more weight, and the right answer's probability fell from 0.685 to 0.315. The retriever has to be fixed, yet the training data holds only questions and answers.">
+<title>Lesson 5: The RAG model</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 5 / 18 · <b>Easy</b> · <a href="05-rag-model-dense-en.html">Dense</a> · <a href="05-rag-model.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 5 · Easy version</p>
+  <h1>The RAG model: retriever and generator together</h1>
+  <p class="lede"><b>RAG is a model made of two models. The retriever brings passages for a question and gives each one a weight, and the generator writes the answer with each passage.</b> Both are trained together with one loss, and that training needs only question-answer pairs. RAG stands for Retrieval-Augmented Generation, a model published by Lewis and colleagues in 2020.</p>
+  <p class="lede">The need for it showed up in the last question of <a href="04-probability-tools-en.html#read">lesson 4</a>. There the retriever gave the old forum post a weight of 0.731 and the queue log only 0.269. The generator's numbers stayed the same, yet the probability of the right answer, <q>Thursday 9am</q>, fell from 0.685 to 0.315. The mistake is the retriever's, but the training data holds only questions and answers. Nothing in it says the answer came from the queue log, and RAG teaches the retriever anyway.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 5 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#parts">RAG's two models: retriever and generator</a><span class="can">Say what each part does, and read Stanford's RAG slide.</span></li>
+      <li><a href="#formula">Marginalization: no passage label needed</a><span class="can">Work out an answer's probability by hand, and explain why training needs no passage label.</span></li>
+      <li><a href="#seq-token">RAG-Sequence and RAG-Token</a><span class="can">Compute the probability both ways, and say when the two give different results.</span></li>
+      <li><a href="#training">Training the retriever and the generator with one loss</a><span class="can">Say which passage's score training raises, and which parts change.</span></li>
+      <li><a href="#results">Results on NQ</a><span class="can">Read the paper's main table, and see why lesson 6 is needed.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="02-retrieval-en.html#retriever">Lesson 2</a> (retriever, top-K), <a href="03-vectors-en.html#embedding">Lesson 3</a> (vector, dot product, encoder, index) and <a href="04-probability-tools-en.html">Lesson 4</a> (marginalization, softmax, ∏, loss). If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="parts">
+  <h3><span class="cn">1</span>RAG's two models: retriever and generator</h3>
+
+  <p><b>RAG contains two models. The retriever p<sub>η</sub>(z|x) gives every passage z a weight, and the generator p<sub>θ</sub>(y|x, z) reads the question x and one passage and writes the answer y.</b> These are the same two probabilities that appeared in the formula of <a href="04-probability-tools-en.html#read">lesson 4</a>. The small η (eta) and θ (theta) written underneath name the two models' <button class="def" data-w="w-parameters">parameters</button>, the numbers that training changes.</p>
+
+  <h4 class="sub" id="retriever">The retriever: DPR</h4>
+
+  <p>RAG's retriever is a model called DPR, whose own training comes in <a href="12-dpr-en.html#contrastive">lesson 12</a>. It has two <button class="def" data-w="w-encoder">encoders</button>, both built from <b class="term">BERT</b>, an encoder model Google released in 2018. The query encoder makes the question's vector q(x), and the passage encoder makes a vector d(z) for every passage z.</p>
+
+  <p>A passage's score is the <button class="def" data-w="w-dot">dot product</button> of these two vectors, written d(z)<sup>⊤</sup>q(x). Then <button class="def" data-w="w-softmax">softmax</button> turns the scores into weights that add up to 1. In lesson 4, scores 1.0 and 0.0 became weights 0.731 and 0.269. Stanford's slide writes the same thing like this:</p>
+  <div class="formula">p<sub>η</sub>(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</div>
+  <p>Here <button class="def" data-w="w-propto">∝</button> means: take each passage's exp, then divide them all by one and the same number so that they add up to 1.</p>
+
+  <p>There are a great many passages. In the paper, Wikipedia is cut into about 21 million passages of 100 words each. <span class="mine">from the paper</span> Their vectors are built once, before any question arrives, and kept in an <button class="def" data-w="w-index">index</button>. When a question arrives, only the query encoder runs, and then a search pulls out the passages with the K largest dot products. This search is called <b class="term">MIPS</b>, maximum inner product search, because inner product is another name for the dot product.</p>
+
+  <h4 class="sub" id="generator">The generator: BART</h4>
+
+  <p>The <b class="term">generator</b> reads the question and one passage and writes the answer, one token at a time, like the LLM in <a href="01-how-llms-answer-en.html#next-token">lesson 1</a>. RAG's generator is <button class="def" data-w="w-bart">BART</button>, an <b class="term">encoder-decoder</b> model. Its encoder reads the input text and turns it into vectors, and its decoder looks at those vectors while it writes the answer token by token.</p>
+
+  <p>BART reads a single text, so the question and the passage are joined end to end into one text. Joining two texts like this is called <b class="term">concatenating</b> them. With the queue log, the input and the output look like this: <span class="mine">my example</span></p>
+  <div class="sentence">Input: question: Which office hour is least crowded? passage: Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<br>Output: <span class="new">Thursday 9am</span></div>
+
+  <figure>
+    <div class="flow">
+      <div class="node"><b>Question x</b><span class="ex">Which office hour is least crowded?</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Query encoder q(x)</b><span class="ex">The question's vector</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>MIPS</b><span class="ex">Dot product with every d(z) in the index, top-K</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>z<sub>1</sub> … z<sub>K</sub></b><span class="ex">A weight for each, from softmax</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Generator p<sub>θ</sub></b><span class="ex">Runs once per z</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Marginalize</b><span class="ex">Add up to get p(y|x)</span></div>
+    </div>
+    <figcaption>RAG's whole path for one question. The first four boxes are the retriever, and the last two are the generator. The Marginalize box comes in step 2.</figcaption>
+  </figure>
+
+  <p>This design has a cost. The generator runs separately with each passage, so with K = 5 it runs 5 times for one question.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p14.png"><img src="img/slide-p14.png" alt="Stanford slide: the whole RAG design, retriever and generator" loading="lazy"></a>
+    <figcaption>Stanford's slide: the RAG design. The green box is the retriever p<sub>η</sub>, holding the query encoder q, MIPS and the document index d(z). The blue box is the generator p<sub>θ</sub>. The dashed arrow at the top is training, which comes in step 4. Click the image to open it at full size.</figcaption>
+  </figure>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="formula">
+  <h3><span class="cn">2</span>Marginalization: no passage label needed</h3>
+
+  <p><b>RAG treats the passage as a hidden choice, and gets the answer's probability as a weighted sum over all the passages it brought.</b> A hidden choice like this is called a <b class="term">latent variable</b>. The answer came from some passage, but the data does not say which one.</p>
+
+  <p>Teaching the retriever directly would need the right passage written next to every question. Nobody picks passages by hand for millions of questions. <button class="def" data-w="w-marginal">Marginalization</button> from lesson 4 is the method for exactly this situation: multiply each case's probability by its weight, then add everything up. There it was 0.5 × 0.8 + 0.5 × 0.1 = 0.45.</p>
+
+  <p>Now take the question <q>Which office hour is least crowded?</q> The retriever brought 3 passages, so K = 3, and their scores are 1.8, 1.1 and 0.0. In softmax, e<sup>1.8</sup> = 6.05, e<sup>1.1</sup> = 3.00 and e<sup>0</sup> = 1, which add up to 10.05. So the queue log's weight is 6.05 ÷ 10.05 = 0.60, and the other two get 0.30 and 0.10 the same way. <span class="mine">my numbers</span></p>
+
+  <p>With each passage, the generator gives <q>Thursday 9am</q> a probability. Each row multiplies the weight by the generator's probability:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage z</th><th class="numh">Weight p(z|x)</th><th class="numh">p(“Thu 9am” | x, z)</th><th class="numh">Product</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log<span class="sub">Thursday 9am averages 3 students</span></td><td class="num">0.6</td><td class="num">0.9</td><td class="num">0.54</td></tr>
+      <tr class="hi"><td>Office hours page<span class="sub">Tuesday 4pm and Thursday 9am, but not which one is quiet</span></td><td class="num">0.3</td><td class="num">0.5</td><td class="num">?</td></tr>
+      <tr><td>Old forum post<span class="sub">midweek afternoons are usually the least crowded</span></td><td class="num">0.1</td><td class="num">0.1</td><td class="num">0.01</td></tr>
+      <tr class="total"><td>Sum = p(“Thu 9am” | x)</td><td></td><td></td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Work out the second row</p>
+    <p>The office hours page has weight 0.3, and with it the generator gives 0.5. What is the product, and what is the total probability of <q>Thursday 9am</q>?</p>
+    <details><summary>Show the answer</summary>
+      <p>0.3 × 0.5 = 0.15. The total is 0.54 + 0.15 + 0.01 = <b>0.70</b>.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">For <q>Wednesday afternoon</q> the generator's numbers are 0.05, 0.2 and 0.8, because the forum post talks about midweek afternoons. Its sum is 0.6 × 0.05 + 0.3 × 0.2 + 0.1 × 0.8 = 0.03 + 0.06 + 0.08 = 0.17. So RAG picks <q>Thursday 9am</q>, 0.70 against 0.17.</p>
+
+  <p>In symbols, the same arithmetic reads:</p>
+  <div class="formula">p(y|x) ≈ <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i> ∈ top-<i>K</i></span></span> p<sub>η</sub>(z|x) · p<sub>θ</sub>(y|x, z)</div>
+  <p>p<sub>η</sub>(z|x) are the weights (0.6, 0.3, 0.1), p<sub>θ</sub>(y|x, z) are the generator's numbers (0.9, 0.5, 0.1), and ∑ adds up their products (0.70). The sum runs only over the top-K passages, not over the other 21 million, which is why the formula has <button class="def" data-w="w-approx">≈</button> instead of “=”.</p>
+
+  <p><b>Nowhere in this calculation does it say that the right passage is the queue log.</b> The formula needs only the question x and the answer y, and the passage stays hidden inside the sum. So question-answer pairs are enough to train RAG.</p>
+
+  <div class="widget" id="ragw">
+    <h4>Change the retriever's scores</h4>
+    <p class="hint">The sliders are the retriever's scores, and the generator's numbers stay fixed. The widget uses exact weights, so it shows 0.701 below instead of 0.70. The last column comes in step 4.</p>
+    <div class="ctl">
+      <label for="w1">Queue log</label><input id="w1" type="range" min="-1" max="3" step="0.1" value="1.8"><output id="o1">1.8</output>
+      <label for="w2">Office hours page</label><input id="w2" type="range" min="-1" max="3" step="0.1" value="1.1"><output id="o2">1.1</output>
+      <label for="w3">Forum post</label><input id="w3" type="range" min="-1" max="3" step="0.1" value="0"><output id="o3">0.0</output>
+    </div>
+    <div class="btns">
+      <button type="button" data-s="1.8,1.1,0">Good retriever</button>
+      <button type="button" data-s="1,1,1">All three equal</button>
+      <button type="button" data-s="0,0.7,1.9">Broken retriever</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="num">p(z|x)</th><th class="num">“Thu 9am”</th><th class="num">“Wed”</th><th>Training</th></tr></thead>
+      <tbody id="ragw-body"></tbody>
+    </table></div>
+    <div class="bars" id="ragw-bars"></div>
+    <p class="out" id="ragw-out"></p>
+  </div>
+
+  <p>Now press “Broken retriever”. The retriever now gives the forum post a weight of 0.69, <q>Wednesday afternoon</q> climbs to 0.60, and <q>Thursday 9am</q> drops to 0.27. The generator's numbers are unchanged, so the whole difference comes from the retriever's weights. <b>So RAG's answer depends on the retriever's weights just as much as on the generator's numbers.</b></p>
+
+  <p>The sum also has a limit. If the right passage never made it into the top K, it is not in the sum, and training cannot raise its weight. Lesson 2 called this the <button class="def" data-w="w-ceiling">recall ceiling</button>.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="seq-token">
+  <h3><span class="cn">3</span>RAG-Sequence and RAG-Token: when the weighted sum happens</h3>
+
+  <p><b>RAG-Sequence writes the whole answer with each passage, then takes the weighted sum. RAG-Token takes a separate weighted sum at every token of the answer.</b> So far the whole answer was one piece, but the generator writes it one token at a time. When different parts of the answer sit in different passages, the two methods give different results.</p>
+
+  <p>The probability of a whole answer is the product of its tokens' probabilities, which is the <button class="def" data-w="w-chain">chain rule</button> from lesson 4. If Thursday has probability 0.9, and then Zoom has 0.2, the whole answer has 0.9 × 0.2 = 0.18.</p>
+
+  <p>Now take the question <q>Least crowded office hour, and where is it?</q> The answer has two tokens: <q>Thursday</q> and <q>Zoom</q>. The queue log says Thursday is the quietest but not where it is held. The office hours page says <q>Thursday 9am on Zoom</q> but not which slot is quiet. <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Weight</th><th class="numh">p(Thursday | x, z)</th><th class="numh">p(Zoom | x, z, Thursday)</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.6</td><td class="num">0.9</td><td class="num">0.2</td></tr>
+      <tr><td>Office hours page</td><td class="num">0.4</td><td class="num">0.5</td><td class="num">0.9</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>RAG-Sequence first writes the whole answer with each passage, then takes the weighted sum:</p>
+  <ol class="plain">
+    <li>Whole answer with the queue log: 0.9 × 0.2 = 0.18.</li>
+    <li>Whole answer with the office hours page: 0.5 × 0.9 = 0.45.</li>
+    <li>Weighted sum: 0.6 × 0.18 + 0.4 × 0.45 = 0.108 + 0.180 = <b>0.288</b>.</li>
+  </ol>
+  <p>The slide puts it this way: <q>pick one passage, generate the whole answer with it</q>.</p>
+
+  <p>RAG-Token first takes the weighted sum at each token, then multiplies the tokens:</p>
+  <ol class="plain">
+    <li>Thursday: 0.6 × 0.9 + 0.4 × 0.5 = 0.54 + 0.20 = 0.74.</li>
+    <li>Zoom: 0.6 × 0.2 + 0.4 × 0.9 = 0.12 + 0.36 = 0.48.</li>
+    <li>Product: 0.74 × 0.48 = <b>0.355</b>.</li>
+  </ol>
+  <p>On the slide this is: <q>re-pick the passage at every token of the answer</q>.</p>
+
+  <p><b>RAG-Token gets the higher probability, 0.355 against 0.288.</b> It can lean on the queue log for Thursday and on the office hours page for Zoom. RAG-Sequence has to write the whole answer from a single passage, and no single passage knows both facts.</p>
+
+  <p>The two formulas hold the same pieces, with ∑ and <button class="def" data-w="w-prod">∏</button> in swapped places. ∏ means multiply everything over the range written below it, just as ∑ means add everything. Here y<sub><i>i</i></sub> is the i-th token of the answer, and y<sub>&lt;<i>i</i></sub> is all the tokens before it.</p>
+  <div class="formula">RAG-Sequence: p(y|x) ≈ ∑<sub><i>z</i></sub> p(z|x) ∏<sub><i>i</i></sub> p(y<sub><i>i</i></sub> | x, z, y<sub>&lt;<i>i</i></sub>)</div>
+  <div class="formula">RAG-Token: p(y|x) ≈ ∏<sub><i>i</i></sub> ∑<sub><i>z</i></sub> p(z|x) p(y<sub><i>i</i></sub> | x, z, y<sub>&lt;<i>i</i></sub>)</div>
+  <p>In RAG-Sequence the ∏ is inside: first the tokens are multiplied for each passage (0.18 and 0.45), then comes the ∑. In RAG-Token the ∑ is inside: first the passages are added for each token (0.74 and 0.48), then comes the ∏. In the results of step 5 the two methods come out almost equal.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG, the formula and RAG-Sequence and RAG-Token" loading="lazy"></a>
+    <figcaption>Stanford's slide: Deep Dive into RAG. At the top are the retriever and the generator, in the middle the formula from step 2, and at the bottom the two lines on RAG-Sequence and RAG-Token. You can now read every line of it.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>In the example above, set both passages' weights to 0.5. What probability do RAG-Sequence and RAG-Token give now?</p>
+    <details><summary>Show the answer</summary>
+      <p>RAG-Sequence: 0.5 × 0.18 + 0.5 × 0.45 = 0.315. RAG-Token: (0.5 × 0.9 + 0.5 × 0.5) × (0.5 × 0.2 + 0.5 × 0.9) = 0.70 × 0.55 = 0.385. RAG-Token is ahead again, because the two tokens still come from different passages.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="training">
+  <h3><span class="cn">4</span>Training the retriever and the generator with one loss</h3>
+
+  <p><b>RAG's training makes −ln of the right answer's probability small, and this single loss changes both the retriever and the generator.</b> Training all the parts together with one loss is called <b class="term">end-to-end training</b>. The data holds only question-answer pairs, yet this loss is how the retriever learns which passage deserves more weight.</p>
+
+  <p>The <button class="def" data-w="w-loss">loss</button> is the one from lesson 4: −ln of the right answer's probability p. In step 2, <q>Thursday 9am</q> got 0.70, so the loss is −ln 0.70 = 0.357. Over all training examples j, these losses add up:</p>
+  <div class="formula"><span class="sum"><span class="op">∑</span><span class="lim"><i>j</i></span></span> − log p(y<sub><i>j</i></sub> | x<sub><i>j</i></sub>)</div>
+  <p>The slide calls this the <button class="def" data-w="w-nmll">negative marginal log-likelihood</button>. It is “marginal” because p(y|x) itself comes from marginalization over passages, and the slide's log is this ln.</p>
+
+  <h4 class="sub" id="rule">Which passage's score lowers the loss when it rises</h4>
+
+  <p>In the table below, each row raises one score by 0.5 and leaves the other two alone. The weights here have 3 decimals, so the first row's loss is 0.355, not 0.357. <span class="mine">my arithmetic</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Score raised by 0.5</th><th>Weights: queue log, office hours, forum</th><th class="numh">p(“Thu 9am” | x)</th><th class="numh">Loss</th></tr></thead>
+    <tbody>
+      <tr><td>None</td><td>0.602, 0.299, 0.099</td><td class="num">0.701</td><td class="num">0.355</td></tr>
+      <tr class="hi"><td>Queue log, 1.8 to 2.3</td><td>0.714, 0.215, 0.072</td><td class="num">0.757</td><td class="num">0.279</td></tr>
+      <tr><td>Office hours page, 1.1 to 1.6</td><td>0.504, 0.413, 0.083</td><td class="num">0.668</td><td class="num">0.403</td></tr>
+      <tr><td>Forum post, 0.0 to 0.5</td><td>0.565, 0.281, 0.154</td><td class="num">0.664</td><td class="num">0.409</td></tr>
+    </tbody>
+  </table></div>
+  <p>When the queue log's score rose, the total probability went from 0.701 to 0.757, and the loss fell. When either of the other two rose, the total fell and the loss rose, even though the office hours page gives 0.5.</p>
+
+  <p>The reason lies in the weighted average. p(y|x) is a weighted average of the generator's numbers 0.9, 0.5 and 0.1, meaning each number times its weight, all added up. A weighted average always lies between the smallest and the largest number, and it moves toward whichever number gains weight.</p>
+
+  <p>Set the queue log aside for a moment. The office hours page and the forum post have weights in the ratio 3 : 1, that is 0.75 and 0.25 between them. Their average is 0.75 × 0.5 + 0.25 × 0.1 = 0.4. So the total is 0.6 × 0.9 + 0.4 × 0.4 = 0.54 + 0.16 = 0.70. Raising the queue log's score does not change that 3 : 1, because in softmax the other two exps stay the same. So if the queue log's weight is w, the total is w × 0.9 + (1 − w) × 0.4:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Queue log's weight w</th><th class="numh">Total probability</th></tr></thead>
+    <tbody>
+      <tr><td>0.5</td><td class="num">0.65</td></tr>
+      <tr class="hi"><td>0.6, now</td><td class="num">0.70</td></tr>
+      <tr><td>0.7</td><td class="num">0.75</td></tr>
+      <tr><td>0.8</td><td class="num">0.80</td></tr>
+      <tr><td>1.0</td><td class="num">0.90</td></tr>
+    </tbody>
+  </table></div>
+  <p>For the office hours page the same arithmetic runs the other way, because its 0.5 is below 0.79, the average of the other two passages.</p>
+
+  <p><b>The rule: if the generator gives the right answer a higher probability with a passage than the current total, training raises that passage's score.</b> If it gives a lower one, training lowers the score. Here the total is 0.70, so the queue log's score (0.9) goes up, and the scores of the office hours page (0.5) and the forum post (0.1) go down. <span class="mine">this rule is not on the slides, it follows from the maths</span></p>
+
+  <p>Now run the same rule on the broken retriever. There the total is 0.27, so both the queue log (0.9) and the office hours page (0.5) go up, and the forum post (0.1) goes down. The queue log was never named in the data, yet training moves the retriever toward it. The last column of the widget in step 2 shows exactly this rule.</p>
+
+  <h4 class="sub" id="whotrains">Which parts are trained</h4>
+
+  <p>Training nudges every parameter a little in the direction that lowers the loss, and the <button class="def" data-w="w-gradient">gradient</button> gives that direction. Working backwards from the loss to get every parameter's gradient is called <b class="term">backpropagation</b>, or backprop for short. In RAG the gradient reaches the generator's parameters θ and, inside the retriever, the query encoder.</p>
+
+  <p>The passage encoder and the index stay fixed. Changing the passage encoder would mean rebuilding the vectors of 21 million passages and then the index. <span class="mine">from the paper</span> So training improves things only from the question's side. It changes the query encoder so that q(x) gets larger dot products with the useful passages. If a passage's vector was built badly, training cannot fix it.</p>
+
+  <p>The dashed arrow at the top of the slide in step 1 says exactly this: <q>End-to-End Backprop through q and p<sub>θ</sub></q>. The arrow reaches q and p<sub>θ</sub>, not the d(z) in the document index.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Press “All three equal” in the widget, so each passage has weight 1/3. What is the total probability of <q>Thursday 9am</q>? Which passage's score will training raise, which will it lower, and what happens to the office hours page?</p>
+    <details><summary>Show the answer</summary>
+      <p>The total is (0.9 + 0.5 + 0.1) ÷ 3 = 0.50. The queue log (0.9) is above it, so its score goes up. The forum post (0.1) is below, so its score goes down. The office hours page gives exactly 0.5, equal to the total, so its score stays where it is.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="results">
+  <h3><span class="cn">5</span>Results on NQ: RAG, T5-11B and DPR</h3>
+
+  <p>The paper measures RAG on question-answering datasets. Natural Questions (NQ) holds real questions people typed into Google search, with answers in Wikipedia. <span class="mine">from the paper</span> An answer counts as right only if it matches the correct answer exactly, and this measure is called <b class="term">Exact Match</b>. The score is the percentage of such questions.</p>
+
+  <p>The table has two kinds of models. A <b class="term">closed-book</b> model has no documents and answers from its parameters alone. An open-book model first searches documents, then answers.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Model</th><th>Kind</th><th class="numh">NQ</th></tr></thead>
+    <tbody>
+      <tr><td>T5-11B</td><td>Closed book, 11 billion parameters</td><td class="num">34.5</td></tr>
+      <tr><td>REALM</td><td>Open book, picks the answer out of a passage</td><td class="num">40.4</td></tr>
+      <tr><td>DPR</td><td>Open book, picks the answer out of a passage</td><td class="num">41.5</td></tr>
+      <tr><td>RAG-Token</td><td>Open book, writes the answer itself</td><td class="num">44.1</td></tr>
+      <tr class="hi"><td>RAG-Sequence</td><td>Open book, writes the answer itself</td><td class="num">44.5</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>T5-11B is at 34.5 and RAG-Sequence at 44.5, which is 10 points ahead. Out of 1,000 questions, that is 345 against 445 answers exactly right. <b>So RAG, with documents, gets 100 more questions in 1,000 exactly right than T5-11B with its parameters alone.</b></p>
+
+  <p>The DPR row means the full QA system built on top of the DPR retriever, which picks the answer out of a passage. RAG takes the same kind of retriever, writes the answer itself, and goes from 41.5 to 44.5. RAG-Token is only 0.4 behind RAG-Sequence.</p>
+
+  <p>RAG taught its retriever from question-answer pairs, but to do so it also changed the generator's parameters. Today you often get an LLM through a company's API, such as GPT or Gemini, and you cannot change its parameters. <a href="06-rag-pipeline-en.html#frozen">Lesson 6</a> starts from exactly this situation.</p>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 5 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 6: the maths of the training rule. Rates, ∂, the weight after seeing the answer (the posterior), and the score's rate = prior − posterior.</li>
+      <li>Step 7: the generator's and the query encoder's rates from one loss, why the passage encoder stays fixed, and the paper's experiments on the retriever.</li>
+      <li>Step 8: RAG-Sequence and RAG-Token in depth: a posterior that changes at every token, Thorough and Fast decoding, and the effect of K.</li>
+      <li>Step 9: the paper's real scale and the full results table, with all four datasets.</li>
+      <li>Step 10: Stanford's six RAG slides, which you read yourself.</li>
+    </ul>
+    <p><a href="05-rag-model-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>RAG treats the passage as a hidden choice and takes a weighted sum over the top-K passages: p(y|x) ≈ ∑ p<sub>η</sub>(z|x) · p<sub>θ</sub>(y|x, z). So training needs no labels for the right passage.</li>
+    <li>RAG-Sequence writes the whole answer with one passage and then adds, while RAG-Token adds at every token. When parts of the answer sit in different passages, RAG-Token gets the higher probability, as in 0.355 against 0.288.</li>
+    <li>One loss trains both the query encoder and the generator, while the passage encoder and the index stay fixed. Training raises the score of any passage with which the right answer gets a higher probability than the total.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-rag">RAG</dt><dd>Retrieval-Augmented Generation: joining a retriever and a generator into one model and training them together with one loss. For example, bringing the queue log and writing <q>Thursday 9am</q> from it.</dd>
+    <dt id="w-latent">Latent variable</dt><dd>A hidden choice that the data does not record. In RAG, the choice of which passage the answer came from. For example, a question-answer pair does not say that the answer came from the queue log.</dd>
+    <dt id="w-eta-theta">η and θ</dt><dd>The names of the retriever's (eta) and the generator's (theta) parameters. That is why the retriever is written p<sub>η</sub>(z|x) and the generator p<sub>θ</sub>(y|x, z).</dd>
+    <dt id="w-bert">BERT</dt><dd>An encoder model Google released in 2018. Both of the RAG retriever's encoders, the query encoder and the passage encoder, are built from it.</dd>
+    <dt id="w-mips">MIPS</dt><dd>Maximum inner product search: finding the K passages in the index with the largest dot products. For example, the 5 highest scores among 21 million passages.</dd>
+    <dt id="w-generator">Generator</dt><dd>The model that reads the question and one passage and writes the answer, p<sub>θ</sub>(y|x, z). In RAG it is BART. For example, 0.9 for <q>Thursday 9am</q> with the queue log.</dd>
+    <dt id="w-encdec">Encoder-decoder</dt><dd>The encoder turns the input into vectors, and the decoder looks at them while it writes one token at a time. BART is such a model.</dd>
+    <dt id="w-concat">Concatenate</dt><dd>Join two texts end to end into one text. For example, <q>question: …</q> followed by <q>passage: …</q>.</dd>
+    <dt id="w-ragseq">RAG-Sequence</dt><dd>The whole answer with each passage, then the weighted sum. For example, 0.6 × 0.18 + 0.4 × 0.45 = 0.288.</dd>
+    <dt id="w-ragtok">RAG-Token</dt><dd>A weighted sum at every token, then the product of the tokens. For example, 0.74 × 0.48 = 0.355.</dd>
+    <dt id="w-e2e">End-to-end training</dt><dd>Training all the parts together with one loss. In RAG the query encoder and the generator both learn from the same −ln p(y|x). For example, −ln 0.70 = 0.357.</dd>
+    <dt id="w-backprop">Backpropagation</dt><dd>Working backwards from the loss to get every parameter's gradient, backprop for short. In RAG it reaches the generator and the query encoder, but not the passage encoder.</dd>
+    <dt id="w-em">Exact Match</dt><dd>An answer counts as right only if it matches the correct answer exactly. The score is the percentage of such questions. For example, RAG-Sequence's 44.5 on NQ.</dd>
+    <dt id="w-closed">Closed book and open book</dt><dd>Answering from parameters alone, or searching documents first and then answering. For example, on NQ the closed-book T5-11B scores 34.5 and the open-book RAG-Sequence 44.5.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="04-probability-tools-en.html">Previous: Lesson 4</a>
+    <a href="06-rag-pipeline-en.html">Next: Lesson 6, The RAG pipeline</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Paper: Lewis et al., 2020, “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var P = [
+    { id: "Queue log", thu: 0.9, wed: 0.05 },
+    { id: "Office hours page", thu: 0.5, wed: 0.2 },
+    { id: "Forum post", thu: 0.1, wed: 0.8 }
+  ];
+  var ins = [1, 2, 3].map(function (i) { return document.getElementById("w" + i); });
+  var outs = [1, 2, 3].map(function (i) { return document.getElementById("o" + i); });
+  var body = document.getElementById("ragw-body");
+  var bars = document.getElementById("ragw-bars");
+  var out = document.getElementById("ragw-out");
+  var btns = document.querySelectorAll("#ragw .btns button");
+  function f2(x) { return (Math.round(x * 100 + 1e-9) / 100).toFixed(2); }
+  function render() {
+    var s = ins.map(function (x) { return Number(x.value); });
+    outs.forEach(function (o, i) { o.textContent = s[i].toFixed(1); });
+    var e = s.map(Math.exp), tot = e[0] + e[1] + e[2];
+    var p = e.map(function (x) { return x / tot; });
+    var thu = 0, wed = 0;
+    P.forEach(function (z, i) { thu += p[i] * z.thu; wed += p[i] * z.wed; });
+    body.innerHTML = P.map(function (z, i) {
+      var g = p[i] * (z.thu / thu - 1);
+      var dir = Math.abs(g) < 0.005 ? "stays" : (g > 0 ? "goes up" : "goes down");
+      return "<tr><td>" + z.id + '</td><td class="num">' + f2(p[i]) + '</td><td class="num"><span class="hide-sm">' + z.thu + " × " + f2(p[i]) + " = </span>" + f2(p[i] * z.thu) +
+        '</td><td class="num"><span class="hide-sm">' + z.wed + " × " + f2(p[i]) + " = </span>" + f2(p[i] * z.wed) + "</td><td>" + dir + "</td></tr>";
+    }).join("") + '<tr class="total"><td>Sum = p(y|x)</td><td></td><td class="num">' + f2(thu) + '</td><td class="num">' + f2(wed) + "</td><td></td></tr>";
+    var thuWins = thu >= wed;
+    bars.innerHTML =
+      '<span>Thursday 9am</span><div class="bar' + (thuWins ? " win" : "") + '"><span style="width:' + thu * 100 + '%"></span></div><span class="val">' + f2(thu) + "</span>" +
+      '<span>Wednesday</span><div class="bar' + (!thuWins ? " win" : "") + '"><span style="width:' + wed * 100 + '%"></span></div><span class="val">' + f2(wed) + "</span>";
+    out.innerHTML = "RAG's answer: <b>" + (thuWins ? "Thursday 9am" : "Wednesday afternoon") + "</b>" + (thuWins ? "" : ", which the queue log says is wrong") +
+      ". The right answer's loss = −ln " + thu.toFixed(3) + " = <b>" + (-Math.log(thu)).toFixed(3) + "</b>.";
+    var key = s.map(function (v) { return String(v); }).join(",");
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.s === key ? "true" : "false"); });
+  }
+  ins.forEach(function (x) { x.addEventListener("input", render); });
+  btns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var v = b.dataset.s.split(",");
+      ins.forEach(function (x, i) { x.value = v[i]; });
+      render();
+    });
+  });
+  render();
+})();
+</script>
+</body>
+</html>

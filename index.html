@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Agents, पहली नींव से</title>
+<meta name="description" content="Stanford CS 329Z “Engineering AI Agents” की lectures पर बने self-study lessons, Hindi और English में, आसान और गहरे versions के साथ।">
+<link rel="stylesheet" href="lecture03/study.css">
+<style>
+  .topbar .switch b { color: var(--ink); }
+  .lecture { border: 1px solid var(--rule); border-radius: 10px; padding: 18px 22px 8px; margin: 0 0 14px; background: var(--card); }
+  .lecture h3 { font-size: 22px; margin: 2px 0 8px; }
+  .lecture h3 a { color: var(--ink); text-decoration: none; }
+  .lecture .go a { font-weight: 600; }
+  section { margin: 0 0 44px; }
+  section > h2 { font-size: 24px; margin: 0 0 12px; }
+  table.t th:first-child { width: 22%; }
+</style>
+</head>
+<body>
+<main>
+
+<nav class="topbar">
+  <span>AI Agents, पहली नींव से</span>
+  <span class="switch"><b>हिन्दी</b> · <a href="index-en.html">English</a></span>
+</nav>
+
+<header style="margin-bottom:40px">
+  <p class="kicker">Stanford CS 329Z · Engineering AI Agents</p>
+  <h1>AI Agents, पहली नींव से</h1>
+  <p class="lede">ये Stanford के course CS 329Z “Engineering AI Agents” की lectures पर बने self-study lessons हैं। हर lesson पहली नींव से शुरू होता है। हर नया शब्द वहीं समझाया है, जहाँ वो पहली बार आता है, और हर formula पहले छोटे numbers पर हाथ से हल किया है।</p>
+  <p class="callout"><b>ध्यान दीजिए:</b> ये Stanford की official site नहीं है। ये course पढ़ते हुए बने निजी notes हैं। Slides और ideas course के हैं, और हर lesson के नीचे उनका credit लिखा है।</p>
+</header>
+
+<section>
+  <h2>अभी क्या पढ़ सकते हैं</h2>
+  <div class="lecture">
+    <p class="kicker">Lecture 3 · 18 lessons</p>
+    <h3><a href="lecture03/index.html">RAG + Agents</a></h3>
+    <p>LLM को सही जानकारी सही वक्त पर कैसे दें, और ये तरीका कहाँ टूटता है। Lessons इन चीज़ों को एक-एक करके बनाते हैं: retrieval, vectors, probability, RAG model और chunking। फिर BM25, DPR, retriever को नापना, hybrid search और ColBERT। आख़िर में agentic RAG, Search-R1 और RAG की failures।</p>
+    <p class="go"><a href="lecture03/index.html">Lecture 3 खोलिए</a> · <a href="lecture03/index-en.html">English में</a></p>
+  </div>
+  <p class="note">बाकी lectures के lessons बाद में जुड़ेंगे।</p>
+</section>
+
+<section>
+  <h2>हर lesson के चार versions</h2>
+  <p>हर lesson दो level में लिखा है, और दोनों Hindi और English में हैं। Lesson के ऊपर एक switch है, जिससे आप कभी भी level या भाषा बदल सकते हैं।</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>आसान</th><th>गहरा</th></tr></thead>
+    <tbody>
+      <tr><td>क्या है</td><td>मुख्य बात, धीरे-धीरे, छोटे numbers के साथ</td><td>पूरा आसान lesson, और उसके बाद Stanford की slides के level तक के पड़ाव</td></tr>
+      <tr><td>किसके लिए</td><td>पहली बार पढ़ने के लिए</td><td>जब slides की हर line और हर symbol समझना हो</td></tr>
+      <tr><td>गणित</td><td>जितना मुख्य हिसाब के लिए ज़रूरी है</td><td>Slides का पूरा गणित, school level से समझाया हुआ</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>ये lessons किसके लिए हैं</h2>
+  <p>Lessons मानते हैं कि आप code पढ़ लेते हैं और school का गणित जानते हैं, लेकिन ML और statistics के शब्द आपके लिए नए हैं। इनमें कोई analogy नहीं है। हर idea को उसी असली system के छोटे version पर समझाया है, जैसे 3 passages और 4 numbers वाले vectors। इससे हिसाब हाथ से हो सकता है।</p>
+</section>
+
+<section>
+  <h2>कैसे पढ़ें</h2>
+  <ul class="plain">
+    <li>Lecture का index खोलिए। वहाँ lessons का नक्शा बताता है कि किस lesson से पहले क्या पढ़ना है।</li>
+    <li>हर lesson के ऊपर एक सीढ़ी है। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए।</li>
+    <li>“पहले सोचिए” वाले सवाल खुद हल कीजिए, फिर जवाब खोलिए।</li>
+    <li>जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click कीजिए। उसका मतलब वहीं खुलता है।</li>
+  </ul>
+</section>
+
+<section>
+  <h2>ये lessons कैसे लिखे गए</h2>
+  <p>Lessons कुछ तय नियमों पर लिखे हैं, और हर नियम के पीछे सिखाने और लिखने पर हुई research है। हर number को एक script ने दोबारा निकालकर जाँचा है। <a href="method.html">पूरा तरीका पढ़िए</a>: सिखाने के नियम, उनके sources, और हर lesson की जाँच।</p>
+</section>
+
+<footer>
+  Course: CS 329Z “Engineering AI Agents”, Stanford University, Diyi Yang। Slides और उनमें दिए papers उनके लेखकों के हैं। Notes: October 2026।
+</footer>
+</main>
+</body>
+</html>

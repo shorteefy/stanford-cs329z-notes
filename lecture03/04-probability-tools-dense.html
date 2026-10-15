@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Retriever का score 1.56 और LLM की probability 0.81 सीधे नहीं जुड़ते, लेकिन lesson 5 का RAG formula इन्हीं से जवाब की probability बनाता है। ये lesson वो औज़ार बनाता है, और आख़िर में आप RAG की Stanford slides खुद पढ़ते हैं।">
+<title>Lesson 4: Probability के औज़ार (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+  .mat { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; line-height: 1.25; border-left: 1.5px solid currentColor; border-right: 1.5px solid currentColor; border-radius: 5px; padding: 0 7px; margin: 0 2px; }
+  .matrow { display: inline-block; border-left: 1.5px solid currentColor; border-right: 1.5px solid currentColor; border-radius: 5px; padding: 0 7px; margin: 0 2px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 4 / 18 · <a href="04-probability-tools.html">आसान</a> · <b>गहरा</b> · <a href="04-probability-tools-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 4 · गहरा version</p>
+  <h1>Probability के औज़ार: RAG का formula पढ़ने की तैयारी</h1>
+  <p class="lede"><b>ये lesson पाँच औज़ार बनाता है: conditional probability, chain rule, marginalization, softmax और loss। Lesson 5 का RAG formula इन्हीं पाँच से बना है।</b> वो formula दो तरह के numbers जोड़ता है। <a href="01-how-llms-answer-dense.html#prompt">Lesson 1</a> में LLM ने queue log पढ़कर <q>Thursday</q> को 0.81 <button class="def" data-w="w-probability">probability</button> दी थी। <a href="03-vectors-dense.html#dot">Lesson 3</a> में retriever ने course के लंबे FAQ page को 1.56 <button class="def" data-w="w-score">score</button> दिया था।</p>
+  <p class="lede">ये दोनों numbers सीधे नहीं जुड़ते। 1.56 probability नहीं हो सकता, क्योंकि probability 1 से बड़ी नहीं होती। और 0.81 पूरे जवाब का नहीं, सिर्फ़ पहले token का chance है। <a href="05-rag-model-dense.html#formula">Lesson 5</a> का formula इन्हें ऐसे जोड़ता है: <span class="math">p(y|x) ≈ ∑ p(z|x) · p(y|x, z)</span>, जहाँ <span class="math">p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</span>, और training <span class="math">∑ −log p(y|x)</span> को छोटा करती है। पड़ाव 5 में आप ये पूरा formula हाथ से चलाएँगे।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 10 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 10 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#conditional">Conditional probability और chain rule</a><span class="can">p(भरा | Tuesday) जैसी probability गिनती से निकाल पाएँगे, और tokens की probabilities से पूरे जवाब की probability बना पाएँगे।</span></li>
+      <li><a href="#marginal">Marginalization: पता न हो कि कौन सा case सच है</a><span class="can">हर case के वज़न से कुल probability निकाल पाएँगे, और RAG formula का ∑ पढ़ पाएँगे।</span></li>
+      <li><a href="#softmax">Softmax: retriever के scores से वज़न</a><span class="can">exp निकाल पाएँगे, scores को probabilities में बदल पाएँगे, और p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x)) पढ़ पाएँगे।</span></li>
+      <li><a href="#loss">ln और loss: गलती का एक number</a><span class="can">ln के नियम से गुणा को जोड़ में बदल पाएँगे, और −ln p से loss निकाल पाएँगे।</span></li>
+      <li><a href="#read">पूरा RAG formula हाथ से</a><span class="can">Formula का हर हिस्सा अपने numbers से निकाल पाएँगे, और Stanford की RAG वाली slide पढ़ पाएँगे।</span></li>
+          <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#probrules">Slide के formula के symbols, और probability के नियम</a><span class="can">Formula का हर symbol अपने number से जोड़ पाएँगे, और बता पाएँगे कि ≈ कितना करीब है।</span></li>
+      <li><a href="#logrules">exp और ln के बाकी नियम</a><span class="can">ln(a ÷ b) और ln(a<sup>n</sup>) जैसे नियम numbers से जाँच पाएँगे, और बता पाएँगे कि marginal log-likelihood क्यों नहीं टूटता।</span></li>
+      <li><a href="#softmaxfull">Softmax पूरा: normalizer, column vector और top-k</a><span class="can">∝, bold 𝐝 और 𝐪, ⊤ और top-k(p(·|x)) पढ़ पाएँगे, और बता पाएँगे कि MIPS क्यों काफ़ी है।</span></li>
+      <li><a href="#training">Negative marginal log-likelihood, और loss की दरें</a><span class="can">कई examples का loss निकाल पाएँगे, और retriever और generator पर loss की दरें हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">RAG की तीनों Stanford slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="01-how-llms-answer-dense.html#next-token">Lesson 1</a> (probability, token, next-token prediction, training) और <a href="03-vectors-dense.html#dot">Lesson 3</a> (vector, dot product, ∑)। पड़ाव 6 से आगे कुछ शब्द lesson 5 के हैं, जैसे BERT, MIPS, η और θ। उन पर click करने से उनका मतलब खुलता है। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="conditional">
+  <h3><span class="cn">1</span>Conditional probability और chain rule: पता बात से बदलता chance</h3>
+
+  <h4 class="sub" id="given">“|” के बाद लिखी बात पहले से पता है</h4>
+
+  <p><b>Conditional probability किसी बात का chance है, जब कोई दूसरी बात पहले से पता हो।</b> इसे p(A | B) लिखते हैं, और “B पता हो, तो A की probability” पढ़ते हैं। RAG के formula में हर probability के अंदर यही खड़ी line “|” है, इसलिए पहले इसका मतलब numbers पर देखिए।</p>
+
+  <p>पिछले 20 हफ़्तों में 40 office hour sessions हुए, 20 Tuesday को और 20 Thursday को। जिस session में 10 से ज़्यादा students इंतज़ार में थे, उसे “भरा” मानिए। <span class="mine">numbers मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th class="numh">भरा</th><th class="numh">खाली</th><th class="numh">कुल</th></tr></thead>
+    <tbody>
+      <tr><td><b>Tuesday</b></td><td class="num">16</td><td class="num">4</td><td class="num">20</td></tr>
+      <tr><td><b>Thursday</b></td><td class="num">2</td><td class="num">18</td><td class="num">20</td></tr>
+      <tr class="total"><td>कुल</td><td class="num">18</td><td class="num">22</td><td class="num">40</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>दिन पता न हो, तो सारे 40 sessions गिनिए। उनमें 18 भरे थे, इसलिए p(भरा) = 18 ÷ 40 = 0.45। अब पता है कि आज Tuesday है, तो सिर्फ़ Tuesday वाली row गिनिए। उसमें 20 में से 16 भरे थे, यानी p(भरा | Tuesday) = 16 ÷ 20 = 0.80। Thursday पता हो, तो p(भरा | Thursday) = 2 ÷ 20 = 0.10। <b>दिन पता चलते ही chance 0.45 से 0.80 या 0.10 हो गया।</b></p>
+
+  <div class="formula">p(A | B) = <span class="frac"><span>A और B, दोनों वाले cases</span><span>B वाले cases</span></span></div>
+  <p>Tuesday के लिए ऊपर 16 है, यानी भरे हुए Tuesdays, और नीचे 20, यानी सारे Tuesdays।</p>
+
+  <p><a href="01-how-llms-answer-dense.html#prompt">Lesson 1</a> का next-token prediction भी conditional probability है। वहाँ prompt पता था, और <q>Thursday</q> की probability 0.21 थी। Prompt में queue log जुड़ा, यानी पता बात बदली, तो वही probability 0.81 हो गई।</p>
+
+  <p>अब आप formula के दोनों टुकड़े पढ़ सकते हैं। p(z|x) यानी सवाल x पता हो, तो passage z की probability। p(y|x, z) यानी सवाल x और passage z, दोनों पता हों, तो जवाब y की probability। “|” के बाद का comma “और” पढ़िए।</p>
+
+  <h4 class="sub" id="chain">पूरे जवाब की probability: chain rule</h4>
+
+  <p>LLM एक बार में एक token लिखता है, और हर token की अपनी probability होती है। लेकिन formula में p(y|x, z) पूरे जवाब y की probability है, जैसे <q>Thursday morning.</q> की। तीन tokens की तीन probabilities से एक probability बनाने का नियम ऊपर की table में ही दिखता है।</p>
+
+  <p>Table में Tuesday और भरा, दोनों साथ 40 में से 16 बार हुए, यानी 0.40। यही number दो कदम में भी आता है। पहले Tuesday का chance लीजिए: p(Tuesday) = 20 ÷ 40 = 0.5। फिर Tuesday होते हुए भरे होने का chance लीजिए: p(भरा | Tuesday) = 0.8। दोनों का गुणा 0.5 × 0.8 = 0.40 है।</p>
+
+  <div class="formula">p(A और B) = p(A) × p(B | A)</div>
+  <p><b>दो बातें साथ होने की probability, पहली बात की probability गुणा पहली के बाद दूसरी की probability है।</b> इस नियम को <button class="def" data-w="w-chain">chain rule</button> कहते हैं। Lesson 12 में इसी नाम का एक और नियम आता है, जो दरों के बारे में है, इसलिए इसे probability वाला chain rule कहिए।</p>
+
+  <p>जवाब के tokens पर यही नियम एक के बाद एक चलता है। पहला token <q>Thursday</q> है, जिसकी probability 0.21 है। Thursday लिख चुकने के बाद <q>morning</q> की probability 0.31 है, और फिर full stop की 0.71। पूरे जवाब की probability इन तीनों का गुणा है। <a href="01-how-llms-answer-dense.html#next-token">Lesson 1</a> के widget वाले दोनों जवाबों पर ये ऐसा दिखता है:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>जवाब</th><th>हर token की probability</th><th class="numh">पूरे जवाब की probability</th></tr></thead>
+    <tbody>
+      <tr><td><q>Thursday morning.</q></td><td>0.21 × 0.31 × 0.71</td><td class="num">0.046</td></tr>
+      <tr><td><q>Wednesday afternoon.</q></td><td>0.34 × 0.46 × 0.71</td><td class="num">0.111</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>n tokens वाले जवाब पर यही गुणा <button class="def" data-w="w-prod">∏</button> से लिखते हैं। ∏ का मतलब है नीचे लिखी range पर सबका गुणा, जैसे ∑ का मतलब सबका जोड़ था। y<sub><i>i</i></sub> जवाब का i-वाँ token है, और उसकी probability में “|” के बाद सवाल x और उससे पहले के सारे tokens हैं:</p>
+  <div class="formula">p(y | x) = <span class="sum"><span class="op">∏</span><span class="lim"><i>i</i> = 1 … <i>n</i></span></span> p(y<sub><i>i</i></sub> | x, y<sub>1</sub> … y<sub><i>i</i>−1</sub>)</div>
+  <p>हमारे जवाब में n = 3 है: y<sub>1</sub> = Thursday, y<sub>2</sub> = morning और y<sub>3</sub> = full stop। y<sub>2</sub> की probability में “|” के बाद सवाल और Thursday हैं। पूरा गुणा 0.21 × 0.31 × 0.71 = 0.046 है।</p>
+
+  <p>इस गुणा में एक दिक्कत है। हर probability 1 से छोटी है, इसलिए हर गुणा के साथ नतीजा और छोटा होता जाता है। 20 tokens हों, और हर एक की probability 0.5, तो पूरे जवाब की probability 0.5<sup>20</sup> = 0.00000095 बनती है। पड़ाव 4 का ln इसी दिक्कत को हल करता है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>4 tokens वाले एक जवाब में tokens की probabilities 0.9, 0.8, 0.5 और 0.9 हैं। पूरे जवाब की probability कितनी है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>0.9 × 0.8 = 0.72, फिर 0.72 × 0.5 = 0.36, और फिर 0.36 × 0.9 = <b>0.324</b>। बाकी तीन tokens 0.8 या उससे ऊपर हैं, फिर भी 0.5 वाले एक token ने पूरे जवाब की probability आधी कर दी।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="marginal">
+  <h3><span class="cn">2</span>Marginalization: पता न हो कि कौन सा case सच है</h3>
+
+  <p><b>Marginalization कुल probability निकालने का तरीका है, जब पता न हो कि कौन सा case सच है।</b> हर case की probability को उस case वाले chance से गुणा कीजिए, फिर सारे गुणा जोड़ दीजिए। Case की probability को उसका वज़न कहेंगे।</p>
+
+  <p>RAG में यही हालत है। Retriever कई passages लाता है, और system को पहले से पता नहीं कि कौन सा passage सही है। Queue log के साथ LLM <q>Thursday 9am</q> को ऊँची probability देगा, और पुराने forum post के साथ नीची। System को इनसे एक ही probability बनानी है।</p>
+
+  <p>पहले यही हालत office hours पर देखिए, जहाँ numbers छोटे हैं। एक student आधे हफ़्ते Tuesday जाता है और आधे Thursday, यानी p(Tuesday) = 0.5 और p(Thursday) = 0.5। हर दिन भरे होने का chance पड़ाव 1 से पता है: 0.8 और 0.1। बस ये पता नहीं कि आज वो किस दिन जाएगा।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Case z</th><th class="numh">वज़न p(z)</th><th class="numh">p(भरा | z)</th><th class="numh">गुणा</th></tr></thead>
+    <tbody>
+      <tr><td>Tuesday</td><td class="num">0.5</td><td class="num">0.8</td><td class="num">0.40</td></tr>
+      <tr class="hi"><td>Thursday</td><td class="num">0.5</td><td class="num">0.1</td><td class="num">?</td></tr>
+      <tr class="total"><td>जोड़ = p(भरा)</td><td></td><td></td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Thursday वाली row आप निकालिए</p>
+    <p>Thursday का गुणा कितना है, और कुल p(भरा) कितना? Student 90% बार Thursday जाए, तो कुल chance कितना होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Thursday: 0.5 × 0.1 = 0.05। जोड़ 0.40 + 0.05 = <b>0.45</b>, यानी वही, जो पड़ाव 1 में 18 ÷ 40 से सीधे गिनकर आया था।</p>
+      <p>90% Thursday पर: 0.1 × 0.8 + 0.9 × 0.1 = 0.08 + 0.09 = <b>0.17</b>। हर दिन का chance वही रहा, सिर्फ़ वज़न बदले, और कुल chance 0.45 से 0.17 हो गया।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">इस तरीके को <button class="def" data-w="w-marginal">marginalization</button> कहते हैं। ये तभी सही है, जब cases आपस में overlap न करें, और उनके वज़नों का जोड़ 1 हो। यहाँ दोनों बातें सच हैं, क्योंकि student एक दिन या तो Tuesday जाता है या Thursday, और 0.5 + 0.5 = 1।</p>
+  <div class="formula">p(A) = <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i></span></span> p(z) × p(A | z)</div>
+  <p>z एक case है, यहाँ Tuesday या Thursday। p(z) उसका वज़न है, 0.5 और 0.5, और p(A | z) उस case में भरे होने का chance, 0.8 और 0.1। <button class="def" data-w="w-sigma">∑</button> सारे cases का जोड़ है, यहाँ 0.40 + 0.05, और नतीजा p(A) = 0.45 है।</p>
+
+  <p><b><a href="05-rag-model-dense.html#formula">Lesson 5</a> का RAG formula यही है।</b> वहाँ case z एक passage है, और उसका वज़न retriever का भरोसा p(z|x) है। हर passage के साथ जवाब की probability p(y|x, z) है, यानी पड़ाव 1 वाला tokens का गुणा।</p>
+
+  <p>RAG के formula में “=” की जगह <button class="def" data-w="w-approx">≈</button> है, यानी “करीब बराबर”। RAG सारे passages नहीं जोड़ता, सिर्फ़ retriever के <button class="def" data-w="w-topk">top-K</button> passages जोड़ता है, यानी सबसे ऊँचे K scores वाले passages। बाकी passages के वज़न बहुत छोटे होते हैं, इसलिए जोड़ करीब वही रहता है।</p>
+
+  <p>एक शर्त अभी बाकी है। हर वज़न 0 और 1 के बीच होना चाहिए, और सारे वज़नों का जोड़ 1। Retriever के scores ऐसे नहीं होते, इसलिए पड़ाव 3 उन्हें वज़न में बदलता है।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="softmax">
+  <h3><span class="cn">3</span>Softmax: retriever के scores से वज़न</h3>
+
+  <p><b>Softmax scores की list को probabilities की list में बदलता है।</b> उसके दो steps हैं: हर score का exp लीजिए, फिर हर exp को सारे exps के जोड़ से भाग दीजिए। पहले देखिए कि ये दोनों steps क्यों चाहिए।</p>
+
+  <p><a href="03-vectors-dense.html#dot">Lesson 3</a> में सवाल <q>when can I get help from a TA</q> का एक vector था। Retriever ने उस vector से हर passage का <button class="def" data-w="w-dot">dot product</button> निकाला था, यानी एक ही जगह वाले numbers का गुणा, फिर जोड़। जैसे office hours page के लिए 0.8 × 0.9 + 0.2 × 0.1 = 0.74। बाकी scores थे: syllabus 0.26, project page 0.32 और course का लंबा FAQ page 1.56।</p>
+
+  <p>ये probabilities नहीं हैं, क्योंकि 1.56 तो 1 से बड़ा है, और चारों का जोड़ 2.88 है, 1 नहीं। हर score को चारों के जोड़ से भाग देना भी हमेशा नहीं चलता, क्योंकि dot product negative भी हो सकता है। तब negative हिस्सा बनता, और probability negative नहीं होती।</p>
+
+  <p>इसलिए softmax पहले हर score को positive number में बदलता है, और इसके लिए <button class="def" data-w="w-exp">exp</button> लेता है। exp(s) = e<sup>s</sup>, जहाँ e एक तय number है, करीब 2.718। जैसे exp(1) = 2.718 और exp(2) = e × e = 7.389। exp(0) = 1 है, क्योंकि किसी भी number की power 0 पर नतीजा 1 होता है।</p>
+
+  <p>Negative score पर भी exp positive रहता है: exp(−1) = 1 ÷ e = 0.368। Score कुछ भी हो, exp हमेशा 0 से बड़ा होता है, और बड़ा score बहुत बड़ा exp बनता है। exp का एक नियम आगे काम आएगा: score में 1 जोड़ने पर exp, e गुना हो जाता है, क्योंकि e<sup>a+1</sup> = e<sup>a</sup> × e। जाँच: exp(2) = exp(1) × e = 2.7183 × 2.7183 = 7.389।</p>
+
+  <p>अब softmax के दोनों steps scores 2.0, 1.0 और 0.1 पर देखिए: <span class="mine">scores मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Score s</th><th class="numh">exp(s)</th><th>हिसाब</th><th class="numh">Probability</th></tr></thead>
+    <tbody>
+      <tr><td>2.0</td><td class="num">7.389</td><td>7.389 ÷ 11.212</td><td class="num">0.659</td></tr>
+      <tr><td>1.0</td><td class="num">2.718</td><td>2.718 ÷ 11.212</td><td class="num">0.242</td></tr>
+      <tr><td>0.1</td><td class="num">1.105</td><td>1.105 ÷ 11.212</td><td class="num">0.099</td></tr>
+      <tr class="total"><td>जोड़</td><td class="num">11.212</td><td></td><td class="num">1.000</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>तीनों exps का जोड़ 11.212 है, और हर exp को इससे भाग देने पर 0.659, 0.242 और 0.099 मिलते हैं। तीनों 0 और 1 के बीच हैं, और उनका जोड़ 1 है, इसलिए ये वज़न बन सकते हैं। इस पूरे तरीके को <button class="def" data-w="w-softmax">softmax</button> कहते हैं:</p>
+  <div class="formula">p<sub><i>i</i></sub> = <span class="frac"><span>exp(s<sub><i>i</i></sub>)</span><span>∑<sub><i>j</i></sub> exp(s<sub><i>j</i></sub>)</span></span></div>
+  <p>ऊपर score s<sub>i</sub> का exp है, जैसे पहली row में exp(2.0) = 7.389। नीचे सारे scores के exps का जोड़ है, 11.212। तो p<sub>1</sub> = 7.389 ÷ 11.212 = 0.659।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>हर score में 1 जोड़ दीजिए, यानी 3.0, 2.0 और 1.1। Probabilities बढ़ेंगी, घटेंगी, या वैसी ही रहेंगी?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>वैसी ही रहेंगी: 0.659, 0.242 और 0.099। Score में 1 जोड़ने से हर exp, e गुना हो जाता है, जैसे exp(2.0) = 7.389 से exp(3.0) = 20.09। ऊपर और नीचे, दोनों e से गुणा होते हैं, और भाग में e कट जाता है। मतलब softmax सिर्फ़ scores के आपसी फ़र्क देखता है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><a href="05-rag-model-dense.html#parts">Lesson 5</a> का formula softmax को छोटे में ऐसे लिखता है:</p>
+  <div class="formula">p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</div>
+  <p><button class="def" data-w="w-propto">∝</button> का मतलब है “के अनुपात में”। यानी पहले हर passage का exp निकालिए, फिर सबको एक ही number से ऐसे भाग दीजिए कि जोड़ 1 हो। वो number सारे exps का जोड़ है, इसलिए ∝ में softmax का भाग छिपा है।</p>
+  <p><button class="def" data-w="w-transpose">d(z)<sup>⊤</sup>q(x)</button> passage और सवाल के vectors का dot product है। d(z) passage z का vector है, और q(x) सवाल x का। ऊपर का ⊤ सिर्फ़ लिखने का एक तरीका है, और हिसाब वही lesson 3 वाला है। जैसे office hours page [0.9, 0.1] और सवाल [0.8, 0.2] से 0.74।</p>
+
+  <p>अब lede वाला 1.56 भी वज़न बन सकता है। Lesson 3 के चारों scores पर softmax ये वज़न देता है: FAQ page 0.50, office hours page 0.22, project page 0.14 और syllabus 0.14। <span class="mine">हिसाब मेरा</span> Softmax क्रम नहीं बदलता, क्योंकि बड़ा score हमेशा बड़ा exp बनता है। इसलिए FAQ page अब भी सबसे ऊपर है, और lesson 3 वाली लंबे vector की दिक्कत softmax से ठीक नहीं होती।</p>
+
+  <div class="widget" id="smw">
+    <h4>Softmax खुद चलाइए</h4>
+    <p class="hint">तीन passages के scores बदलिए। Probabilities का जोड़ हमेशा 1 रहता है, और negative score पर भी हर probability 0 से बड़ी रहती है।</p>
+    <div class="ctl">
+      <label for="s1">Passage A का score</label><input id="s1" type="range" min="-4" max="4" step="0.1" value="2"><output id="so1">2.0</output>
+      <label for="s2">Passage B का score</label><input id="s2" type="range" min="-4" max="4" step="0.1" value="1"><output id="so2">1.0</output>
+      <label for="s3">Passage C का score</label><input id="s3" type="range" min="-4" max="4" step="0.1" value="0.1"><output id="so3">0.1</output>
+    </div>
+    <div class="btns">
+      <button type="button" data-s="2,1,0.1">2, 1, 0.1</button>
+      <button type="button" data-s="3,2,1.1">हर score + 1 (3, 2, 1.1)</button>
+      <button type="button" data-s="1,0,-1">Negative score भी (1, 0, −1)</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="numh">Score</th><th class="numh">exp(score)</th><th class="numh">Probability</th></tr></thead>
+      <tbody id="smw-body"></tbody>
+    </table></div>
+    <div class="bars" id="smw-bars"></div>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="loss">
+  <h3><span class="cn">4</span>ln और loss: गलती का एक number</h3>
+
+  <p><b>Loss एक number है, जो बताता है कि model सही जवाब से कितना दूर है, और training इसी number को छोटा करती है।</b> RAG में loss सही जवाब की probability से बनता है, और उसमें ln लगता है। ln पड़ाव 1 वाली छोटे numbers की दिक्कत भी हल करता है, इसलिए पहले ln देखिए।</p>
+
+  <p><button class="def" data-w="w-ln">Natural log</button>, यानी ln x, वो power है, जिस तक e को उठाने पर x मिले। मतलब ln, exp का उल्टा है: ln(e<sup>x</sup>) = x। जैसे e<sup>1</sup> = 2.718, इसलिए ln 2.718 = 1। और e<sup>0</sup> = 1, इसलिए ln 1 = 0।</p>
+
+  <p>1 से छोटे number का ln negative होता है, क्योंकि उसके लिए e की power negative चाहिए। जैसे ln 0.1 = −2.303, क्योंकि e<sup>−2.303</sup> = 1 ÷ e<sup>2.303</sup> = 1 ÷ 10 = 0.1।</p>
+
+  <p>ln का सबसे काम का नियम ये है: <b>ln(a × b) = ln a + ln b, यानी गुणा का ln, दोनों ln का जोड़ है।</b> ये exp के नियम से आता है, क्योंकि गुणा में powers जुड़ती हैं: e<sup>2</sup> × e<sup>3</sup> = e<sup>5</sup>। Numbers में 7.389 × 20.09 = 148.4, और e<sup>5</sup> भी 148.4 है। ln powers ही बताता है, इसलिए ln 148.4 = 5 = 2 + 3 = ln 7.389 + ln 20.09।</p>
+
+  <p><q>Thursday morning.</q> पर ये नियम तीन probabilities का गुणा, तीन ln का जोड़ बना देता है:</p>
+  <div class="formula">ln(0.21 × 0.31 × 0.71) = ln 0.21 + ln 0.31 + ln 0.71 = (−1.561) + (−1.171) + (−0.342) = −3.074</div>
+  <p>जाँच: e<sup>−3.074</sup> = 0.046, यानी वही पूरा गुणा। 20 tokens वाले जवाब पर 0.5<sup>20</sup> = 0.00000095 जैसे छोटे number की जगह 20 बार ln 0.5 जुड़ता है: 20 × (−0.693) = −13.86। <span class="mine">हिसाब मेरा</span></p>
+
+  <p>अब गलती का number बनाइए: <button class="def" data-w="w-loss">loss</button> = −ln p, जहाँ p वो probability है, जो model ने सही जवाब को दी। सामने का minus loss को positive बनाता है, क्योंकि 1 से छोटी हर probability का ln negative है। नीचे की table में देखिए कि p घटने पर loss कैसे बढ़ता है:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">सही जवाब की probability</th><th class="numh">Loss = −ln p</th><th>मतलब</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td class="num">0</td><td>पूरा पक्का और सही। Loss इससे कम नहीं हो सकता।</td></tr>
+      <tr><td class="num">0.9</td><td class="num">0.105</td><td>अच्छा</td></tr>
+      <tr><td class="num">0.5</td><td class="num">0.693</td><td>आधा भरोसा</td></tr>
+      <tr><td class="num">0.1</td><td class="num">2.303</td><td>ज़्यादातर गलत</td></tr>
+      <tr><td class="num">0.01</td><td class="num">4.605</td><td>बहुत गलत</td></tr>
+    </tbody>
+  </table></div>
+  <p>p = 0.9 पर loss 0.105 है, लेकिन p = 0.1 पर 2.303, यानी 20 गुना से भी ज़्यादा।</p>
+
+  <p>Model ने सही जवाब को जो probability दी, उसे <button class="def" data-w="w-likelihood">likelihood</button> कहते हैं। Loss उसी का minus ln है, इसलिए इस loss का नाम <button class="def" data-w="w-nll">negative log-likelihood</button> है। <q>Thursday morning.</q> सही जवाब हो, तो उसका loss −(−3.074) = 3.074 है।</p>
+
+  <p><a href="01-how-llms-answer-dense.html#parameters">Lesson 1</a> में training ने parameters को थोड़ा बदला था। उससे <q>Office hours are on</q> के बाद <q>Thursday</q> की probability 0.10 से 0.12 हो गई थी। Loss −ln 0.10 = 2.303 से घटकर −ln 0.12 = 2.120 हुआ, यानी 2.303 − 2.120 = 0.183 कम।</p>
+
+  <p>Training data में बहुत सारे examples होते हैं। Example j में सवाल x<sub>j</sub> है और उसका सही जवाब y<sub>j</sub>, और कुल loss सारे examples के losses का जोड़ है:</p>
+  <div class="formula">कुल loss = <span class="sum"><span class="op">∑</span><span class="lim"><i>j</i></span></span> − log p(y<sub><i>j</i></sub> | x<sub><i>j</i></sub>)</div>
+  <p>Stanford की slide और lesson 5 का formula log लिखते हैं, और उसका मतलब यही ln है।</p>
+
+  <p>Training हर parameter को किस दिशा में और कितना बदले, कि कुल loss घटे, ये <button class="def" data-w="w-gradient">gradient</button> बताता है। Thursday वाले example में training ने parameters को उस दिशा में बदला, जिसमें probability 0.10 से 0.12 हुई और loss 0.183 घटा। Gradient numbers से कैसे निकलता है, वो lesson 12 में आता है।</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="read">
+  <h3><span class="cn">5</span>पूरा RAG formula हाथ से</h3>
+
+  <p><b>अब औज़ार एक साथ चलते हैं: softmax हर passage को वज़न देता है, marginalization जवाब की कुल probability देता है, और −ln उसका loss।</b> Lede वाला सवाल फिर लीजिए: <q>Which office hour is least crowded?</q> Retriever दो passages लाता है: queue log और पुराना forum post। उनके dot product scores 1.0 और 0.0 हैं।</p>
+
+  <p>LLM सही जवाब <q>Thursday 9am</q> को queue log के साथ 0.9 probability देता है, और forum post के साथ 0.1। <span class="mine">numbers मेरे बनाए हैं</span> पूरा हिसाब तीन steps में है:</p>
+  <ol class="plain">
+    <li>Softmax (पड़ाव 3): e<sup>1.0</sup> = 2.718 और e<sup>0</sup> = 1, जिनका जोड़ 3.718 है। Queue log का वज़न 2.718 ÷ 3.718 = 0.731 है, और forum post का 1 ÷ 3.718 = 0.269।</li>
+    <li>Marginalization (पड़ाव 2): 0.731 × 0.9 + 0.269 × 0.1 = 0.658 + 0.027 = 0.685।</li>
+    <li>Loss (पड़ाव 4): −ln 0.685 = 0.378। जाँच: e<sup>−0.378</sup> = 0.685।</li>
+  </ol>
+  <p><b>यानी system 0.685 पक्का है कि जवाब Thursday 9am है, और इस सवाल पर loss 0.378 है।</b> Retriever queue log को और ऊँचा score दे, तो उसका वज़न 0.731 से बढ़ेगा, 0.685 भी बढ़ेगा, और loss घटेगा। Formula में यही तीन steps हैं:</p>
+
+  <div class="formula">p(y|x) ≈ <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i> ∈ top-<i>K</i></span></span> p(z|x) · p(y|x, z),&nbsp;&nbsp; p(z|x) ∝ exp(d(z)<sup>⊤</sup>q(x))</div>
+  <dl class="sym">
+    <dt>d(z)<sup>⊤</sup>q(x)</dt><dd>Passage और सवाल के vectors का dot product, यहाँ 1.0 और 0.0।</dd>
+    <dt>p(z|x)</dt><dd>Softmax वाला वज़न, यहाँ 0.731 और 0.269।</dd>
+    <dt>p(y|x, z)</dt><dd>उस passage के साथ पूरे जवाब की probability, यहाँ 0.9 और 0.1।</dd>
+    <dt>∑ और ≈</dt><dd>K = 2 passages पर वज़न वाला जोड़, यहाँ 0.685।</dd>
+    <dt>−log p(y|x)</dt><dd>इस सवाल का loss, यहाँ 0.378।</dd>
+  </dl>
+
+  <figure class="slide">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG, retriever, generator और RAG formula" loading="lazy"></a>
+    <figcaption>Stanford की slide: Deep Dive into RAG। ऊपर retriever p(z|x) है, और <button class="def" data-w="w-generator">generator</button> p(y|x, z), यानी जवाब लिखने वाला LLM। बीच में यही formula है। लाल line कहती है कि हर passage के जवाब को उतना वज़न दीजिए, जितना retriever उस passage को देता है। नीचे की RAG-Sequence और RAG-Token वाली lines lesson 5 में आती हैं। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Retriever उल्टा भरोसा करे: queue log को score 0.0, और forum post को 1.0। LLM के numbers वही हैं, 0.9 और 0.1। अब <q>Thursday 9am</q> की कुल probability और loss कितने हैं?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>वज़न उलट गए: queue log को 0.269, और forum post को 0.731। कुल probability = 0.269 × 0.9 + 0.731 × 0.1 = 0.242 + 0.073 = <b>0.315</b>, और loss = −ln 0.315 = <b>1.155</b>।</p>
+      <p>LLM ने कुछ नहीं बदला, फिर भी probability 0.685 से 0.315 हो गई। गलत वज़न पूरे जवाब को नीचे खींचते हैं, और <a href="05-rag-model-dense.html#training">lesson 5</a> में training इसी गलती को ठीक करती है।</p>
+    </details>
+  </div>
+
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 5 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले slide के formula का हर symbol और probability के बाकी नियम आते हैं, फिर exp और ln के बाकी नियम। उसके बाद softmax पूरा, फिर training का loss और उसकी दरें numbers में, और आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="probrules">
+  <h3><span class="cn">6</span>Slide के formula का हर symbol, और probability के बाकी नियम</h3>
+
+  <p>पड़ाव 5 तक formula एक सवाल और दो passages पर चला। Stanford की slide वही formula symbols में लिखती है, ताकि वो हर सवाल और हर passage पर लागू हो:</p>
+  <div class="formula">p(y|x) ≈ <span class="sum"><span class="op">∑</span><span class="lim"><i>z</i> ∈ top−<i>K</i></span></span> p(z|x) p(y|x, z)</div>
+  <p>नीचे की table slide के हर symbol को हमारे example के number से जोड़ती है:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>मतलब</th><th>हमारे example में</th></tr></thead>
+    <tbody>
+      <tr><td>x</td><td>सवाल, जिसे slide query कहती है</td><td>Which office hour is least crowded?</td></tr>
+      <tr><td>y</td><td>जवाब</td><td>Thursday 9am</td></tr>
+      <tr><td>z</td><td>एक passage</td><td>queue log या forum post</td></tr>
+      <tr><td>p(z|x)</td><td>Retriever: सवाल पता हो, तो passage z का वज़न</td><td>0.731 और 0.269</td></tr>
+      <tr><td>p(y|x, z)</td><td>Generator: सवाल और passage पता हों, तो जवाब की probability</td><td>0.9 और 0.1</td></tr>
+      <tr><td>p(z|x) p(y|x, z)</td><td>दोनों का गुणा। Maths में दो चीज़ें सटाकर लिखें, तो उसका मतलब गुणा है।</td><td>0.658 और 0.027</td></tr>
+      <tr><td><i>z</i> ∈ top−<i>K</i></td><td>∑ के नीचे की range: retriever के top-K passages में से हर z। ∈ का मतलब है “इसका हिस्सा है”।</td><td>K = 2: queue log और forum post</td></tr>
+      <tr><td>≈ और p(y|x)</td><td>जवाब की कुल probability, करीब बराबर, क्योंकि बाकी passages नहीं जुड़े</td><td>0.685</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4 class="sub" id="genprod">Generator का गुणा, paper के symbols में</h4>
+
+  <p>Slide कहती है कि generator जवाब <q>one token at a time</q> लिखता है। ये पड़ाव 1 का chain rule है, और RAG paper इसे पूरा लिखता है: <span class="mine">paper से</span></p>
+  <div class="formula">p<sub>θ</sub>(y | x, z) = <span class="sum"><span class="op">∏</span><span class="lim"><i>i</i> = 1 … <i>N</i></span></span> p<sub>θ</sub>(y<sub><i>i</i></sub> | x, z, y<sub>1:<i>i</i>−1</sub>)</div>
+  <p>यहाँ N जवाब के tokens की गिनती है। y<sub>1:i−1</sub> का मतलब है token 1 से token i−1 तक, यानी token i से पहले के सारे tokens। <q>Thursday morning.</q> में i = 2 के लिए y<sub>1:1</sub> = Thursday है, और i = 1 के लिए पहले कोई token नहीं है। Paper generator को p<sub>θ</sub> और retriever को p<sub>η</sub> लिखता है, और <button class="def" data-w="w-eta-theta">η और θ</button> lesson 5 में आते हैं।</p>
+
+  <p>Chain rule तीन या ज़्यादा बातों पर भी वैसे ही चलता है: p(A और B और C) = p(A) × p(B | A) × p(C | A और B)। हर नई बात की probability में “|” के बाद उससे पहले की सारी बातें आती हैं। Generator के गुणा में यही है, बस हर token की probability में सवाल x और passage z भी पहले से पता हैं।</p>
+
+  <h4 class="sub" id="reverse">p(A|B) और p(B|A) अलग हैं</h4>
+
+  <p>“|” के दोनों तरफ़ की बातें आपस में बदल दें, तो probability बदल जाती है। पड़ाव 1 की table में p(भरा | Tuesday) = 16 ÷ 20 = 0.80 है। लेकिन p(Tuesday | भरा) में भरे हुए sessions गिनते हैं: 18 भरे sessions में से 16 Tuesday को थे, यानी 16 ÷ 18 = 0.89।</p>
+  <p>ऊपर का 16 दोनों में एक है, लेकिन नीचे अलग है। इसलिए formula पढ़ते वक्त देखिए कि “|” के बाद क्या लिखा है। p(y|x, z) passage पता होने पर जवाब की probability है, जवाब पता होने पर passage की नहीं।</p>
+
+  <h4 class="sub" id="approx">≈ कितना करीब है</h4>
+
+  <p>Marginalization की शर्त है कि सारे cases जुड़ें। RAG सिर्फ़ top-K passages जोड़ता है, और softmax भी सिर्फ़ उन्हीं K scores पर लगता है। इसका असर देखने के लिए corpus में एक तीसरा passage जोड़िए: Homework 1 की announcement, जिसका score −1.0 है। उसके साथ LLM Thursday 9am को 0.1 probability देता है। <span class="mine">numbers मेरे बनाए हैं</span></p>
+
+  <p>तीनों passages के exps 2.718, 1 और 0.368 हैं, और उनका जोड़ 4.086। इसलिए softmax के वज़न 0.665, 0.245 और 0.090 हैं। तब पूरा जोड़ 0.665 × 0.9 + 0.245 × 0.1 + 0.090 × 0.1 = 0.599 + 0.024 + 0.009 = 0.632 है, जबकि top-2 पर, यानी पड़ाव 5 में, जोड़ 0.685 था।</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Homework 1 की announcement</th><th class="numh">तीनों passages पर जोड़</th><th class="numh">Top-2 पर जोड़</th></tr></thead>
+    <tbody>
+      <tr><td>Score −1.0<span class="sub">वज़न 0.090</span></td><td class="num">0.632</td><td class="num">0.685</td></tr>
+      <tr class="hi"><td>Score −3.0<span class="sub">वज़न 0.013</span></td><td class="num">0.677</td><td class="num">0.685</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Homework का score −3.0 हो, तो उसका वज़न सिर्फ़ 0.013 है, और दोनों जोड़ों का फ़र्क 0.053 से घटकर 0.008 रह जाता है। <b>मतलब छोड़े गए passages का वज़न जितना छोटा, ≈ उतना करीब।</b> Top-2 वाला जोड़ थोड़ा बड़ा है, क्योंकि छोड़े गए passage का वज़न softmax में बाकी दो पर बँट गया। उस passage के साथ जवाब की probability सिर्फ़ 0.1 थी।</p>
+
+  <p>Paper कहता है कि retriever top-K पर कटा हुआ distribution देता है, यानी सिर्फ़ K passages की probabilities की list, जिसका जोड़ 1 है। Training में K = 5 या 10 है। <span class="mine">paper से</span> Wikipedia के करीब 2.1 करोड़ passages में से सिर्फ़ 5 या 10 जुड़ते हैं। इसलिए ≈ तभी करीब है, जब बाकी सारे passages के वज़न बहुत छोटे हों।</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="logrules">
+  <h3><span class="cn">7</span>exp और ln के बाकी नियम</h3>
+
+  <p>पड़ाव 3 और 4 में exp और ln के कुछ नियम आए थे। Slides और आगे के lessons में कुछ और नियम चाहिए, और ये सब इसी बात से निकलते हैं कि ln, exp का उल्टा है। नीचे हर नियम के साथ numbers में उसकी जाँच है:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>नियम</th><th>जाँच</th></tr></thead>
+    <tbody>
+      <tr><td>1. e<sup>a+b</sup> = e<sup>a</sup> × e<sup>b</sup></td><td>e<sup>1.5</sup> = e<sup>1</sup> × e<sup>0.5</sup> = 2.718 × 1.649 = 4.482</td></tr>
+      <tr><td>2. e<sup>−a</sup> = 1 ÷ e<sup>a</sup></td><td>e<sup>−1</sup> = 1 ÷ 2.718 = 0.368</td></tr>
+      <tr><td>3. ln(e<sup>x</sup>) = x, और e<sup>ln x</sup> = x</td><td>ln 7.389 = 2, और e<sup>ln 0.685</sup> = e<sup>−0.378</sup> = 0.685</td></tr>
+      <tr><td>4. ln(a × b) = ln a + ln b</td><td>ln(0.21 × 0.31) = (−1.561) + (−1.171) = −2.732</td></tr>
+      <tr class="hi"><td>5. ln(a ÷ b) = ln a − ln b</td><td>ln(7.3891 ÷ 2.7183) = 2 − 1 = 1, और सच में 7.3891 ÷ 2.7183 = 2.7183, यानी e</td></tr>
+      <tr><td>6. ln(a<sup>n</sup>) = n × ln a</td><td>ln(0.5<sup>20</sup>) = 20 × (−0.693) = −13.86</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>नियम 5, नियम 4 से आता है। a ÷ b का मतलब a × (1 ÷ b) है। नियम 2 और 3 से ln(1 ÷ b) = −ln b, क्योंकि e<sup>−ln b</sup> = 1 ÷ e<sup>ln b</sup> = 1 ÷ b। नियम 6, नियम 4 को n बार लगाना है, जैसे 20 tokens वाले जवाब में हुआ।</p>
+
+  <h4 class="sub" id="logshare">Softmax के हिस्से का ln</h4>
+
+  <p>नियम 3 और 5 मिलकर softmax के हिस्से का ln आसान कर देते हैं। हिस्सा e<sup>s</sup> ÷ Z है, जहाँ Z सारे exps का जोड़ है, इसलिए ln(e<sup>s</sup> ÷ Z) = s − ln Z। पड़ाव 5 में queue log का score 1.0 था, और Z = 3.718। तो −ln 0.731 = −1.0 + ln 3.718 = −1.0 + 1.313 = 0.313। <a href="12-dpr-dense.html#whyshare">Lesson 12</a> का contrastive loss इसी रूप से शुरू होता है।</p>
+
+  <h4 class="sub" id="logsum">जोड़ का ln नहीं टूटता</h4>
+
+  <p><b>ln(a + b) के लिए ऐसा कोई नियम नहीं है, और आम तौर पर ln(a + b), ln a + ln b के बराबर नहीं होता।</b> पड़ाव 5 का जोड़ लीजिए: −ln(0.658 + 0.027) = −ln 0.685 = 0.378। हर हिस्से का अलग से −ln लेकर जोड़ें, तो 0.419 + 3.612 = 4.031 आता है, जो बिल्कुल अलग number है।</p>
+
+  <p>इसीलिए slide loss को negative <i>marginal</i> log-likelihood कहती है: पहले passages पर marginalization होता है, फिर पूरे जोड़ पर log लगता है। Loss को passage-passage अलग नहीं तोड़ सकते। इसका मतलब है कि एक ही loss में retriever के वज़न और generator की probabilities, दोनों बैठे हैं, और पड़ाव 9 यही दिखाता है।</p>
+
+  <h4 class="sub" id="logbase">log10 और ln, और −ln 0</h4>
+
+  <p>Slide पर सिर्फ़ log लिखा है। Machine learning के papers में इसका मतलब लगभग हमेशा natural log, यानी ln होता है। School में log का मतलब अक्सर log10 था, जो बताता है कि 10 को किस power तक उठाएँ: log10 0.1 = −1, जबकि ln 0.1 = −2.303।</p>
+
+  <p>दोनों में फ़र्क एक तय गुणा का है: हर number का ln, उसके log10 का 2.303 गुना है, क्योंकि ln 10 = 2.303। जैसे पड़ाव 5 का loss log10 से 0.378 ÷ 2.303 = 0.164 होता। हर example का loss एक ही number से भाग होता, इसलिए कौन से parameters सबसे अच्छे हैं, ये नहीं बदलता।</p>
+
+  <p>दूसरी हद 0 पर है। e<sup>x</sup> कभी 0 नहीं होता, इसलिए ln 0 का कोई value नहीं है। p जितना 0 के पास जाता है, −ln p उतना बढ़ता है: −ln 0.001 = 6.908, और −ln 0.000001 = 13.816। Softmax से आई कोई probability ठीक 0 नहीं होती, क्योंकि exp हमेशा 0 से बड़ा है। इसलिए ऐसा loss बहुत बड़ा हो सकता है, लेकिन अनंत नहीं।</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="softmaxfull">
+  <h3><span class="cn">8</span>Softmax पूरा: normalizer, column vector और top-k</h3>
+
+  <p>Slide पर retriever का formula ये है:</p>
+  <div class="formula">p(z|x) ∝ exp(𝐝(z)<sup>⊤</sup> 𝐪(x)),&nbsp;&nbsp; 𝐝(z) = BERT<sub>d</sub>(z),&nbsp;&nbsp; 𝐪(x) = BERT<sub>q</sub>(x)</div>
+  <p>इस पड़ाव में इसका हर हिस्सा आता है। पहले softmax के बाकी गुण आते हैं, फिर ∝ के पीछे का भाग, फिर bold 𝐝 और 𝐪 और ⊤, और आख़िर में top-k।</p>
+
+  <h4 class="sub" id="negscale">Negative scores और scale</h4>
+
+  <p>Dot product negative हो सकता है, और softmax उस पर भी चलता है। Scores 1, 0 और −1 का सीधा जोड़ 0 है, और 0 से भाग नहीं हो सकता। लेकिन उनके exps 2.718, 1 और 0.368 का जोड़ 4.086 है, और probabilities 0.665, 0.245 और 0.090 बनती हैं।</p>
+
+  <p>पड़ाव 3 में हर score में 1 जोड़ने से कुछ नहीं बदला। ये किसी भी number c के लिए सच है, क्योंकि नियम 1 से e<sup>s+c</sup> = e<sup>s</sup> × e<sup>c</sup>, और e<sup>c</sup> ऊपर और नीचे कट जाता है। Scores को गुणा करने से फ़र्क पड़ता है। 2.0, 1.0 और 0.1 को 2 से गुणा कीजिए, यानी 4.0, 2.0 और 0.2। तब probabilities 0.659, 0.242 और 0.099 से बदलकर 0.864, 0.117 और 0.019 हो जाती हैं। फ़र्क दोगुने हुए, इसलिए सबसे ऊँचे score का हिस्सा और बढ़ा।</p>
+
+  <p>Dot product में ये scale vector की लंबाई से आता है। Lesson 3 में FAQ page का vector [1.6, 1.4] था, जो [0.8, 0.7] का दोगुना है। इसलिए उसका score भी दोगुना था: 1.56 = 2 × 0.78।</p>
+
+  <h4 class="sub" id="normalizer">∝ के पीछे का भाग: normalizer Z</h4>
+
+  <p>a ∝ b का मतलब है a = c × b, जहाँ c हर passage के लिए एक ही number है। Softmax में c = 1 ÷ Z है, और Z सारे exps का जोड़ है। इस Z को <b class="term">normalizer</b> कहते हैं, क्योंकि यही probabilities का जोड़ 1 करता है।</p>
+
+  <p>पड़ाव 5 में Z = 2.718 + 1 = 3.718 था, तो c = 1 ÷ 3.718 = 0.269। Queue log का वज़न 2.718 × 0.269 = 0.731 है, और forum post का 1 × 0.269 = 0.269। Z सवाल पर टिका है, किसी एक passage पर नहीं। इसलिए passages का आपसी अनुपात उसके बिना भी दिखता है, और formula उसे ∝ में छिपा देता है। RAG में ये जोड़ सिर्फ़ top-K passages पर है, जैसा पड़ाव 6 में आया।</p>
+
+  <h4 class="sub" id="colvec">Bold 𝐝 और 𝐪, column vector और ⊤</h4>
+
+  <p>Slide पर 𝐝 और 𝐪 bold हैं। Maths में bold अक्षर का मतलब है कि वो एक number नहीं, vector है। 𝐝(z) passage z का vector है, और 𝐪(x) सवाल x का।</p>
+
+  <p>Maths में vector को अक्सर खड़ा लिखते हैं, यानी numbers ऊपर-नीचे, और इसे <b class="term">column vector</b> कहते हैं। ⊤ का मतलब transpose है: खड़े vector को लिटा देना, यानी column को row बनाना। Office hours page और सवाल के vectors पर ये ऐसा दिखता है:</p>
+  <div class="formula">𝐝 = <span class="mat"><span>0.9</span><span>0.1</span></span>&nbsp;&nbsp;&nbsp; 𝐝<sup>⊤</sup> = <span class="matrow">0.9&nbsp;&nbsp;0.1</span>&nbsp;&nbsp;&nbsp; 𝐪 = <span class="mat"><span>0.8</span><span>0.2</span></span></div>
+  <div class="formula">𝐝<sup>⊤</sup>𝐪 = <span class="matrow">0.9&nbsp;&nbsp;0.1</span> <span class="mat"><span>0.8</span><span>0.2</span></span> = 0.9 × 0.8 + 0.1 × 0.2 = 0.74</div>
+  <p>Row गुणा column का नियम ये है: row का पहला number column के पहले number से गुणा कीजिए, दूसरा दूसरे से, फिर सब जोड़िए। यही dot product है, इसलिए 𝐝<sup>⊤</sup>𝐪 dot product लिखने का तरीका है। कई passages की rows एक के नीचे एक रखें, तो एक ही गुणा से सबके scores निकलते हैं। ये matrix गुणा <a href="12-dpr-dense.html#matrix">lesson 12</a> में आता है।</p>
+
+  <p>BERT<sub>d</sub> और BERT<sub>q</sub> दो अलग <button class="def" data-w="w-encoder">encoders</button> हैं। छोटा d बताता है कि पहला encoder passage पढ़ता है, क्योंकि paper passage को document कहता है। छोटा q बताता है कि दूसरा query, यानी सवाल पढ़ता है। दोनों <button class="def" data-w="w-bert">BERT</button>-base से बने हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="topk">top-k(p(·|x)) के लिए MIPS क्यों काफ़ी है</h4>
+
+  <p>Slide की दूसरी line top-k(p(·|x)) है। “·” खाली जगह का निशान है, और वहाँ हर passage बारी-बारी से आता है। इसलिए p(·|x) सवाल x के लिए सारे passages के वज़नों की पूरी list है, और top-k उसमें सबसे बड़े k वज़न वाले passages हैं।</p>
+
+  <p>ये k passages ढूँढने के लिए softmax चलाने की ज़रूरत नहीं, क्योंकि exp एक <b class="term">increasing function</b> है: बड़ा input हमेशा बड़ा output देता है। Z से भाग भी हर passage पर एक जैसा है, इसलिए वज़नों का क्रम वही है, जो scores का। Lesson 3 के scores 1.56, 0.74, 0.32 और 0.26 से वज़न 0.499, 0.220, 0.145 और 0.136 बनते हैं, यानी ठीक उसी क्रम में।</p>
+
+  <p>तो सबसे बड़े k वज़न वाले passages वही हैं, जिनके dot products सबसे बड़े हैं। Dot product का दूसरा नाम inner product है, इसलिए इस search को Maximum Inner Product Search, यानी <button class="def" data-w="w-mips">MIPS</button> कहते हैं। Paper के हिसाब से MIPS हर passage को देखे बिना लगभग सही top-k ढूँढ लेता है। यानी passages दोगुने हों, तो search का समय दोगुने से कम बढ़ता है। <span class="mine">paper से</span> ये कैसे होता है, वो <a href="10-vector-search-dense.html">lesson 10</a> में है।</p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="training">
+  <h3><span class="cn">9</span>Negative marginal log-likelihood, और loss की दरें numbers में</h3>
+
+  <p>Stanford की दूसरी slide कहती है: <q>Jointly train the retriever and generator to minimize the negative marginal log-likelihood ∑<sub>j</sub> −log p(y<sub>j</sub>|x<sub>j</sub>)</q>। इस पड़ाव में पहले ये नाम शब्द-शब्द पढ़िए। फिर देखिए कि एक ही loss दोनों models को कैसे बताता है कि उन्हें किस तरफ़ बदलना है।</p>
+
+  <h4 class="sub" id="nmll">नाम के चार शब्द</h4>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>शब्द</th><th>मतलब</th><th>पड़ाव 5 में</th></tr></thead>
+    <tbody>
+      <tr><td>likelihood</td><td>सही जवाब की probability, p(y|x)</td><td>0.685</td></tr>
+      <tr><td>marginal</td><td>ये probability passages पर marginalization से बनी है</td><td>0.658 + 0.027</td></tr>
+      <tr><td>log-likelihood</td><td>उसका ln</td><td>ln 0.685 = −0.378</td></tr>
+      <tr class="hi"><td>negative</td><td>सामने minus, ताकि loss positive हो</td><td>0.378</td></tr>
+    </tbody>
+  </table></div>
+  <p>इसलिए हर example का loss एक जोड़ का −ln है, और पड़ाव 7 में आया कि ये जोड़ passage-passage नहीं टूटता।</p>
+
+  <h4 class="sub" id="examples">कई examples का loss</h4>
+
+  <p>∑<sub>j</sub> सारे training examples पर जोड़ है। मान लीजिए दूसरा example सवाल <q>Where are office hours held?</q> है, और system उसके सही जवाब को 0.5 probability देता है। <span class="mine">number मेरा बनाया</span> तब दोनों examples का कुल loss 0.378 + 0.693 = 1.071 है।</p>
+
+  <p>यही number एक और तरीके से भी आता है। दोनों सवाल एक-दूसरे पर टिके नहीं हैं, इसलिए chain rule में दूसरे जवाब की probability पहले से नहीं बदलती। तब दोनों जवाब सही होने की probability 0.685 × 0.5 = 0.3425 है, और −ln 0.3425 = 1.071, क्योंकि ln का नियम गुणा को जोड़ बनाता है। मतलब कुल loss छोटा करना, पूरे training data के सही होने की probability बढ़ाना है।</p>
+
+  <p>Training p को बड़ा करने की जगह −ln p को छोटा करती है। फिर भी सबसे अच्छे parameters वही रहते हैं, क्योंकि ln भी increasing function है। p जितना बड़ा, −ln p उतना छोटा, इसलिए दोनों का सबसे अच्छा point एक है। −ln का फ़ायदा ये है कि गुणा जोड़ बन जाता है, और बहुत छोटे numbers नहीं बनते।</p>
+
+  <h4 class="sub" id="rates">दर: loss कितना बदलता है</h4>
+
+  <p>Gradient का मतलब पड़ाव 4 में आया था: हर parameter को किस दिशा में बदलें, कि loss घटे। ये दिशा एक <b class="term">दर</b> से निकलती है। Input को थोड़ा बदलिए, जैसे 0.01, देखिए कि loss कितना बदला, और उस बदलाव को 0.01 से भाग दीजिए। पहले ये सीधे loss = −ln p पर देखिए:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">p</th><th class="numh">p को 0.01 बढ़ाने पर loss का बदलाव</th><th class="numh">बदलाव ÷ 0.01</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td class="num">0.10</td><td class="num">−0.0953</td><td class="num">−9.53</td></tr>
+      <tr><td class="num">0.50</td><td class="num">−0.0198</td><td class="num">−1.98</td></tr>
+      <tr><td class="num">0.90</td><td class="num">−0.0110</td><td class="num">−1.10</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>बदलाव 0.01 से और छोटा लें, तो ये दरें −10, −2 और −1.11 पर टिकती हैं, यानी −1 ÷ p। <b>जिस जवाब की probability छोटी है, उस पर loss की दर सबसे बड़ी है, इसलिए training का सबसे ज़्यादा ज़ोर उसी पर पड़ता है।</b> Lesson 1 में p, 0.10 से 0.12 हुआ, और loss 0.183 घटा। उस पूरे कदम की दर −0.183 ÷ 0.02 = −9.15 है। ये 0.10 के पास की दर −10 और 0.12 के पास की दर −8.33 के बीच है।</p>
+
+  <h4 class="sub" id="joint">Jointly train: एक loss, दोनों models की दरें</h4>
+
+  <p>पड़ाव 5 के loss 0.378 में चार numbers हैं: retriever के दो scores, 1.0 और 0.0, और generator की दो probabilities, 0.9 और 0.1। हर एक को बारी-बारी से 0.01 बढ़ाइए, और बाकी तीन वैसे ही रखिए: <span class="mine">हिसाब मेरा</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>क्या 0.01 बढ़ा</th><th class="numh">Loss का बदलाव</th><th class="numh">बदलाव ÷ 0.01</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Retriever: queue log का score</td><td class="num">−0.00229</td><td class="num">−0.229</td></tr>
+      <tr><td>Retriever: forum post का score</td><td class="num">+0.00230</td><td class="num">+0.230</td></tr>
+      <tr class="hi"><td>Generator: queue log के साथ 0.9</td><td class="num">−0.01062</td><td class="num">−1.062</td></tr>
+      <tr><td>Generator: forum post के साथ 0.1</td><td class="num">−0.00392</td><td class="num">−0.392</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Retriever की दोनों दरें बताती हैं कि queue log का score बढ़ने पर loss घटता है, और forum post का score बढ़ने पर बढ़ता है। दोनों का जोड़ −0.229 + 0.230 = 0.001, यानी करीब 0 है, क्योंकि दोनों scores बराबर बढ़ें, तो softmax के वज़न नहीं बदलते।</p>
+
+  <p>Generator की दोनों दरें negative हैं, यानी किसी भी passage के साथ सही जवाब की probability बढ़े, तो loss घटता है। Queue log वाली दर बड़ी है: 1.062 ÷ 0.392 = 2.71, जो करीब 0.731 ÷ 0.269 = 2.72 है। मतलब generator की हर probability उतना असर डालती है, जितना उसके passage का वज़न है।</p>
+
+  <p><b>एक ही loss से दोनों models को अपनी दिशा मिलती है, और slide के “jointly train” का यही मतलब है।</b> असली models में ये चार numbers खुद करोड़ों parameters से बनते हैं। हर parameter पर loss की ऐसी ही एक दर है, और इन सारी दरों की list gradient है। Training हर parameter को उसकी दर की उल्टी दिशा में थोड़ा खिसकाती है।</p>
+
+  <p>ये दरें symbols ∂ और ∇ के साथ <a href="12-dpr-dense.html#nabla">lesson 12</a> में आती हैं। किस passage का score बढ़ता है और किसका घटता है, इसका नियम <a href="05-rag-model-dense.html#training">lesson 5</a> में है। Paper training के बारे में तीन बातें और कहता है: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li>Training data में सिर्फ़ सवाल और जवाब के जोड़े (x<sub>j</sub>, y<sub>j</sub>) हैं। कौन सा passage सही है, ये data में कहीं नहीं लिखा।</li>
+    <li>Paper parameters को gradient से छोटे-छोटे कदमों में बदलता है, और इसके लिए Adam नाम का तरीका लेता है।</li>
+    <li>Passage encoder BERT<sub>d</sub> और index नहीं बदलते। Training सिर्फ़ BERT<sub>q</sub> और generator BART के parameters बदलती है, क्योंकि passage encoder बदलने पर index दोबारा बनाना पड़ता।</li>
+  </ul>
+</article>
+
+<!-- 10 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">10</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे Stanford की तीन slides हैं, बिना किसी बदलाव के, और हर slide के नीचे उसका formula बड़ा करके। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई symbol अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p16.png"><img src="img/slide-p16.png" alt="Stanford slide: Deep Dive into RAG, retriever, generator और RAG formula" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p16-formula.png"><img src="img/slide-p16-formula.png" alt="उसी slide का formula, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Deep Dive into RAG, और नीचे उसका formula, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">RAG formula वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>∑ के नीचे z∈top−K लिखा है, और बराबर की जगह ≈ है। दोनों का मतलब क्या है, और हमारे example में ≈ कितना दूर था?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>∑ सिर्फ़ retriever के top-K passages पर चलता है, और ∈ का मतलब है “इसका हिस्सा है”। बाकी passages नहीं जुड़ते, इसलिए ≈ है। Top-2 पर जोड़ 0.685 था, और Homework 1 की announcement भी जोड़ें, तो 0.632, यानी 0.053 का फ़र्क। (पड़ाव 2 और 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Generator जवाब <q>one token at a time</q> लिखता है। तब p(y|x, z) एक number कैसे बनता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Chain rule से। हर token की probability लीजिए, जब सवाल, passage और पिछले tokens पता हों, और फिर सबका गुणा कीजिए। Paper इसे ∏ p<sub>θ</sub>(y<sub>i</sub> | x, z, y<sub>1:i−1</sub>) लिखता है, जैसे 0.21 × 0.31 × 0.71 = 0.046। (पड़ाव 1 और 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Slide के नीचे RAG-Sequence और RAG-Token लिखे हैं। ऊपर वाला formula इन दोनों में से किसका है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>RAG-Sequence का। उसमें एक passage से पूरा जवाब बनता है, यानी p(y|x, z) पूरे जवाब के tokens का गुणा है। फिर passages पर वज़न वाला जोड़ लगता है। <span class="mine">paper से</span> RAG-Token हर token पर अलग passage ले सकता है, और उसका formula <a href="05-rag-model-dense.html#seq-token">lesson 5</a> में है।</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p17.png"><img src="img/slide-p17.png" alt="Stanford slide: retriever, generator, और दोनों को साथ train करने वाली line" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p17-loss.png"><img src="img/slide-p17-loss.png" alt="उसी slide की training वाली line, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: वही दो lines, और तीसरी line में training का loss। नीचे वो line बड़ी करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Training वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>“Negative marginal log-likelihood” का हर शब्द ∑<sub>j</sub> −log p(y<sub>j</sub>|x<sub>j</sub>) के किस हिस्से में है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Likelihood p(y<sub>j</sub>|x<sub>j</sub>) है, यानी सही जवाब की probability। Marginal का मतलब है कि ये probability passages पर जोड़ से बनी है। Log उसका ln है, negative सामने का minus, और ∑<sub>j</sub> सारे examples का जोड़। दो examples पर ये 0.378 + 0.693 = 1.071 था। (पड़ाव 4 और 9)</p>
+        </details>
+      </li>
+      <li>
+        <p>इस loss को हर passage के अलग loss में क्यों नहीं तोड़ सकते?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>क्योंकि log पूरे जोड़ पर लगता है, और ln(a + b) टूटता नहीं। −ln(0.658 + 0.027) = 0.378 है, जबकि अलग-अलग −ln का जोड़ 4.031। (पड़ाव 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>“Jointly train” हमारे numbers में कैसा दिखता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>एक ही loss की दर retriever के score पर भी है, और generator की probability पर भी। Queue log का score 0.01 बढ़े, तो loss 0.00229 घटता है, और generator का 0.9, 0.91 हो, तो 0.01062। Paper में passage encoder और index नहीं बदलते, लेकिन query encoder और generator बदलते हैं। (पड़ाव 9)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p18.png"><img src="img/slide-p18.png" alt="Stanford slide: Retriever: DPR, softmax वाला formula और top-k वाली line" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p18-formula.png"><img src="img/slide-p18-formula.png" alt="उसी slide का formula, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p18-topk.png"><img src="img/slide-p18-topk.png" alt="उसी slide की top-k वाली line, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Retriever: DPR, और नीचे उसका formula और top-k वाली line, बड़ी करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Retriever वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>∝ के पीछे कौन सा भाग छिपा है? पड़ाव 5 के example में वो number कितना था?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>सारे exps के जोड़ Z से भाग, और इस Z को normalizer कहते हैं। पड़ाव 5 में Z = 2.718 + 1 = 3.718 था, और queue log का वज़न 2.718 ÷ 3.718 = 0.731। (पड़ाव 3 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Bold 𝐝 और 𝐪, ⊤, और BERT<sub>d</sub> और BERT<sub>q</sub> के छोटे d और q क्या बताते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Bold का मतलब vector है। ⊤ column vector को row बनाता है, और row गुणा column dot product है: [0.9, 0.1] और [0.8, 0.2] से 0.74। BERT<sub>d</sub> passages का encoder है और BERT<sub>q</sub> सवालों का, यानी ये दो अलग encoders हैं। (पड़ाव 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>top-k(p(·|x)) ढूँढने के लिए सारे passages पर softmax क्यों नहीं चलाना पड़ता, और इस search को MIPS क्यों कहते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>exp increasing function है, और Z से भाग सब पर एक जैसा है, इसलिए वज़नों का क्रम वही है, जो dot products का। तो सबसे बड़े k dot products वाले passages ढूँढना काफ़ी है, और dot product का दूसरा नाम inner product है। (पड़ाव 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>p(A|B) का मतलब है “B पता हो, तो A का chance”, और ये p(B|A) से अलग है। Chain rule से पूरे जवाब की probability हर token की conditional probability का गुणा है।</li>
+    <li>RAG formula top-K passages पर marginalization है। ≈ तभी करीब है, जब छोड़े गए passages के वज़न छोटे हों।</li>
+    <li>Softmax exp और normalizer Z से वज़न बनाता है, और क्रम नहीं बदलता, इसलिए top-k के लिए MIPS काफ़ी है। Loss एक जोड़ का −ln है, जो नहीं टूटता, इसलिए एक ही loss retriever और generator, दोनों को उनकी दरें देता है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-conditional">Conditional probability, p(A|B)</dt><dd>B पता हो, तो A की probability। “|” को “given” पढ़िए। जैसे p(भरा | Tuesday) = 16 ÷ 20 = 0.80।</dd>
+    <dt id="w-chain">Chain rule (probability वाला)</dt><dd>p(A और B) = p(A) × p(B|A)। कई steps हों, तो सबका गुणा। जैसे p(Tuesday) × p(भरा | Tuesday) = 0.5 × 0.8 = 0.40। Lesson 12 का दरों वाला chain rule इससे अलग है।</dd>
+    <dt id="w-prod">∏ (capital pi)</dt><dd>नीचे लिखी range पर सबका गुणा। जैसे तीन tokens पर 0.21 × 0.31 × 0.71 = 0.046।</dd>
+    <dt id="w-marginal">Marginalization</dt><dd>हर case का वज़न गुणा उस case में probability, फिर सारे cases का जोड़। जैसे 0.5 × 0.8 + 0.5 × 0.1 = 0.45।</dd>
+    <dt id="w-approx">≈</dt><dd>करीब बराबर। RAG के formula में सिर्फ़ top-K passages जुड़ते हैं, इसलिए जोड़ “करीब” बराबर है।</dd>
+    <dt id="w-exp">exp और e</dt><dd>exp(s) = e<sup>s</sup>, जहाँ e करीब 2.718 है। हमेशा 0 से बड़ा, और e<sup>a+1</sup> = e<sup>a</sup> × e। जैसे exp(1) = 2.718, exp(0) = 1, exp(−1) = 0.368।</dd>
+    <dt id="w-softmax">Softmax</dt><dd>हर score का exp, फिर सबके जोड़ से भाग। Scores को probabilities बनाता है। जैसे 2.0, 1.0, 0.1 से 0.659, 0.242, 0.099।</dd>
+    <dt id="w-propto">∝</dt><dd>के अनुपात में। आख़िर में सबको एक ही number से ऐसे भाग दीजिए कि जोड़ 1 हो। जैसे exps 2.718 और 1 से 0.731 और 0.269।</dd>
+    <dt id="w-transpose">d<sup>⊤</sup>q</dt><dd>Vectors d और q का dot product लिखने का एक तरीका। जैसे office hours page [0.9, 0.1] और सवाल [0.8, 0.2] पर 0.74।</dd>
+    <dt id="w-ln">Natural log, ln</dt><dd>e को किस power तक उठाएँ कि x मिले। ln(e<sup>x</sup>) = x, और ln(a × b) = ln a + ln b। जैसे ln(0.1) = −2.303।</dd>
+    <dt id="w-loss">Loss</dt><dd>Model कितना गलत है, उसका number। Training इसे छोटा करती है। जैसे सही जवाब की probability 0.5 हो, तो loss −ln 0.5 = 0.693।</dd>
+    <dt id="w-likelihood">Likelihood</dt><dd>Model ने सही data को जो probability दी। जैसे सही जवाब को 0.12 दिया, तो likelihood 0.12।</dd>
+    <dt id="w-nll">Negative log-likelihood</dt><dd>−ln p(सही जवाब)। सबसे आम loss। जैसे p = 0.12 पर −ln 0.12 = 2.120।</dd>
+    <dt id="w-gradient">Gradient</dt><dd>हर parameter को किस दिशा में और कितना बदलें कि loss घटे, उसका हिसाब। जैसे lesson 1 में training ने parameters को उस दिशा में बदला, जिसमें Thursday की probability 0.10 से 0.12 हुई और loss 2.303 से 2.120।</dd>
+      <dt id="w-normalizer">Normalizer, Z</dt><dd>Softmax में सारे exps का जोड़, जिससे भाग देने पर वज़नों का जोड़ 1 होता है। ∝ के पीछे यही भाग छिपा है। जैसे exps 2.718 और 1 पर Z = 3.718।</dd>
+    <dt id="w-colvec">Column vector और ⊤</dt><dd>Column vector के numbers ऊपर-नीचे लिखे होते हैं, और ⊤ (transpose) उसे row बना देता है। Row गुणा column dot product है। जैसे row [0.9, 0.1] गुणा column [0.8, 0.2] = 0.74।</dd>
+    <dt id="w-increasing">Increasing function</dt><dd>ऐसा function, जिसमें बड़ा input हमेशा बड़ा output देता है, इसलिए क्रम नहीं बदलता। exp और ln ऐसे हैं। जैसे scores 1.56 और 0.74 से वज़न 0.499 और 0.220, उसी क्रम में।</dd>
+    <dt id="w-nmll">Negative marginal log-likelihood</dt><dd>सही जवाब की probability का −ln, जब वो probability passages पर marginalization से बनी हो, और सारे examples पर उसका जोड़। RAG का training loss। जैसे दो examples पर 0.378 + 0.693 = 1.071।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="03-vectors-dense.html">पिछला: Lesson 3</a>
+    <a href="05-rag-model-dense.html">अगला: Lesson 5, RAG model</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Paper: Lewis et al., 2020, “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var ins = [1, 2, 3].map(function (i) { return document.getElementById("s" + i); });
+  var outs = [1, 2, 3].map(function (i) { return document.getElementById("so" + i); });
+  var body = document.getElementById("smw-body");
+  var bars = document.getElementById("smw-bars");
+  var names = ["A", "B", "C"];
+  var SUM = "जोड़";
+  function render() {
+    var s = ins.map(function (x) { return Number(x.value); });
+    outs.forEach(function (o, i) { o.textContent = s[i].toFixed(1); });
+    var e = s.map(Math.exp);
+    var tot = e[0] + e[1] + e[2];
+    var p = e.map(function (x) { return x / tot; });
+    var best = p.indexOf(Math.max.apply(null, p));
+    body.innerHTML = s.map(function (v, i) {
+      return '<tr class="' + (i === best ? "hi" : "") + '"><td>Passage ' + names[i] + '</td><td class="num">' + v.toFixed(1) + '</td><td class="num">' + e[i].toFixed(3) + '</td><td class="num">' + p[i].toFixed(3) + "</td></tr>";
+    }).join("") + '<tr class="total"><td>' + SUM + '</td><td></td><td class="num">' + e.reduce(function (a, x) { return a + Math.round(x * 1000) / 1000; }, 0).toFixed(3) + '</td><td class="num">' + (p[0] + p[1] + p[2]).toFixed(3) + "</td></tr>";
+    bars.innerHTML = p.map(function (v, i) {
+      return '<span>Passage ' + names[i] + '</span><div class="bar' + (i === best ? " win" : "") + '"><span style="width:' + (v * 100) + '%"></span></div><span class="val">' + v.toFixed(3) + "</span>";
+    }).join("");
+    var key = s.map(function (v) { return String(v); }).join(",");
+    document.querySelectorAll("#smw .btns button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.s === key ? "true" : "false"); });
+  }
+  ins.forEach(function (x) { x.addEventListener("input", render); });
+  document.querySelectorAll("#smw .btns button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var v = b.dataset.s.split(",");
+      ins.forEach(function (x, i) { x.value = v[i]; });
+      render();
+    });
+  });
+  render();
+})();
+</script>
+</body>
+</html>

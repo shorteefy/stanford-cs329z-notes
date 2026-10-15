@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Lesson 2 के word overlap ने queue log और पुराने forum post को बराबर 2 दिया। हर शब्द को rarity, गिनती और length से वज़न देकर ये tie तोड़ना है, और देखना है कि वो किस तरफ़ टूटता है।">
+<title>Lesson 11: BM25</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 11 / 18 · <b>आसान</b> · <a href="11-bm25-dense.html">गहरा</a> · <a href="11-bm25-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 11 · आसान version</p>
+  <h1>BM25: rare शब्द, गिनती और length से बना score</h1>
+  <p class="lede"><b>BM25 एक retriever है, जो query के हर शब्द पर passage को एक वज़न देता है। इन वज़नों का जोड़ passage का score है।</b> ये वज़न तीन बातों से बनता है: शब्द पूरे corpus में कितना rare है, passage में कितनी बार आया, और passage कितना लंबा है। Stanford की slide इसे आज भी सबसे ज़्यादा इस्तेमाल होने वाला retriever बताती है।</p>
+  <p class="lede">इसकी ज़रूरत <a href="02-retrieval.html#retriever">lesson 2</a> में दिखी थी। <button class="def" data-w="w-overlap">Word overlap</button> गिनता है कि query के कितने शब्द passage में भी हैं। Query <q>which office hour is least crowded</q> पर उसने दो passages को बराबर 2 दिया। एक queue log है, जिसमें भीड़ का data और जवाब है। दूसरा 2024 का एक पुराना forum post है, जिसमें सिर्फ़ एक राय है। ये lesson BM25 के तीनों हिस्से एक-एक करके जोड़ता है, और हर बार tie देखता है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 5 पड़ाव हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#idf">IDF: rare term को ज़्यादा वज़न</a><span class="can">IDF हाथ से निकाल पाएँगे, और बता पाएँगे कि सिर्फ़ IDF से tie किस तरफ़ टूटता है।</span></li>
+      <li><a href="#tf">Term frequency और saturation</a><span class="can">बता पाएँगे कि दो बार आया term दोगुना वज़न क्यों नहीं पाता।</span></li>
+      <li><a href="#length">Length normalization</a><span class="can">औसत length और length वाला factor हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#bm25">तीनों हिस्से एक formula में</a><span class="can">BM25 score हाथ से निकाल पाएँगे, और Stanford की BM25 slide पढ़ पाएँगे।</span></li>
+      <li><a href="#index">Inverted index, और BM25 कहाँ हारता है</a><span class="can">बता पाएँगे कि BM25 तेज़ क्यों है, और कहाँ जीतता और हारता है।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="02-retrieval.html#retriever">Lesson 2</a> (corpus, word overlap, stopwords, score), <a href="03-vectors.html#embedding">Lesson 3</a> (vector, embedding) और <a href="04-probability-tools.html#loss">Lesson 4</a> (e और ln)। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="idf">
+  <h3><span class="cn">1</span>IDF: rare term को ज़्यादा वज़न</h3>
+
+  <p><b>IDF हर शब्द को एक वज़न देता है, और शब्द जितने कम passages में आता है, उसका वज़न उतना बड़ा होता है।</b> Search में query के ऐसे हर शब्द को <b class="term">term</b> कहते हैं। <button class="def" data-w="w-stopwords">Stopwords</button> यानी which और is जैसे बहुत आम शब्द, जिन्हें गिनती से पहले हटा देते हैं। इन्हें हटाने पर हमारी query में चार terms बचते हैं: office, hour, least और crowded।</p>
+
+  <p>office दो passages में है, और least और crowded सिर्फ़ forum post में, जबकि word overlap चारों को बराबर गिनता है। Term कितने passages में है, उस गिनती को <b class="term">document frequency</b> कहते हैं, और उसे n लिखते हैं। हमारे corpus में N = 6 passages हैं, और milestone सिर्फ़ syllabus में है, यानी n = 1। उसका IDF तीन steps में निकलता है:</p>
+  <ol class="plain">
+    <li>जिन passages में term नहीं है, उनकी गिनती में 0.5 जोड़िए: 6 − 1 + 0.5 = 5.5।</li>
+    <li>जिन passages में term है, उनकी गिनती में भी 0.5 जोड़िए: 1 + 0.5 = 1.5।</li>
+    <li>पहले number को दूसरे से भाग दीजिए, 5.5 ÷ 1.5 = 3.667, और उसका ln लीजिए: ln 3.667 = 1.299।</li>
+  </ol>
+  <p>Step 3 का भाग बताता है कि term वाले हर एक passage के मुकाबले कितने passages में term नहीं है। 0.5 इसलिए जुड़ता है, ताकि कोई गिनती 0 हो, तब भी भाग बन सके।</p>
+
+  <p>Step 3 का <button class="def" data-w="w-ln">ln</button> lesson 4 से है। ln x वो number है, जिसे e = 2.718 की power बनाने से x मिलता है। जाँच: e<sup>1.2993</sup> = 3.667, इसलिए ln 3.667 = 1.299। आगे एक नियम काम आएगा: ln 1 = 0, क्योंकि e<sup>0</sup> = 1।</p>
+
+  <p>इस वज़न को <b class="term">IDF</b> कहते हैं, यानी inverse document frequency: n जितना छोटा, IDF उतना बड़ा। Formula में यही तीन steps हैं:</p>
+  <div class="formula">IDF = ln <span class="frac"><span>N − n + 0.5</span><span>n + 0.5</span></span></div>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Term, और किन passages में</th><th class="numh">n</th><th>हिसाब</th><th class="numh">IDF</th></tr></thead>
+    <tbody>
+      <tr><td>milestone<span class="sub">syllabus</span></td><td class="num">1</td><td>ln(5.5 ÷ 1.5)</td><td class="num">1.299</td></tr>
+      <tr><td>office<span class="sub">office hours page, queue log</span></td><td class="num">2</td><td>ln(4.5 ÷ 2.5)</td><td class="num">0.588</td></tr>
+      <tr><td>thursday<span class="sub">syllabus, office hours page, queue log</span></td><td class="num">3</td><td>ln(3.5 ÷ 3.5)</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>thursday आधे passages में है, उसका भाग 1 है, और ln 1 = 0, इसलिए उसका वज़न 0 है।</p>
+
+  <p>अब हमारी query के terms लीजिए। office का IDF 0.588 है। hour सिर्फ़ queue log में है, क्योंकि office hours page पर hours लिखा है, hour नहीं, और retriever इन्हें अलग शब्द मानता है। इसलिए hour, least और crowded, तीनों का n = 1 है, और IDF 1.299।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>हर term को अभी एक ही बार गिनिए, और सिर्फ़ उसका IDF जोड़िए। Forum post और queue log का score कितना होगा, और tie किस तरफ़ टूटेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>4 decimal तक IDF लेकर forum post को 1.2993 + 1.2993 = 2.599 मिलता है, और queue log को 0.5878 + 1.2993 = 1.887। Tie टूट गया, लेकिन forum post की तरफ़, क्योंकि उसके दोनों terms rare हैं, और queue log का office आम है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">लेकिन queue log में office hour दो बार आता है, Tuesday और Thursday के लिए, और IDF उसे एक ही बार गिनता है। अगला पड़ाव यही गिनती जोड़ता है।</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="tf">
+  <h3><span class="cn">2</span>Term frequency और saturation: गिनती का फ़ायदा एक छत तक</h3>
+
+  <p><b>Term frequency f बताती है कि term एक passage में कितनी बार आया।</b> Queue log में office और hour, दोनों की f = 2 है। लेकिन term का पहली बार आना बताता है कि passage उस बारे में है, और दसवीं बार आना उसमें बहुत कम जोड़ता है। इसलिए BM25 सीधे f से गुणा नहीं करता।</p>
+
+  <p>वो f से एक नया number बनाता है, जिसे ये lesson <b class="term">TF हिस्सा</b> कहेगा। अभी passage की length को छोड़िए, वो पड़ाव 3 में आती है:</p>
+  <div class="formula">TF हिस्सा = <span class="frac"><span>f × 2.2</span><span>f + 1.2</span></span></div>
+  <p>f = 2 पर इसका हिसाब तीन steps में है:</p>
+  <ol class="plain">
+    <li>ऊपर का हिस्सा: 2 × 2.2 = 4.4।</li>
+    <li>नीचे का हिस्सा: 2 + 1.2 = 3.2।</li>
+    <li>भाग: 4.4 ÷ 3.2 = 1.375।</li>
+  </ol>
+  <p>जाँच: f = 1 पर ऊपर 2.2 और नीचे 2.2 है, तो हिस्सा ठीक 1। अब f बढ़ाकर देखिए:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">f</th><th class="numh">TF हिस्सा</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td class="num">1.000</td></tr>
+      <tr><td class="num">2</td><td class="num">1.375</td></tr>
+      <tr><td class="num">5</td><td class="num">1.774</td></tr>
+      <tr><td class="num">10</td><td class="num">1.964</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>1 से 2 बार होने पर हिस्सा 0.375 बढ़ा, और 5 से 10 बार होने पर सिर्फ़ 0.190। f बड़ा होने पर नीचे का 1.2 उसके मुकाबले छोटा पड़ जाता है, इसलिए हिस्सा 2.2 के पास पहुँचता है, पर उसे छूता नहीं। इसे <b class="term">saturation</b> कहते हैं: हर अगली गिनती पिछली से कम जोड़ती है, और हिस्सा एक छत से ऊपर नहीं जाता।</p>
+
+  <p>Formula का 1.2 एक knob है, जिसका नाम k1 है, और छत 2.2 असल में k1 + 1 है। k1 छोटा हो, तो छत नीची है और हिस्सा जल्दी भरता है। <span class="mine">k1 = 1.2 मेरा चुना है, slide के graph में भी ये line है</span></p>
+
+  <p>अब queue log पर लौटिए। उसमें office और hour दो-दो बार हैं, तो दोनों का TF हिस्सा 1.375 है, और score = 0.588 × 1.375 + 1.299 × 1.375 = 2.595। Forum post के दोनों terms एक-एक बार हैं, तो उसका score 2.599 ही रहा। <b>गिनती जोड़ने से queue log लगभग बराबर आ गया, और फ़र्क सिर्फ़ 0.004 बचा।</b></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>k1 = 0 हो, तो TF हिस्सा क्या बन जाता है? पड़ाव 1 के scores से इसका क्या रिश्ता है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Formula f × 1 ÷ (f + 0) बन जाता है, यानी f ÷ f = 1, अगर f कम से कम 1 है। ये lesson 2 वाला word overlap है, बस IDF के वज़न के साथ। पड़ाव 1 के 2.599 और 1.887 यही k1 = 0 वाले scores थे।</p>
+    </details>
+  </div>
+
+  <figure class="slide" style="margin-top:28px">
+    <a href="img/slide-p42.png"><img src="img/slide-p42.png" alt="Stanford slide: BM25 और standard IDF की तुलना, और term frequency saturation की curves" loading="lazy"></a>
+    <figcaption>Stanford की slide: दाएँ चार k1 के लिए TF हिस्सा, और बाएँ IDF।</figcaption>
+  </figure>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="length">
+  <h3><span class="cn">3</span>Length normalization: लंबे passage में term का वज़न घटाना</h3>
+
+  <p><b>Length normalization लंबे passage में आए term का TF हिस्सा घटाती है, और छोटे passage में आए term का बढ़ाती है।</b> 1,000 शब्दों के document में office एक बार आना, 20 शब्दों के passage में एक बार आने से कम बताता है।</p>
+
+  <p>इसके लिए BM25 हर passage की length को corpus की औसत length से मिलाता है। Passage की length शब्दों में |D| लिखते हैं, और औसत length को avgdl। औसत यानी सारी lengths का जोड़, passages की गिनती से भाग:</p>
+  <div class="formula">avgdl = (27 + 16 + 19 + 14 + 8 + 13) ÷ 6 = 97 ÷ 6 = 16.17</div>
+  <p>जाँच: 16.17 × 6 = 97.02, यानी करीब 97। अब BM25 TF हिस्से के नीचे वाले k1 को इस factor से गुणा करता है:</p>
+  <div class="formula">factor = 1 − b + b × <span class="frac"><span>|D|</span><span>avgdl</span></span></div>
+  <p>|D| ÷ avgdl बताता है कि passage औसत का कितना गुना है। b एक दूसरा knob है, 0 से 1 के बीच, जो तय करता है कि length का कितना असर हो। Queue log के लिए, b = 0.75 पर, factor तीन steps में निकलता है: <span class="mine">b = 0.75 मेरा चुना है</span></p>
+  <ol class="plain">
+    <li>|D| ÷ avgdl = 19 ÷ 16.17 = 1.175।</li>
+    <li>b से गुणा: 0.75 × 1.175 = 0.881।</li>
+    <li>1 − b जोड़िए: 0.25 + 0.881 = 1.131।</li>
+  </ol>
+  <p>जाँच: औसत length पर factor 0.25 + 0.75 = 1 है, यानी कोई बदलाव नहीं। औसत से लंबे passage का factor 1 से बड़ा है, इसलिए उसका TF हिस्सा छोटा है। जैसे f = 1 पर दोगुनी length वाले passage का हिस्सा 1.000 से घटकर 0.710 रह जाता है।</p>
+
+  <p>इसे <b class="term">length normalization</b> कहते हैं। b = 0 पर factor हमेशा 1 है, यानी length का कोई असर नहीं, और b = 1 पर पूरा असर। हमारे passages में queue log 19 शब्दों का है, औसत से लंबा, तो उसका factor 1.131 है। Forum post 14 शब्दों का है, तो उसका factor 0.25 + 0.75 × 14 ÷ 16.17 = 0.899 है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>b = 1 है, और passage औसत से दोगुना लंबा। f = 1 और k1 = 1.2 पर TF हिस्सा कितना होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Factor = 1 − 1 + 1 × 2 = 2। हिस्सा = 2.2 ÷ (1 + 1.2 × 2) = 2.2 ÷ 3.4 = <b>0.647</b>। ये b = 0.75 वाले 0.710 से भी कम है, क्योंकि length का पूरा असर लगा।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="bm25">
+  <h3><span class="cn">4</span>तीनों हिस्से एक formula में: BM25</h3>
+
+  <p><b>BM25 score हर query term के IDF और TF हिस्से का गुणा है, सारे terms पर जोड़कर।</b> जो term passage में नहीं है, उसका हिस्सा 0 है। पूरा हिसाब queue log के office पर कीजिए: f = 2, और पड़ाव 3 का factor, 4 decimal तक 1.1314।</p>
+  <ol class="plain">
+    <li>नीचे का हिस्सा: 2 + 1.2 × 1.1314 = 2 + 1.3577 = 3.3577।</li>
+    <li>ऊपर का हिस्सा: 2 × 2.2 = 4.4।</li>
+    <li>TF हिस्सा: 4.4 ÷ 3.3577 = 1.3104।</li>
+    <li>IDF से गुणा: 0.5878 × 1.3104 = 0.7703।</li>
+  </ol>
+  <p>Forum post के least पर factor 0.8995 है, तो TF हिस्सा 2.2 ÷ (1 + 1.2 × 0.8995) = 2.2 ÷ 2.0794 = 1.0580 है। Query <q>which office hour is least crowded</q>, k1 = 1.2 और b = 0.75 पर पूरा हिसाब ये है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">|D|</th><th>हर term का वज़न</th><th class="numh">Score</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>पुराना forum post</td><td class="num">14</td><td>least: 1.2993 × 1.0580 = 1.3747<br>crowded: 1.2993 × 1.0580 = 1.3747</td><td class="num">2.749</td></tr>
+      <tr><td>Queue log</td><td class="num">19</td><td>office (f = 2): 0.5878 × 1.3104 = 0.7703<br>hour (f = 2): 1.2993 × 1.3104 = 1.7026</td><td class="num">2.473</td></tr>
+      <tr><td>Office hours page</td><td class="num">16</td><td>office: 0.5878 × ? = ?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <p><b>BM25 पुराने forum post को queue log से ऊपर रखता है, 2.749 बनाम 2.473।</b> Length ने पड़ाव 2 का 0.004 का फ़र्क बढ़ाकर 0.276 कर दिया। Formula सिर्फ़ शब्द गिनता है, और उसका कोई हिस्सा ये नहीं देखता कि forum post 2024 की राय है और queue log ताज़ा data।</p>
+
+  <p>Stanford की slide यही हिसाब एक formula में लिखती है:</p>
+  <div class="formula">score(D, Q) = <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i> = 1 … <i>n</i></span></span> IDF(q<sub><i>i</i></sub>) · <span class="frac"><span>f(q<sub><i>i</i></sub>, D) · (k1 + 1)</span><span>f(q<sub><i>i</i></sub>, D) + k1 · (1 − b + b · |D| ÷ avgdl)</span></span></div>
+  <p><button class="def" data-w="w-sigma">∑</button> lesson 3 से है। इसका मतलब है: नीचे लिखे i से ऊपर लिखे n तक, हर i के लिए आगे वाली चीज़ निकालिए, और सब जोड़ दीजिए। यहाँ i = 1 से 4 तक: 0.7703 + 1.7026 + 0 + 0 = 2.473। Formula में “·” गुणा का निशान है, D वो passage है जिसका score चाहिए, और q<sub><i>i</i></sub> query का i-वाँ term। बाकी हिस्से पड़ाव 1 से 3 के हैं।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p41.png"><img src="img/slide-p41.png" alt="Stanford slide: BM25 का formula और IDF का formula" loading="lazy"></a>
+    <figcaption>Stanford की slide: BM25, the most widely used। रंग वाले हिस्से IDF, f और |D| ÷ avgdl हैं, और नीचे पड़ाव 1 का IDF formula है।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Office hours page वाली row आप निकालिए</p>
+    <p>Office hours page 16 शब्दों का है, और उसमें office एक बार है। उसका factor, TF हिस्सा और score कितना है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>16 ÷ 16.17 = 0.9897, तो factor = 0.25 + 0.75 × 0.9897 = 0.9923। TF हिस्सा = 2.2 ÷ (1 + 1.2 × 0.9923) = 2.2 ÷ 2.1908 = 1.0042। Score = 0.5878 × 1.0042 = <b>0.590</b>।</p>
+    </details>
+  </div>
+
+  <div class="widget" id="bw">
+    <h4>BM25 calculator</h4>
+    <p class="hint">Query चुनिए, और k1 और b बदलिए। तीन buttons पहले तीन पड़ाव हैं, और हर cell में term की f और उसका वज़न है।</p>
+    <div class="btns" id="bw-q"></div>
+    <div class="btns" id="bw-p">
+      <button type="button" data-k1="0" data-b="0.75">सिर्फ़ IDF: k1 = 0</button>
+      <button type="button" data-k1="1.2" data-b="0">गिनती जोड़ी: k1 = 1.2, b = 0</button>
+      <button type="button" data-k1="1.2" data-b="0.75">पूरा BM25: k1 = 1.2, b = 0.75</button>
+    </div>
+    <div class="ctl">
+      <label for="bw-k1">k1</label><input id="bw-k1" type="range" min="0" max="3" step="0.1" value="1.2"><output id="bw-k1o">1.2</output>
+      <label for="bw-b">b</label><input id="bw-b" type="range" min="0" max="1" step="0.05" value="0.75"><output id="bw-bo">0.75</output>
+    </div>
+    <p class="note" id="bw-idf"></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="numh">|D|</th><th>Terms</th><th class="numh">Score</th></tr></thead>
+      <tbody id="bw-body"></tbody>
+    </table></div>
+    <p class="out" id="bw-out"></p>
+  </div>
+
+  <p style="margin-top:22px">तीसरी query <q>when can I get help from a TA</q> पर हर score 0 है, और इसकी वजह पड़ाव 5 में आती है।</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="index">
+  <h3><span class="cn">5</span>Inverted index: BM25 तेज़ क्यों है, और कहाँ हारता है</h3>
+
+  <p><b>Inverted index हर term के लिए उन passages की list है, जिनमें वो term आता है।</b> BM25 ये lists <button class="def" data-w="w-offline">offline</button>, यानी सवाल आने से पहले, एक बार बनाता है। हमारी query के terms की lists ऐसी दिखती हैं:</p>
+  <ul class="plain">
+    <li>office → office hours page, queue log</li>
+    <li>hour → queue log</li>
+    <li>least → पुराना forum post</li>
+    <li>crowded → पुराना forum post</li>
+  </ul>
+  <p>सवाल आने पर BM25 सिर्फ़ ये 4 lists खोलता है, और बाकी 3 passages को छूता भी नहीं। इसलिए वो तेज़ है, और Stanford की तुलना वाली slide में एक बड़े dataset पर 62 ms में जवाब देता है।</p>
+
+  <p>BM25 की नज़र में हर passage एक लंबा vector है, जिसमें vocabulary के हर शब्द की एक जगह है। हमारे 69 शब्दों में से forum post में 14 हैं, तो उसकी 55 जगहें 0 हैं, और ऐसे vector को <b class="term">sparse</b> कहते हैं। Lesson 3 के <button class="def" data-w="w-embedding">embeddings</button> dense हैं: 768 numbers, और लगभग कोई 0 नहीं।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p54-bm25.png"><img src="img/slide-p54-bm25.png" alt="Stanford की तुलना वाली slide की BM25 row: inverted index, 62 ms, exact terms पर जीत, paraphrase पर हार" loading="lazy"></a>
+    <figcaption>Stanford की slide: Fast vs Slow Retrievers, उसकी BM25 वाली row। बाकी rows lesson 12, 14 और 15 में आती हैं।</figcaption>
+  </figure>
+
+  <p>उसी row के मुताबिक BM25 exact terms पर जीतता है, जैसे IDs, नाम और error codes। E-4012 जैसा code या तो passage में है या नहीं, और rare होने की वजह से उसका IDF ऊँचा है।</p>
+
+  <p>BM25 paraphrase और synonyms पर हारता है, यानी वही बात दूसरे शब्दों में। Widget की तीसरी query का जवाब office hours page में है, लेकिन वहाँ TAs लिखा है, ta नहीं, और help कहीं नहीं है। इसलिए हर score 0 आता है।</p>
+
+  <p>Forum post वाली गलती भी यहीं से आती है, क्योंकि BM25 सिर्फ़ शब्द गिनता है। <a href="12-dpr.html">Lesson 12</a> सवाल-passage जोड़ों से सीखने वाला retriever बनाता है, और <a href="14-hybrid-rerank.html">lesson 14</a> दोनों की lists मिलाता है।</p>
+
+  <div class="deeper">
+    <h2>गहरे version में और क्या है</h2>
+    <ul class="plain">
+      <li>6. Slide के symbols, n के दो मतलब, k1 + 1, और length की पूरी table।</li>
+      <li>7. ln के दो और नियम, negative IDF, TF-IDF, 0.5 की वजह, और दोनों graphs।</li>
+      <li>8. k1 और b कौन चुनता है, और किन values पर queue log ऊपर आता है।</li>
+      <li>9. Index में क्या रहता है, sparse dot product, 62 ms का data, और papers के examples।</li>
+      <li>10. चारों Stanford slides, जिन्हें आप खुद पढ़ते हैं।</li>
+    </ul>
+    <p><a href="11-bm25-dense.html">गहरा version खोलिए</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>BM25 score = हर query term का IDF × TF हिस्सा, फिर जोड़, जिसमें k1 गिनती को saturate करता है और b length का हिसाब रखता है।</li>
+    <li>Inverted index की वजह से BM25 तेज़ है, और exact terms पर भरोसेमंद।</li>
+    <li>BM25 शब्द गिनता है, data और राय में फ़र्क नहीं करता। इसलिए पुराना forum post 2.749 पर queue log (2.473) से ऊपर है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-term">Term</dt><dd>Search में query का एक शब्द। जैसे <q>which office hour</q> में office और hour।</dd>
+    <dt id="w-df">Document frequency, n(q)</dt><dd>कितने documents में term q है। जैसे milestone का n = 1, और office का 2।</dd>
+    <dt id="w-idf">IDF</dt><dd>ln((N − n + 0.5) ÷ (n + 0.5)), rare term का बड़ा वज़न। जैसे milestone का 1.299, और office का 0.588।</dd>
+    <dt id="w-tfidf">TF-IDF</dt><dd>Term की गिनती × ln(N ÷ n), BM25 से पुराना तरीका। जैसे N = 6, n = 2, f = 2 पर 2 × ln 3 = 2.20।</dd>
+    <dt id="w-tf">Term frequency, f(q, D)</dt><dd>Term q document D में कितनी बार है। जैसे queue log में office की f = 2।</dd>
+    <dt id="w-saturation">Saturation और k1</dt><dd>गिनती बढ़ने पर फ़ायदा धीरे-धीरे भरता है, k1 + 1 की छत तक। जैसे k1 = 1.2 पर f = 1, 2, 10 का हिस्सा 1.000, 1.375, 1.964।</dd>
+    <dt id="w-lengthnorm">Length normalization, b और avgdl</dt><dd>औसत से लंबे documents का TF हिस्सा घटाना, b जितना असर। जैसे avgdl = 16.17 और b = 0.75 पर दोगुने लंबे document का हिस्सा 0.710।</dd>
+    <dt id="w-bm25">BM25</dt><dd>हर query term का IDF × TF हिस्सा, सब terms का जोड़। जैसे forum post का 2.749, और queue log का 2.473।</dd>
+    <dt id="w-inverted">Inverted index</dt><dd>हर term के documents की list। जैसे office → office hours page, queue log।</dd>
+    <dt id="w-sparse">Sparse और dense vector</dt><dd>ज़्यादातर 0 वाला लंबा vector, और लगभग पूरा भरा छोटा vector। जैसे forum post के vector की 69 में से 55 जगहें 0 हैं।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="10-vector-search.html">पिछला: Lesson 10</a>
+    <a href="12-dpr.html">अगला: Lesson 12, DPR</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। “मेरे चुने” और “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं।
+</footer>
+</main>
+
+<script src="glossary.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var P = [
+    { name: "Syllabus", text: "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10." },
+    { name: "Office hours page", text: "Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs." },
+    { name: "Queue log", text: "Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3." },
+    { name: "पुराना forum post", text: "Old forum post (2024): midweek afternoons are usually the least crowded time to visit." },
+    { name: "Homework 1 announcement", text: "Homework 1 will be released on Oct 5." },
+    { name: "Project page", text: "Project proposal due on Oct 9. Teams of 1-3 people are recommended." }
+  ];
+  var L = { none: "कोई term नहीं", top: "सबसे ऊपर: ", zero: "हर passage का score 0 है। कोई query term corpus में नहीं।", end: "।" };
+  var QUERIES = ["which office hour is least crowded", "when is the project milestone due", "when can I get help from a TA"];
+  var STOP = ["which", "is", "the", "when", "can", "i", "get", "from", "a", "an", "to", "of", "on", "in", "it", "and", "are", "be", "this", "what", "how", "do"];
+  function words(s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+  var DOCS = P.map(function (p) { return words(p.text); });
+  var N = DOCS.length, AVG = DOCS.reduce(function (a, d) { return a + d.length; }, 0) / N;
+  function n(t) { return DOCS.filter(function (d) { return d.indexOf(t) >= 0; }).length; }
+  function idf(t) { var k = n(t); return Math.log((N - k + 0.5) / (k + 0.5)); }
+  function count(d, t) { return d.filter(function (w) { return w === t; }).length; }
+  var qi = 0, qBox = document.getElementById("bw-q"), pBox = document.getElementById("bw-p");
+  var k1In = document.getElementById("bw-k1"), bIn = document.getElementById("bw-b");
+  qBox.innerHTML = QUERIES.map(function (q, i) { return '<button type="button" data-i="' + i + '">' + q + "</button>"; }).join("");
+  qBox.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); }); });
+  pBox.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { k1In.value = b.dataset.k1; bIn.value = b.dataset.b; render(); }); });
+  k1In.addEventListener("input", render); bIn.addEventListener("input", render);
+  function render() {
+    var k1 = Number(k1In.value), b = Number(bIn.value);
+    document.getElementById("bw-k1o").textContent = k1.toFixed(1);
+    document.getElementById("bw-bo").textContent = b.toFixed(2);
+    qBox.querySelectorAll("button").forEach(function (x, i) { x.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    pBox.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", Number(x.dataset.k1) === k1 && Number(x.dataset.b) === b ? "true" : "false"); });
+    var terms = words(QUERIES[qi]).filter(function (w) { return STOP.indexOf(w) < 0; });
+    document.getElementById("bw-idf").innerHTML = "IDF: " + terms.map(function (t) { return "<b>" + t + "</b> (n = " + n(t) + ") " + idf(t).toFixed(3); }).join(", ") + L.end + " avgdl = " + AVG.toFixed(2);
+    var rows = P.map(function (p, i) {
+      var d = DOCS[i], len = d.length, total = 0, parts = [];
+      terms.forEach(function (t) {
+        var f = count(d, t);
+        if (!f) return;
+        var tfc = f * (k1 + 1) / (f + k1 * (1 - b + b * len / AVG));
+        var c = idf(t) * tfc;
+        total += c;
+        parts.push(t + " (f = " + f + "): " + c.toFixed(3));
+      });
+      return { p: p, len: len, total: total, parts: parts, i: i };
+    }).sort(function (a, b2) { return b2.total - a.total || a.i - b2.i; });
+    document.getElementById("bw-body").innerHTML = rows.map(function (r, i) {
+      return '<tr class="' + (i === 0 && r.total > 0 ? "hi" : "") + '"><td>' + r.p.name + '</td><td class="num">' + r.len + "</td><td>" + (r.parts.join("<br>") || L.none) + '</td><td class="num">' + r.total.toFixed(3) + "</td></tr>";
+    }).join("");
+    document.getElementById("bw-out").innerHTML = rows[0].total > 0 ? L.top + "<b>" + rows[0].p.name + "</b>" + L.end : L.zero;
+  }
+  render();
+})();
+</script>
+</body>
+</html>

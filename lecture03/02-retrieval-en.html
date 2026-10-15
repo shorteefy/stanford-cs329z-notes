@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="An LLM can only answer from what is in its prompt, and a prompt holds just 14 of a company's 60,000 passages. This lesson builds the simplest way to pick those 14 for every question.">
+<title>Lesson 2: Retrieval</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  figure.slide.narrow img { max-width: 340px; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 2 / 18 · <b>Easy</b> · <a href="02-retrieval-dense-en.html">Dense</a> · <a href="02-retrieval.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 2 · Easy version</p>
+  <h1>Retrieval: finding before answering</h1>
+  <p class="lede"><b>Retrieval is the step that finds the useful pieces of your documents when a question arrives, so that an LLM can read them and answer.</b> Two parts share the work: the retriever finds the pieces, and the reader reads them and writes the answer.</p>
+  <p class="lede">The need for it showed up in <a href="01-how-llms-answer-en.html#prompt">lesson 1</a>. Putting one line of the queue log into the <button class="def" data-w="w-prompt">prompt</button> raised the probability of Thursday from 0.21 to 0.81, but we picked that line ourselves. Now picture a company with 2,000 documents of about 30 paragraphs each, so 2,000 × 30 = 60,000 paragraphs. The <button class="def" data-w="w-context">context window</button> from lesson 1 had room for 7,000 tokens of passages. At 500 tokens a paragraph, only 7,000 ÷ 500 = 14 paragraphs fit.</p>
+  <p class="lede">So for every question, some program has to pick the 14 out of 60,000 that hold the answer. This lesson builds such a program in the simplest way: by counting words. Of the course's 3 questions, it handles the first well. On the second it ties a right passage with a wrong one, and on the third it returns nothing.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 4 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#corpus">Corpus, document, passage and query</a><span class="can">Explain why a retriever does not return whole documents.</span></li>
+      <li><a href="#retrieval">Retrieval: the right passage into the prompt when a question arrives</a><span class="can">Read a retrieval prompt and Stanford's Why Retrieval? slide.</span></li>
+      <li><a href="#retriever">The retriever: score every passage, then take the top K</a><span class="can">Compute scores by hand, and explain why the old forum post ties with the queue log.</span></li>
+      <li><a href="#recall-ceiling">The recall ceiling: a passage that never arrives is never read</a><span class="can">Show with arithmetic why the retriever sets the limit for the whole system.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="01-how-llms-answer-en.html#prompt">Lesson 1</a> (token, prompt, context window, parameters, hallucination). This lesson explains everything else it uses. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="corpus">
+  <h3><span class="cn">1</span>Corpus, document and passage: where the retriever looks</h3>
+
+  <p><b>The set of all your documents is called the corpus, and the retriever searches inside it.</b> Each single item in the corpus is a <b class="term">document</b>: a web page, a file or an email. Another name for the corpus is the collection.</p>
+
+  <p>The retriever does not return a whole document, because the prompt has room for only 14 pieces, and most of a long document has nothing to do with the question. The milestone date in a 40-page syllabus probably takes 2 lines. So the retriever returns a small piece, such as one paragraph, and this piece is called a <b class="term">passage</b>.</p>
+
+  <p>The question you are searching for is the <b class="term">query</b>. This lesson's first query is the one from lesson 1: <q>which office hour is least crowded</q>.</p>
+
+  <p>Later lessons keep coming back to this small corpus. It has 6 documents, with one passage from each. Every passage also has a short ID, such as P3, so that an answer can name it. <span class="mine">the syllabus, queue log, Homework 1 announcement and project page come from the slides, the office hours page and the old forum post are mine</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>ID</th><th>Passage</th></tr></thead>
+    <tbody>
+      <tr><td><b>P1</b></td><td>Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10.<span class="sub">Syllabus</span></td></tr>
+      <tr><td><b>P2</b></td><td>Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs.<span class="sub">Office hours page</span></td></tr>
+      <tr><td><b>P3</b></td><td>Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<span class="sub">Queue log</span></td></tr>
+      <tr><td><b>P4</b></td><td>Old forum post (2024): midweek afternoons are usually the least crowded time to visit.<span class="sub">Old forum post</span></td></tr>
+      <tr><td><b>P5</b></td><td>Homework 1 will be released on Oct 5.<span class="sub">Homework 1 announcement</span></td></tr>
+      <tr><td><b>P6</b></td><td>Project proposal due on Oct 9. Teams of 1-3 people are recommended.<span class="sub">Project page</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Suppose the syllabus and the Homework 1 announcement were two paragraphs of the same document. How many documents would there be, and how many passages?</p>
+    <details><summary>Show the answer</summary>
+      <p><b>5</b> documents, but still <b>6</b> passages, and the retriever chooses among those 6. The company has the same split: 2,000 documents, but 60,000 passages.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="retrieval">
+  <h3><span class="cn">2</span>Retrieval: putting the right passage into the prompt when a question arrives</h3>
+
+  <p><b>Retrieval means finding the most useful passages in the corpus when a query arrives, and putting them into the prompt with the question.</b> The model then does not have to memorize everything in advance. Stanford's slide calls this just-in-time: the right text reaches the model exactly when the question does.</p>
+
+  <p>For our query the retriever finds the queue log, and the LLM gets a prompt like this: <span class="mine">my example</span></p>
+  <div class="sentence">Answer the question using the passage below. Cite the passage ID.<br>[P3] Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<br>Question: Which office hour is least crowded?</div>
+
+  <p>The answer comes back as <q>Thursday 9am, about 3 students ahead of you [P3].</q> The [P3] at the end says which passage the claim came from. A source written next to an answer is called a <b class="term">citation</b>. With the citation you can open the queue log and check that it really says this.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval? The answer of an LLM alone and of an LLM with retrieval" loading="lazy"></a>
+    <figcaption>Stanford's Why Retrieval? slide. On the left is the LLM's guess on its own. On the right is the queue log the retriever returned, and the answer written from it. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>In lesson 1 all of the model's knowledge sat in its <button class="def" data-w="w-parameters">parameters</button>, which caused two problems. Adding a new fact needed training, and the model could not name its source. With retrieval you add a new fact by adding a passage to the corpus, and the citation shows the source. Stanford's slide calls these two benefits Dynamic and Interpretable.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p11.png"><img src="img/slide-p11.png" alt="Stanford slide: using retrieval to overcome the shortcomings of LMs, Dynamic and Interpretable" loading="lazy"></a>
+    <figcaption>Stanford's slide: just-in-time, Dynamic and Interpretable. In the diagram at the bottom, the [1] in the reader's answer is a citation.</figcaption>
+  </figure>
+
+  <p>Lesson 1 called knowledge stored inside the parameters <button class="def" data-w="w-parametric">parametric knowledge</button>. Here the knowledge sits in the corpus, outside the model, and knowledge kept this way is called <b class="term">non-parametric memory</b>.</p>
+
+  <p>Retrieval is only as good as the search, though. The end of lesson 1 showed that with the old forum post in the prompt, the model may write Wednesday again. So the next step builds a firm rule for searching.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="retriever">
+  <h3><span class="cn">3</span>The retriever: score every passage, then take the top K</h3>
+
+  <p><b>A retriever gives every passage a score for the query, sorts the passages by score, and returns the top K.</b> A score is a number that says how useful a passage is for the query.</p>
+
+  <p>The K highest-scoring passages are called the <b class="term">top-K</b>. K is fixed in advance, for example 2 or 100.</p>
+
+  <p>The simplest score is <b class="term">word overlap</b>: how many of the query's words also appear in the passage. But words such as which, is and the appear in almost every text, so counting them tells you nothing.</p>
+
+  <p>Very common words like these are called <b class="term">stopwords</b>, and the retriever removes them before counting. Remove which and is from the query <q>which office hour is least crowded</q>. Four words are left: office, hour, least and crowded.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The queue log holds the answer, and the old forum post holds only an opinion from 2024. Look for the four words in both passages in the corpus table. Which one gets the higher word-overlap score?</p>
+    <details><summary>Show the answer</summary>
+      <p>Neither. Both get 2. The queue log has office and hour, and the forum post has least and crowded.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Here are the scores for the whole corpus:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>Words matched</th><th class="numh">Score</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log</td><td>office, hour</td><td class="num">2</td></tr>
+      <tr class="hi"><td>Old forum post</td><td>least, crowded</td><td class="num">2</td></tr>
+      <tr><td>Office hours page</td><td>office<span class="sub">The retriever matches words exactly, so hours and hour are different words to it.</span></td><td class="num">1</td></tr>
+      <tr><td>Syllabus, Homework 1 announcement, project page</td><td>none</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Word overlap only counts words, so it cannot see that the queue log is three weeks of data and the forum post a 2024 opinion. With K = 2 the retriever returns both. <b>The prompt then carries the old opinion next to the real data, and the model may write Wednesday again because of it.</b></p>
+
+  <p>The part that reads the query and the top-K passages and writes the answer is called the <b class="term">reader</b>. Today the reader is usually an LLM that was never trained for this particular task and simply follows the instruction in the prompt. The first line of the prompt above, <q>Answer the question using the passage below</q>, is that instruction.</p>
+
+  <p>Doing a task from an instruction alone, without training for it, is called <b class="term">zero-shot</b>. Since the reader is usually such a ready-made LLM, lessons 3 to 15 mostly work on making the retriever better.</p>
+
+  <div class="widget" id="rw">
+    <h4>Run the retriever yourself</h4>
+    <p class="hint">Pick a query and change K. The retriever does not return passages with score 0. When scores tie, the passage listed first in the corpus comes first.</p>
+    <div class="btns" id="rw-q"></div>
+    <div class="ctl"><label for="rw-k">K, how many passages to return</label><input id="rw-k" type="range" min="1" max="6" step="1" value="2"><output id="rw-ko">2</output></div>
+    <p class="note" id="rw-words" style="margin-bottom:10px"></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th class="num">Rank</th><th>Passage</th><th class="numh">Score</th></tr></thead>
+      <tbody id="rw-body"></tbody>
+    </table></div>
+    <p class="out" id="rw-out"></p>
+  </div>
+
+  <div class="recall">
+    <p class="rl">Work it out</p>
+    <p>Query: <q>when is the project milestone due</q>. Remove the stopwords and score the syllabus and the project page. With K = 1, which passage does the reader get? Check it in the widget.</p>
+    <details><summary>Show the answer</summary>
+      <p>The words left are project, milestone and due. The syllabus has all three, so its score is <b>3</b>. The project page has project and due, so its score is <b>2</b>. With K = 1 the reader gets the syllabus, which has the right date: Week 6, Thursday 11:59pm.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="recall-ceiling">
+  <h3><span class="cn">4</span>The recall ceiling: a passage that never arrives is never read</h3>
+
+  <p>Now pick the third query in the widget: <q>when can I get help from a TA</q>. After removing stopwords, help and ta are left. The answer is in the office hours page, but that page says TAs, not ta, and no passage contains help. So every score is 0 and the retriever returns nothing. However good the reader is, the office hours page never reaches its prompt.</p>
+
+  <p><b>How often a retriever finds the passage that is needed is, roughly, the retriever's recall.</b> If the right passage reaches the top K for 60 out of 100 questions, the recall is 60%. 60% means 60 out of 100, that is 60 ÷ 100 = 0.6. <a href="13-metrics-en.html">Lesson 13</a> shows how to measure recall precisely.</p>
+
+  <p>Now add the reader: when it gets the right passage, it answers 90% of questions correctly, that is 0.9 per question. On the 60 questions that gives 60 × 0.9 = 54 correct answers. On the other 100 − 60 = 40 questions, no correct answer can come from the passages. You can now improve either the reader or the retriever. <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Change</th><th>Arithmetic</th><th class="numh">Correct answers</th></tr></thead>
+    <tbody>
+      <tr><td>As it is now</td><td>60 × 0.9</td><td class="num">54</td></tr>
+      <tr><td>Make the reader perfect</td><td>60 × 1.0</td><td class="num">60</td></tr>
+      <tr class="hi"><td>Raise the retriever to 80, same reader</td><td>?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">Work out the third row</p>
+    <p>The retriever now brings the right passage for 80 questions, and the reader is still right 90% of the time. How many correct answers do you get? More or fewer than with the perfect reader?</p>
+    <details><summary>Show the answer</summary>
+      <p>80 × 0.9 = <b>72</b>, which is 72 − 60 = 12 more than the perfect reader. Even a perfect reader cannot go past 60, because for the other 40 questions the right passage never reached it.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">The perfect reader stops at 60 because of a rule of multiplication. Multiply a number by something smaller than 1 and it shrinks, as in 60 × 0.5 = 30. Multiply it by 1 and it stays the same, as in 60 × 1.0 = 60. The reader's share can never be above 1, because 1 means every question answered correctly.</p>
+
+  <p><b>So the correct answers can never exceed the 60 questions for which the retriever brought the right passage.</b> The retriever's recall becomes the upper limit of the whole system.</p>
+
+  <p>This limit is called the <b class="term">recall ceiling</b>. Stanford's slide writes <q>Missing evidence limits agent</q> under it: evidence that never reaches the prompt holds the system back. Agents come in <a href="16-agentic-rag-en.html">lesson 16</a>.</p>
+
+  <figure class="slide narrow">
+    <a href="img/slide-p63-retrieval.png"><img src="img/slide-p63-retrieval.png" alt="The retrieval part of Stanford's Issues with RAG slide: Recall ceiling, Missing evidence limits agent" loading="lazy"></a>
+    <figcaption>The retrieval part of Stanford's slide Issues with RAG. The other two problems come in <a href="18-failure-modes-en.html">lesson 18</a>.</figcaption>
+  </figure>
+
+  <p>A larger K raises recall, but wrong passages come along too, like the old forum post at K = 2. And the company's prompt cannot hold more than 14 passages anyway.</p>
+
+  <p>Word overlap failed twice, even on 6 passages. The first time it ranked a right and a wrong passage equally. The second time the query and the passage said the same thing in different words, help from a TA and run by the TAs, and the score was 0. <a href="03-vectors-en.html">Lesson 3</a> starts right here: turning text into numbers so that texts saying similar things get numbers close to each other.</p>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 4 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 5: the symbols on the retriever-reader slide, such as f(𝒟, Q), and the maths of functions.</li>
+      <li>Step 6: DrQA, a real retriever-reader system that searches all of Wikipedia, and its training data.</li>
+      <li>Step 7: the recall ceiling in DrQA's real numbers, and the full arithmetic of changing K on our corpus.</li>
+      <li>Step 8: this lesson's Stanford slides, which you read yourself.</li>
+    </ul>
+    <p><a href="02-retrieval-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>Retrieval: for every query, pick a few passages from the corpus and put them into the prompt. It needs no training, and the answer comes with a citation.</li>
+    <li>The retriever scores every passage and returns the top K, and the reader reads them and writes the answer. Word overlap gives the queue log and the old forum post the same score, 2.</li>
+    <li>A passage the retriever did not bring is never read by the reader. So the retriever's recall is the upper limit of the whole system: the recall ceiling.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-corpus">Corpus (collection)</dt><dd>The set of all documents. For example, the company's 2,000 documents, or this course's 6 short texts.</dd>
+    <dt id="w-document">Document</dt><dd>One item in the corpus: a web page, a file or an email. For example, the course syllabus.</dd>
+    <dt id="w-passage">Passage</dt><dd>A small piece of a document, which the retriever returns. For example, the syllabus paragraph that holds the milestone date.</dd>
+    <dt id="w-query">Query</dt><dd>The question you search for. For example, “which office hour is least crowded”.</dd>
+    <dt id="w-retrieval">Retrieval</dt><dd>Finding useful passages for a query and putting them into the prompt. For example, the queue log going into the prompt with the question.</dd>
+    <dt id="w-citation">Citation</dt><dd>The source written next to an answer. For example, the [P3] in “Thursday 9am [P3]”, which points to the queue log.</dd>
+    <dt id="w-nonparam">Non-parametric memory</dt><dd>Knowledge kept outside the model, in the corpus. For example, the queue log: changing it needs no training.</dd>
+    <dt id="w-retriever">Retriever</dt><dd>The part that scores every passage and returns the top K. For example, this lesson's word-overlap retriever.</dd>
+    <dt id="w-score">Score</dt><dd>A number for how useful a passage is for the query. For example, the queue log's word-overlap score of 2.</dd>
+    <dt id="w-topk">Top-K</dt><dd>The K passages with the highest scores. For example, the queue log and the old forum post at K = 2.</dd>
+    <dt id="w-overlap">Word overlap</dt><dd>How many of the query's words appear in the passage. The simplest score. For example, the queue log has office and hour, so its score is 2.</dd>
+    <dt id="w-stopwords">Stopwords</dt><dd>Very common words such as is, the and which, left out of the count. From “which office hour is least crowded”, which and is are removed.</dd>
+    <dt id="w-reader">Reader</dt><dd>The part that reads the query and the top-K passages and writes the answer. Today usually an LLM. For example, reading the queue log and writing “Thursday 9am”.</dd>
+    <dt id="w-zeroshot">Zero-shot</dt><dd>Doing a task from an instruction alone, without training on that task. For example, the prompt line “Answer the question using the passage below”.</dd>
+    <dt id="w-recall">Recall</dt><dd>How often the retriever finds the passage that is needed. For example, 60 out of 100 questions gives a recall of 60%.</dd>
+    <dt id="w-ceiling">Recall ceiling</dt><dd>The retriever's recall becomes the upper limit of the whole system. With a recall of 60%, no reader can get more than 60 of 100 answers from the passages.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="01-how-llms-answer-en.html">Previous: Lesson 1</a>
+    <a href="03-vectors-en.html">Next: Lesson 3, Vectors and similarity</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Paper (in the dense version): Chen et al., 2017, “Reading Wikipedia to Answer Open-Domain Questions”. Examples and numbers marked “my” or “mine” belong to this lesson, not to the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var PASSAGES = [
+    { id: "P1", name: "Syllabus", text: "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10." },
+    { id: "P2", name: "Office hours page", text: "Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs." },
+    { id: "P3", name: "Queue log", text: "Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3." },
+    { id: "P4", name: "Old forum post", text: "Old forum post (2024): midweek afternoons are usually the least crowded time to visit." },
+    { id: "P5", name: "Homework 1 announcement", text: "Homework 1 will be released on Oct 5." },
+    { id: "P6", name: "Project page", text: "Project proposal due on Oct 9. Teams of 1-3 people are recommended." }
+  ];
+  var QUERIES = [
+    { q: "which office hour is least crowded", answer: "P3" },
+    { q: "when is the project milestone due", answer: "P1" },
+    { q: "when can I get help from a TA", answer: "P2" }
+  ];
+  var STOP = ["which", "is", "the", "when", "can", "i", "get", "from", "a", "an", "to", "of", "on", "in", "it", "and", "are", "be", "this", "what", "how", "do"];
+  var T = {
+    words: "Query words after removing stopwords: ",
+    none: function (ans) { return "The retriever returned <b>nothing</b>. The right passage, the " + ans.toLowerCase() + ", did not reach the reader."; },
+    got: function (list, ans, hit, extra) {
+      return "The reader gets: <b>" + list + "</b>. The right passage, the " + ans.toLowerCase() + (hit ? ", <b>is</b> among them." : ", is <b>not</b> among them.") +
+        (extra > 0 ? " " + extra + " more passage" + (extra === 1 ? " comes" : "s come") + " along with it." : "");
+    }
+  };
+
+  function words(s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function byId(id) { return PASSAGES.filter(function (p) { return p.id === id; })[0]; }
+
+  var qi = 0;
+  var qBox = document.getElementById("rw-q");
+  var kIn = document.getElementById("rw-k");
+  var kOut = document.getElementById("rw-ko");
+  var body = document.getElementById("rw-body");
+  var out = document.getElementById("rw-out");
+  var wordsEl = document.getElementById("rw-words");
+
+  qBox.innerHTML = QUERIES.map(function (x, i) { return '<button type="button" data-i="' + i + '">' + esc(x.q) + "</button>"; }).join("");
+  qBox.querySelectorAll("button").forEach(function (b) {
+    b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); });
+  });
+  kIn.addEventListener("input", render);
+
+  function highlight(text, qset) {
+    return text.split(/([A-Za-z0-9]+)/).map(function (part) {
+      return qset[part.toLowerCase()] ? "<mark>" + esc(part) + "</mark>" : esc(part);
+    }).join("");
+  }
+
+  function render() {
+    var K = Number(kIn.value);
+    kOut.textContent = K;
+    qBox.querySelectorAll("button").forEach(function (b, i) { b.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    var Q = QUERIES[qi];
+    var qw = words(Q.q).filter(function (w) { return STOP.indexOf(w) < 0; });
+    var qset = {};
+    qw.forEach(function (w) { qset[w] = true; });
+    wordsEl.innerHTML = T.words + "<b>" + qw.join(", ") + "</b>";
+
+    var scored = PASSAGES.map(function (p, idx) {
+      var pw = {};
+      words(p.text).forEach(function (w) { pw[w] = true; });
+      var s = 0;
+      Object.keys(qset).forEach(function (w) { if (pw[w]) s++; });
+      return { p: p, s: s, idx: idx };
+    });
+    scored.sort(function (a, b) { return b.s - a.s || a.idx - b.idx; });
+
+    var returned = [];
+    body.innerHTML = scored.map(function (r, rank) {
+      var inTop = r.s > 0 && rank < K;
+      if (inTop) returned.push(r.p.id);
+      return '<tr class="' + (inTop ? "hi" : "") + '"><td class="num">' + (r.s > 0 ? rank + 1 : "") + "</td><td><b>" + r.p.id + " " + esc(r.p.name) + '</b><span class="sub">' +
+        highlight(r.p.text, qset) + '</span></td><td class="num">' + r.s + "</td></tr>";
+    }).join("");
+
+    var ans = byId(Q.answer).name;
+    if (returned.length === 0) {
+      out.innerHTML = T.none(ans);
+    } else {
+      var hit = returned.indexOf(Q.answer) >= 0;
+      var list = returned.map(function (id) { return byId(id).name; }).join(", ");
+      out.innerHTML = T.got(list, ans, hit, hit ? returned.length - 1 : 0);
+    }
+  }
+  render();
+})();
+</script>
+</body>
+</html>

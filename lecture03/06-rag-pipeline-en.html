@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="You cannot train an LLM you rent through an API, so both mistakes from lesson 2 come back. They have to be fixed in the steps before the LLM.">
+<title>Lesson 6: RAG pipeline</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  figure.slide.narrow img { max-width: 340px; margin: 0 auto; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 6 / 18 · <b>Easy</b> · <a href="06-rag-pipeline-dense-en.html">Dense</a> · <a href="06-rag-pipeline.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 6 · Easy version</p>
+  <h1>RAG pipeline: Naive, Advanced and Modular</h1>
+  <p class="lede"><b>A RAG pipeline is a line of steps: from the query to retrieval, from retrieval to the prompt, and from the prompt to the LLM's answer. You cannot change the LLM, so to improve the answer you change the steps before it.</b> Stanford's slide shows three forms of such a pipeline: Naive, Advanced and Modular RAG.</p>
+  <p class="lede">The need for this showed up at the end of <a href="05-rag-model-en.html#training">lesson 5</a>. There the retriever and the generator were trained together. But you cannot change the parameters of an LLM you use through an API, such as GPT or Gemini. Then both mistakes from <a href="02-retrieval-en.html#recall-ceiling">lesson 2</a> come back. For <q>when can I get help from a TA</q>, the retriever returns no passage at all. For <q>which office hour is least crowded</q>, the old forum post gets the same score as the queue log.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 5 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#frozen">The frozen LLM and the pipeline</a><span class="can">Explain why lesson 5's training does not work with an LLM behind an API.</span></li>
+      <li><a href="#naive">Naive RAG: indexing time and query time</a><span class="can">Count the cost of each query, and read the Naive RAG part of the slide.</span></li>
+      <li><a href="#pre">Pre-retrieval: improving the query before retrieval</a><span class="can">Work out the scores after query expansion by hand.</span></li>
+      <li><a href="#post">Post-retrieval: improving the returned list</a><span class="can">Explain why reranking cannot bring back a missed passage, and read the Advanced RAG part of the slide.</span></li>
+      <li><a href="#modular">Modular RAG: modules and patterns</a><span class="can">Work through a search-twice pattern by hand, and read the Modular RAG part of the slide.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="02-retrieval-en.html#retriever">Lesson 2</a> (retriever, word overlap, stopwords, recall ceiling), <a href="03-vectors-en.html#embedding">Lesson 3</a> (embedding, index) and <a href="05-rag-model-en.html#parts">Lesson 5</a> (the RAG model). If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="frozen">
+  <h3><span class="cn">1</span>The frozen LLM: you can only change the prompt</h3>
+
+  <p><b>A frozen LLM is an LLM whose parameters you cannot change. You can only send it a prompt and get an answer back.</b> The <button class="def" data-w="w-parameters">parameters</button> of an LLM behind an API sit on the company's servers, so for you that LLM is frozen.</p>
+
+  <p>Lesson 5's RAG cannot be trained in this setting. There, <button class="def" data-w="w-e2e">end-to-end training</button> used a single loss to change the parameters of both the retriever and the generator. A frozen LLM's parameters cannot change at all, so that route is closed.</p>
+
+  <p>What you can still change is everything before the LLM: the query, the retriever and the prompt. A <b class="term">pipeline</b> is a line of steps in which the output of each step becomes the input of the next. For example, the retriever's output is the top-K passages, and those passages become the input of the prompt.</p>
+
+  <p>In a pipeline, the top-K passages all go into one prompt. In lesson 5 the generator ran separately with each passage, and the results were combined as a weighted sum. Here the LLM gets a prompt like this: <span class="mine">my example</span></p>
+  <div class="sentence">Answer using only the passages below. Cite passage IDs.<br>[P3] Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<br>[P2] Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs.<br>Question: Which office hour is least crowded, and where is it?</div>
+
+  <p>The LLM itself picks which fact to take from which passage: Thursday 9am from the queue log, and Zoom from the office hours page. [P3] and [P2] are passage IDs from lesson 2's corpus, so the answer can cite them.</p>
+
+  <p><b>The price of this freedom is that the LLM learns nothing from its mistakes, and the retriever never even finds out about them.</b> We are back to lesson 2, where the retriever and the reader were built separately. So every step has to be made good on its own, and the rest of this lesson shows those steps.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="naive">
+  <h3><span class="cn">2</span>Naive RAG: indexing time and query time</h3>
+
+  <p><b>Naive RAG is the simplest pipeline: an index built in advance, and then retrieval, a prompt and the frozen LLM for every query.</b> There is no extra step in between, which is why it is called naive, meaning plain. Its steps split into the same two parts that were <button class="def" data-w="w-offline">offline and online</button> in lesson 3.</p>
+
+  <p>In pipeline terms these two parts are called <b class="term">indexing time and query time</b>. The indexing-time steps run once: split the documents into passages, make an <button class="def" data-w="w-embedding">embedding</button> of each passage, and store them all in an <button class="def" data-w="w-index">index</button>. An embedding is the vector an encoder makes from a piece of text.</p>
+
+  <figure>
+    <div class="flow">
+      <div class="node"><b>Documents</b><span class="ex">2,000 documents</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Split into passages</b><span class="ex">60,000 passages</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Index</b><span class="ex">60,000 embeddings, once</span></div>
+    </div>
+    <figcaption>Indexing time: this line runs once. The numbers come from lesson 2's company: 2,000 documents × 30 paragraphs = 60,000 passages. <span class="mine">my example</span></figcaption>
+  </figure>
+
+  <p>The query-time steps run for every query:</p>
+
+  <figure>
+    <div class="flow">
+      <div class="node"><b>Query</b><span class="ex">1 embedding</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Retrieve</b><span class="ex">60,000 dot products, top-5</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>Prompt</b><span class="ex">5 × 500 tokens + the question</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Frozen LLM</b><span class="ex">Read, 1 call</span></div>
+    </div>
+    <figcaption>Query time: this line runs for every query. <span class="mine">my example</span></figcaption>
+  </figure>
+
+  <p>So every query costs 1 embedding, 60,000 <button class="def" data-w="w-dot">dot products</button> and 1 LLM call. The prompt carries 5 × 500 = 2,500 tokens of passages. The two main query-time steps are called Retrieve and Read. In Read, the LLM reads the passages and writes the answer, like the <button class="def" data-w="w-reader">reader</button> in lesson 2.</p>
+
+  <figure class="slide narrow">
+    <a href="img/slide-p21-naive.png"><img src="img/slide-p21-naive.png" alt="The Naive RAG part of Stanford's slide" loading="lazy"></a>
+    <figcaption>The left part of Stanford's slide: Naive RAG. From Documents to Indexing is indexing time, and from Query to Output is query time. The snowflake next to Frozen LLM marks it as frozen. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>Now run the two opening questions through this pipeline. For the retriever we use <button class="def" data-w="w-overlap">word overlap</button> from lesson 2, because you can count every score by hand. Word overlap counts how many of the query's words also appear in a passage, and it first removes <button class="def" data-w="w-stopwords">stopwords</button> such as which and is.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query</th><th>What the retriever returned</th><th>What the LLM got at K = 2</th></tr></thead>
+    <tbody>
+      <tr><td>when can I get help from a TA</td><td>Nothing. Every passage scores 0.</td><td>Nothing. The office hours page, which has the answer, never reached the LLM.</td></tr>
+      <tr><td>which office hour is least crowded</td><td>Queue log (2), old forum post (2), office hours page (1)</td><td>The queue log and the forum post: the real data plus an old opinion from 2024</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The two mistakes are of different kinds. For the TA question the right passage never came back, and that is lesson 2's <button class="def" data-w="w-ceiling">recall ceiling</button>. For the least-crowded question the right passage came back, but a wrong passage came along with the same score, so this is a mistake in the order. <b>Both mistakes happen before anything reaches the LLM, so no LLM, however good, can fix them.</b></p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>500 new passages are added to the corpus, and one old document changes. Which Naive RAG steps have to run again, and which do not?</p>
+    <details><summary>Show the answer</summary>
+      <p>Only the indexing-time steps, and only for the text that changed. Make embeddings for the 500 new passages and add them to the index, and remake the embeddings of the changed document's passages. If you skip this, the index keeps returning the old text. The query-time steps run as before, and nothing changes in the LLM.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="pre">
+  <h3><span class="cn">3</span>Pre-retrieval: improving the query before retrieval</h3>
+
+  <p><b><span class="term">Pre-retrieval</span> is the set of steps that improve the query before it goes to the retriever.</b> The slide gives three of them: query routing, query rewriting and query expansion. Start with expansion on the TA question, because that question failed on the words of the query.</p>
+
+  <p>Without stopwords, this query keeps help and ta. The office hours page says TAs, not ta, and word overlap only matches exact words. Help appears in no passage. So the answer's passage is in the corpus, and only the query's words fail to match it.</p>
+
+  <p><b class="term">Query expansion</b> adds related words to the query, so that it can match the words in the passages. Add office hours to the TA query, and the retriever has four words: help, ta, office and hours. <span class="mine">my example</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>Matching words</th><th class="numh">Before expansion</th><th class="numh">After expansion</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page</td><td>office, hours</td><td class="num">0</td><td class="num">2</td></tr>
+      <tr><td>Queue log</td><td>office <span class="sub">It says hour, not hours.</span></td><td class="num">0</td><td class="num">1</td></tr>
+      <tr><td>The other four passages</td><td>none</td><td class="num">0</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Now the office hours page is on top and reaches the LLM. The added words usually come from an LLM given a short prompt: <q>write search words related to this question</q>.</p>
+
+  <p>The other two steps also work on the query. <b class="term">Query rewriting</b> writes the whole query again. If a user types the short form <q>OH timings?</q>, an LLM turns it into <q>CS 329Z office hours schedule</q>. <b class="term">Query routing</b> decides which index to search. For example, <q>when is the project milestone due</q> should go to the syllabus index.</p>
+
+  <div class="widget" id="pw">
+    <h4>Switch the pipeline's steps on and off</h4>
+    <p class="hint">The retriever is lesson 2's word overlap. Expansion adds words to the query. Rerank sorts the returned passages again by a second score, and it comes in <a href="#post">the next step</a>. <span class="mine">my rerank scores</span></p>
+    <div class="btns" id="pw-q"></div>
+    <label class="switch"><input type="checkbox" id="pw-exp"> Query expansion</label>
+    <label class="switch"><input type="checkbox" id="pw-rr"> Rerank</label>
+    <div class="ctl"><label for="pw-k">K, how many passages go to the LLM</label><input id="pw-k" type="range" min="1" max="4" step="1" value="2"><output id="pw-ko">2</output></div>
+    <p class="note" id="pw-words" style="margin-bottom:10px"></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th class="num">#</th><th>Passage</th><th class="num">Overlap</th><th class="num">Rerank</th></tr></thead>
+      <tbody id="pw-body"></tbody>
+    </table></div>
+    <p class="out" id="pw-out"></p>
+  </div>
+
+  <p>These steps have a cost. Rewriting and expansion usually need one extra LLM call per query, so the answer is slower and more expensive. They can also change what the query means: if the model reads OH as Ohio, the search goes to the wrong place.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Pick <q>which office hour is least crowded</q> in the widget. Expansion adds <q>waiting</q> to this query. What are the new scores of the queue log and the old forum post? Then check in the widget.</p>
+    <details><summary>Show the answer</summary>
+      <p>The query's words are now office, hour, least, crowded and waiting. The queue log has office, hour and waiting, so it scores 3. The forum post has least and crowded, so it scores 2. The queue log is now alone at the top, but at K = 2 the forum post still goes into the prompt.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="post">
+  <h3><span class="cn">4</span>Post-retrieval: improving the returned list</h3>
+
+  <p><b><span class="term">Post-retrieval</span> is the set of steps that improve the retriever's list before it goes into the prompt.</b> The slide gives three of them: rerank, summary and fusion. Start with reranking on the least-crowded question, because there the mistake was in the order.</p>
+
+  <p>The retriever gave the queue log and the forum post the same score, 2. It cannot see that the queue log is three weeks of data while the forum post is a single opinion from 2024.</p>
+
+  <p>The retriever is fast because it looks at every passage only roughly. The returned passages are few, so a slower but more accurate model can look at them. This model reads the query and the passage together, gives the passage a new score, and sorts the list again. This is called <b class="term">reranking</b>, and the model is a reranker. How a reranker is built comes in <a href="14-hybrid-rerank-en.html">lesson 14</a>.</p>
+
+  <p>The retriever returned three passages, and the reranker puts the forum post at the bottom: <span class="mine">my rerank scores</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Retriever score</th><th class="numh">Reranker score</th><th>Reaches the LLM at K = 2?</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log</td><td class="num">2</td><td class="num">0.92</td><td>Yes</td></tr>
+      <tr class="hi"><td>Office hours page</td><td class="num">1</td><td class="num">0.41</td><td>Yes</td></tr>
+      <tr><td>Old forum post</td><td class="num">2</td><td class="num">0.35</td><td>No</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>At K = 2 the queue log and the office hours page now go through, and this pair gives the full answer. The queue log says Thursday 9am is the least crowded, and the office hours page says it is on Zoom. This is the prompt shown in <a href="#frozen">step 1</a>.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Pick the TA query in the widget. Leave Expansion off and turn Rerank on. Does the office hours page reach the LLM now?</p>
+    <details><summary>Show the answer</summary>
+      <p>No. The retriever returned no passage at all, so the reranker has nothing to sort. Now turn Expansion on as well: the office hours page enters the list, and reranking puts it on top.</p>
+    </details>
+  </div>
+
+  <p><b>A reranker only changes the order of the passages the retriever returned.</b> So the two kinds of steps fix different mistakes. Pre-retrieval brings a missed passage into the list, and post-retrieval fixes the order of the list.</p>
+
+  <p>Two more steps come after retrieval. The first is <b class="term">summary</b>: shortening the passages before they go into the prompt. Lesson 1's context window had room for 7,000 tokens of passages, which is 14 passages of 500 tokens. If each passage shrinks to 100 tokens, the same 14 passages take 14 × 100 = 1,400 tokens. <span class="mine">my example</span> The risk is that the summary drops a detail that matters, such as Room 104.</p>
+
+  <p>The second is <b class="term">fusion</b>: merging several ranked lists into one. Suppose you searched with the original query and also with the rewritten query <q>office hours schedule</q>. The first list is queue log, forum post, office hours page. The second has only the office hours page (2) and the queue log (1). Those two passages appear in both lists, so they should rise to the top of the merged list. The exact way to merge comes in <a href="14-hybrid-rerank-en.html">lesson 14</a>.</p>
+
+  <p>The pipeline you get by adding pre-retrieval and post-retrieval steps to Naive RAG is called <b class="term">Advanced RAG</b>.</p>
+
+  <figure class="slide narrow">
+    <a href="img/slide-p21-advanced.png"><img src="img/slide-p21-advanced.png" alt="The Advanced RAG part of Stanford's slide" loading="lazy"></a>
+    <figcaption>The middle part of Stanford's slide: Advanced RAG. The orange boxes are the new steps: the three Pre-Retrieval steps above Retrieval, and the three Post-Retrieval steps below it.</figcaption>
+  </figure>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="modular">
+  <h3><span class="cn">5</span>Modular RAG: modules and patterns</h3>
+
+  <p><b><span class="term">Modular RAG</span> sees the pipeline as modules that you can connect in any order.</b> A module is one part of the pipeline that does one job, such as Retrieve, Rerank or Read. A fixed order of modules is called a <b class="term">pattern</b>. Naive RAG's pattern, for example, is Retrieve, then Read.</p>
+
+  <p>This matters for questions whose answer is spread over several passages. Advanced RAG still searches only once per question, so whatever the first search misses never arrives. A question that needs more than one search is called a <b class="term">multi-hop question</b>.</p>
+
+  <p>Our corpus has such a question too: the one from the prompt in step 1, <q>Which office hour is least crowded, and where is it?</q> The first part of the answer is in the queue log, and the second part is in the office hours page. The office hours page gives the place next to Thursday 9am, so to find it you first need to know that the answer is Thursday 9am.</p>
+
+  <p>Now run the pattern Retrieve, Read, Retrieve, Read, in which the answer from the first Read is added to the query of the second search. K is 2, and the retriever is the same word overlap. <span class="mine">my example</span></p>
+  <ol class="plain">
+    <li><b>First Retrieve:</b> the query keeps office, hour, least, crowded and where, and where appears in no passage. The queue log and the forum post score 2 each, so those two come back.</li>
+    <li><b>First Read:</b> suppose the LLM goes with the queue log's data and writes: Thursday 9am. Neither passage says where it is.</li>
+    <li><b>Second Retrieve:</b> put the first answer, Thursday 9am, in front of the query. Now thursday and 9am count too.</li>
+    <li><b>Second Read:</b> at K = 2 the LLM gets the queue log and the office hours page, which is the prompt from step 1. It writes: Thursday 9am, on Zoom.</li>
+  </ol>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">First search</th><th class="numh">Second search</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log<span class="sub">office, hour, then also thursday, 9am</span></td><td class="num">2</td><td class="num">4</td></tr>
+      <tr class="hi"><td>Office hours page<span class="sub">office, then also thursday, 9am</span></td><td class="num">1</td><td class="num">3</td></tr>
+      <tr><td>Old forum post<span class="sub">least, crowded</span></td><td class="num">2</td><td class="num">2</td></tr>
+      <tr><td>Syllabus<span class="sub">thursday, the second time</span></td><td class="num">0</td><td class="num">1</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>This pattern is called ITER-RETGEN. Its paper also builds the next query by joining the previous answer to the question. <span class="mine">from the paper</span> <b>Reranking only changes the order of the returned list, while ITER-RETGEN searches again with a new query.</b></p>
+
+  <p>It has a limit too. If the first Read gets the answer wrong, the second search heads the wrong way. If the LLM trusts the forum post and writes Wednesday, Thursday 9am never enters the second query.</p>
+
+  <p>The lecture also has a real multi-hop question: <q>Who is older, Jed Hoyer or John William Henry II?</q> The slide shows a model's trace on this question, which <a href="17-search-r1-en.html">lesson 17</a> covers in full. The first search returns a passage about Jed Hoyer's career, with no date of birth in it. The next search is for John William Henry II, and its passage says: born September 13, 1949. The third search is for Jed Hoyer birth year, so each search depends on what the previous reading found.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p59.png"><img src="img/slide-p59.png" alt="Stanford slide: a model's trace on the Jed Hoyer question" loading="lazy"></a>
+    <figcaption>Stanford's slide: the trace of a model called Search-R1. The &lt;search&gt; lines are the model's searches, and the &lt;information&gt; lines are the passages that came back.</figcaption>
+  </figure>
+
+  <p>Stanford's slide shows four patterns, taken from the survey by Gao and colleagues (2024):</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Pattern</th><th>Order of modules</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td>Naive RAG</td><td>Retrieve, Read</td><td>The plain pipeline from <a href="#naive">step 2</a></td></tr>
+      <tr><td>Advanced RAG</td><td>Rewrite, Retrieve, Rerank, Read</td><td>With the steps from <a href="#pre">steps 3</a> and <a href="#post">4</a> added</td></tr>
+      <tr><td>DSP</td><td>Demonstrate, Search, Predict</td><td>Worked examples, then searching, then the answer</td></tr>
+      <tr class="hi"><td>ITER-RETGEN</td><td>Retrieve, Read, Retrieve, Read</td><td>Searching again with the first Read's answer</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>DSP's Demonstrate module puts a few worked examples in the prompt before the question, such as <q>Q: When is the milestone due? A: Week 6, Thursday [P1]</q>. <span class="mine">my example</span> Such examples are called <b class="term">demonstrations</b>, and the method is called few-shot prompting. It differs from lesson 2's <button class="def" data-w="w-zeroshot">zero-shot</button> setup, where the prompt held only an instruction.</p>
+
+  <p>The modules part of the slide has 10 modules, and you have now seen 7 of them. The other three, Search, Predict and Memory, come in the dense version.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p21-modules.png"><img src="img/slide-p21-modules.png" alt="The modules in the Modular RAG part of Stanford's slide" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p21-patterns.png"><img src="img/slide-p21-patterns.png" alt="The four patterns in the Modular RAG part of Stanford's slide" loading="lazy"></a>
+    <figcaption>The right part of Stanford's slide: Modular RAG. The modules are at the top, and the four patterns below. In ITER-RETGEN, the arrow from the last Read back to the first Retrieve says that the sequence runs again.</figcaption>
+  </figure>
+
+  <p>A person writes the pattern in advance, so in ITER-RETGEN the number of searches is fixed, whether the question needs 1 search or 3. In <a href="16-agentic-rag-en.html">lesson 16</a> and <a href="17-search-r1-en.html">17</a>, the model itself decides when the loop stops and what the next query is. Every extra loop adds one more LLM call.</p>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 5 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 6: the survey's three problems with Naive RAG, precision, and the limits of expansion and reranking in the language of sets.</li>
+      <li>Step 7: the slide's remaining modules, such as Search, Predict and Memory, and the survey's new patterns.</li>
+      <li>Step 8: the DSP paper, and the maths of relative gain.</li>
+      <li>Step 9: ITER-RETGEN's formula and the paper's results, and how chances multiply across several searches.</li>
+      <li>Step 10: both of this lesson's Stanford slides, which you read yourself.</li>
+    </ul>
+    <p><a href="06-rag-pipeline-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>An LLM behind an API is frozen, so lesson 5's training does not work. A RAG pipeline improves the steps before the LLM: the query, retrieval and the prompt.</li>
+    <li>Naive RAG builds the index once, and runs Retrieve and Read for every query. Pre-retrieval improves the query and brings in a missed passage. Post-retrieval fixes the order of the list, but cannot bring in a missed passage.</li>
+    <li>Modular RAG connects modules in different orders. For a multi-hop question, ITER-RETGEN searches again with the first Read's answer.</li>
+  </ol>
+
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-frozen">Frozen LLM</dt><dd>An LLM whose parameters you cannot change. You can only send it prompts. For example, GPT or Gemini used through an API.</dd>
+    <dt id="w-pipeline">Pipeline</dt><dd>A line of steps in which the output of each step is the input of the next. For example, Retrieve outputs the top-K passages, and those are the input of Read.</dd>
+    <dt id="w-naive">Naive RAG</dt><dd>The simplest pipeline: an index, then Retrieve and Read for every query, with no extra step in between.</dd>
+    <dt id="w-indexing">Indexing time and query time</dt><dd>Steps that run once, and steps that run for every query. For example, the embeddings of 60,000 passages are made once, and the query's embedding every time.</dd>
+    <dt id="w-pre">Pre-retrieval</dt><dd>Steps that improve the query before retrieval: routing, rewriting and expansion.</dd>
+    <dt id="w-routing">Query routing</dt><dd>Deciding which index or source to search. For example, “when is the project milestone due” goes to the syllabus index.</dd>
+    <dt id="w-rewriting">Query rewriting</dt><dd>Having an LLM turn the query into a clean search query. For example, “OH timings?” becomes “CS 329Z office hours schedule”.</dd>
+    <dt id="w-expansion">Query expansion</dt><dd>Adding related words or other forms to the query. For example, adding “office hours” to “help ta” raises the office hours page from 0 to 2.</dd>
+    <dt id="w-post">Post-retrieval</dt><dd>Steps that improve the returned list after retrieval: rerank, summary and fusion.</dd>
+    <dt id="w-rerank">Rerank and reranker</dt><dd>A slower but more accurate model that sorts the returned passages again. For example, it puts the forum post below the queue log when both tie at 2.</dd>
+    <dt id="w-summary">Summary</dt><dd>Shortening passages before the prompt. For example, if a 500-token passage becomes 100 tokens, 14 passages take 1,400 tokens instead of 7,000. The risk: a detail such as Room 104 can drop out.</dd>
+    <dt id="w-fusion">Fusion</dt><dd>Merging several ranked lists into one. For example, one list is queue log, forum post, office hours page, and another is office hours page, queue log. The passages that appear in both rise to the top.</dd>
+    <dt id="w-advanced">Advanced RAG</dt><dd>The pipeline you get by adding pre-retrieval and post-retrieval steps to Naive RAG. For example, Rewrite, Retrieve, Rerank, Read.</dd>
+    <dt id="w-modular">Modular RAG</dt><dd>Splitting the pipeline into modules and connecting them in different orders. For example, Retrieve, Read, Retrieve, Read.</dd>
+    <dt id="w-pattern">Pattern</dt><dd>A fixed order of modules, such as Retrieve, Read.</dd>
+    <dt id="w-demos">Demonstrations (few-shot)</dt><dd>Worked examples placed in the prompt before the question. For example, “Q: When is the milestone due? A: Week 6, Thursday [P1]”.</dd>
+    <dt id="w-multihop">Multi-hop question</dt><dd>A question that needs several searches, because the parts of the answer sit in different passages. For example, where the least crowded office hour is: first the queue log, then the office hours page.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="05-rag-model-en.html">Previous: Lesson 5</a>
+    <a href="07-chunking-en.html">Next: Lesson 7, Embeddings and chunking</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Diagram and patterns: Gao et al., 2024, “Retrieval-Augmented Generation for Large Language Models: A Survey”. ITER-RETGEN: Shao et al., 2023. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var PASSAGES = [
+    { id: "P1", name: "Syllabus", text: "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10." },
+    { id: "P2", name: "Office hours page", text: "Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs." },
+    { id: "P3", name: "Queue log", text: "Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3." },
+    { id: "P4", name: "Old forum post", text: "Old forum post (2024): midweek afternoons are usually the least crowded time to visit." },
+    { id: "P5", name: "Homework 1 announcement", text: "Homework 1 will be released on Oct 5." },
+    { id: "P6", name: "Project page", text: "Project proposal due on Oct 9. Teams of 1-3 people are recommended." }
+  ];
+  var QUERIES = [
+    { q: "which office hour is least crowded", add: "waiting", answer: "P3", rr: { P3: 0.92, P2: 0.41, P4: 0.35, P1: 0.05, P5: 0.03, P6: 0.04 } },
+    { q: "when can I get help from a TA", add: "office hours", answer: "P2", rr: { P2: 0.88, P3: 0.52, P4: 0.20, P1: 0.06, P5: 0.10, P6: 0.08 } }
+  ];
+  var STOP = ["which", "is", "the", "when", "can", "i", "get", "from", "a", "an", "to", "of", "on", "in", "it", "and", "are", "be", "this", "what", "how", "do"];
+  function words(s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function nameOf(id) { for (var i = 0; i < PASSAGES.length; i++) { if (PASSAGES[i].id === id) return PASSAGES[i].name; } return id; }
+  function highlight(text, qset) {
+    return text.split(/([A-Za-z0-9]+)/).map(function (part) {
+      return qset[part.toLowerCase()] ? "<mark>" + esc(part) + "</mark>" : esc(part);
+    }).join("");
+  }
+  var qi = 0;
+  var qBox = document.getElementById("pw-q");
+  var exp = document.getElementById("pw-exp");
+  var rr = document.getElementById("pw-rr");
+  var kIn = document.getElementById("pw-k");
+  var kOut = document.getElementById("pw-ko");
+  var body = document.getElementById("pw-body");
+  var out = document.getElementById("pw-out");
+  var wordsEl = document.getElementById("pw-words");
+  qBox.innerHTML = QUERIES.map(function (x, i) { return '<button type="button" data-i="' + i + '">' + esc(x.q) + "</button>"; }).join("");
+  qBox.querySelectorAll("button").forEach(function (b) { b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); }); });
+  [exp, rr].forEach(function (c) { c.addEventListener("change", render); });
+  kIn.addEventListener("input", render);
+
+  function render() {
+    var K = Number(kIn.value);
+    kOut.textContent = K;
+    qBox.querySelectorAll("button").forEach(function (b, i) { b.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    var Q = QUERIES[qi];
+    var text = Q.q + (exp.checked ? " " + Q.add : "");
+    var qw = words(text).filter(function (w) { return STOP.indexOf(w) < 0; });
+    var qset = {};
+    qw.forEach(function (w) { qset[w] = true; });
+    wordsEl.innerHTML = "Words sent to the retriever: <b>" + Object.keys(qset).join(", ") + "</b>";
+
+    var scored = PASSAGES.map(function (p, idx) {
+      var pw = {};
+      words(p.text).forEach(function (w) { pw[w] = true; });
+      var s = 0;
+      Object.keys(qset).forEach(function (w) { if (pw[w]) s++; });
+      return { p: p, s: s, idx: idx, r: Q.rr[p.id] };
+    });
+    var returned = scored.filter(function (x) { return x.s > 0; });
+    var rest = scored.filter(function (x) { return x.s === 0; });
+    returned.sort(function (a, b) { return b.s - a.s || a.idx - b.idx; });
+    if (rr.checked) returned.sort(function (a, b) { return b.r - a.r; });
+    var finalIds = returned.slice(0, K).map(function (x) { return x.p.id; });
+
+    body.innerHTML = returned.concat(rest).map(function (x, i) {
+      var inTop = finalIds.indexOf(x.p.id) >= 0;
+      var rrCell = rr.checked && x.s > 0 ? x.r.toFixed(2) : "";
+      return '<tr class="' + (inTop ? "hi" : "") + '"><td class="num">' + (x.s > 0 ? i + 1 : "") + "</td><td><b>" + x.p.name + "</b><br>" + highlight(x.p.text, qset) +
+        '</td><td class="num">' + x.s + '</td><td class="num">' + rrCell + "</td></tr>";
+    }).join("");
+
+    var ans = nameOf(Q.answer);
+    if (finalIds.length === 0) {
+      out.innerHTML = "The retriever returned nothing" + (rr.checked ? ", so the reranker has nothing to sort" : "") + ". The passage with the answer, the " + ans.toLowerCase() + ", never reached the LLM.";
+    } else {
+      var hit = finalIds.indexOf(Q.answer) >= 0;
+      out.innerHTML = "The LLM got: <b>" + finalIds.map(nameOf).join(", ") + "</b>. The passage with the answer, the " + ans.toLowerCase() + "," + (hit ? " <b>is</b> among them" : " is <b>not</b> among them") +
+        (finalIds[0] === Q.answer ? ", and it is on top." : ".");
+    }
+  }
+  render();
+})();
+</script>
+</body>
+</html>

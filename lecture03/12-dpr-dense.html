@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="BM25 ने पुराने forum post को queue log से ऊपर रखा। दो encoders को contrastive loss से train करके सही passage ऊपर लाना है, और आख़िर में Stanford की DPR slides खुद पढ़नी हैं।">
+<title>Lesson 12: DPR (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 12 / 18 · <a href="12-dpr.html">आसान</a> · <b>गहरा</b> · <a href="12-dpr-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 12 · गहरा version</p>
+  <h1>DPR: सवाल-passage जोड़ों से train हुआ retriever</h1>
+  <p class="lede"><b>DPR एक retriever है, जो सवाल और हर passage को vector में बदलता है। फिर वो उन passages को चुनता है, जिनका सवाल के vector से dot product सबसे बड़ा हो।</b> ये vectors दो encoders बनाते हैं, और दोनों encoders सवाल और सही passage के जोड़ों पर train होते हैं। DPR का पूरा नाम Dense Passage Retrieval है, और <a href="05-rag-model-dense.html#parts">lesson 5</a> के RAG का retriever यही था।</p>
+  <p class="lede">इसकी ज़रूरत <a href="11-bm25-dense.html#bm25">lesson 11</a> में दिखी थी। सवाल <q>which office hour is least crowded</q> पर BM25 ने 2024 के एक पुराने forum post को 2.749 देकर सबसे ऊपर रखा। जवाब queue log में है, जो 2.473 के साथ दूसरी जगह पर रहा, क्योंकि उसमें least और crowded शब्द नहीं हैं। DPR के encoders train होकर इस सवाल के vector को queue log के vector के पास लाते हैं।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 9 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 9 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#biencoder">दो encoders और एक dot product</a><span class="can">Scores हाथ से निकाल पाएँगे, और Stanford की पहली DPR slide पढ़ पाएँगे।</span></li>
+      <li><a href="#contrastive">Contrastive loss</a><span class="can">Loss हाथ से निकाल पाएँगे, और बता पाएँगे कि सारे scores बढ़ाने से loss क्यों नहीं घटता।</span></li>
+      <li><a href="#negatives">Negatives: batch से और BM25 से</a><span class="can">In-batch और hard negatives का फ़र्क numbers से बता पाएँगे।</span></li>
+      <li><a href="#results">DPR, BM25 से कितना आगे है</a><span class="can">Paper का मुख्य नतीजा पढ़ पाएँगे, और बता पाएँगे कि DPR कहाँ पीछे है।</span></li>
+      <li><a href="#limits">DPR कहाँ कमज़ोर है</a><span class="can">समझ पाएँगे कि lesson 14 और 15 की ज़रूरत क्यों है।</span></li>
+      <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#notation">Slide के symbols, और gradient का गणित</a><span class="can">q<sub>i</sub>, ℝ<sup>d</sup>, θ, ∂ और ∇ को अपने numbers से जोड़ पाएँगे, और gradient हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#matrix">पूरा batch एक गुणा में, और paper के experiments</a><span class="can">Matrix गुणा S = QP<sup>⊤</sup> समझ पाएँगे, और paper के negatives वाले experiments पढ़ पाएँगे।</span></li>
+      <li><a href="#scale">असली पैमाना और पूरे नतीजे</a><span class="can">Paper के असली numbers और पूरे results पढ़ पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">DPR की चारों Stanford slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="03-vectors-dense.html">Lesson 3</a> (vector, dot product, encoder), <a href="04-probability-tools-dense.html#softmax">Lesson 4</a> (exp, softmax, ln, loss, gradient) और <a href="11-bm25-dense.html">Lesson 11</a> (BM25)। पड़ाव 6 से आगे <a href="05-rag-model-dense.html#parts">Lesson 5</a> (θ, backpropagation, Exact Match) और <a href="10-vector-search-dense.html">Lesson 10</a> (HNSW) भी काम आते हैं। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="biencoder">
+  <h3><span class="cn">1</span>दो encoders और एक dot product</h3>
+
+  <p><b>DPR में दो अलग encoders हैं: question encoder E<sub>Q</sub> सवाल का vector बनाता है, और passage encoder E<sub>P</sub> हर passage का।</b> <button class="def" data-w="w-encoder">Encoder</button> वो model है, जो text पढ़कर तय लंबाई का vector देता है। DPR के दोनों encoders पहले से <button class="def" data-w="w-pretraining">pretrained</button> <button class="def" data-w="w-bert">BERT</button> से शुरू होते हैं, और DPR उन्हें सवाल-passage जोड़ों पर <button class="def" data-w="w-finetuning">fine-tune</button> करता है।</p>
+
+  <p>Score दोनों vectors का <button class="def" data-w="w-dot">dot product</button> है:</p>
+  <div class="formula">s(q, p) = E<sub>Q</sub>(q)<sup>⊤</sup> E<sub>P</sub>(p)</div>
+  <p>यहाँ <button class="def" data-w="w-transpose">⊤</button> सिर्फ़ dot product लिखने का एक तरीका है, और Stanford की slide ऐसे ही लिखती है।</p>
+
+  <p>अब एक छोटे example पर देखिए। असली vector में 768 numbers होते हैं, यहाँ सिर्फ़ 4 हैं, ताकि आप हिसाब हाथ से कर सकें। <span class="mine">vectors मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Text, और encoder से बना उसका vector</th><th class="numh">सवाल से dot product</th></tr></thead>
+    <tbody>
+      <tr><td>सवाल: least crowded office hour<span class="sub mono">[1.0, 0.5, 0.5, 1.0]</span></td><td class="num">–</td></tr>
+      <tr class="hi"><td>Queue log, जिसमें जवाब है<span class="sub mono">[0.2, 0.4, 0.4, 0.4]</span></td><td class="num">1.0</td></tr>
+      <tr><td>पुराना forum post<span class="sub mono">[0.8, 1.0, 0.4, 0.5]</span></td><td class="num">2.0</td></tr>
+      <tr><td>Homework 1 की announcement<span class="sub mono">[0.5, 0.4, 0.6, 0.5]</span></td><td class="num">1.5</td></tr>
+    </tbody>
+  </table></div>
+  <p>Queue log का score ऐसे निकला: 1.0 × 0.2 + 0.5 × 0.4 + 0.5 × 0.4 + 1.0 × 0.4 = 1.0। Encoders अभी train नहीं हुए हैं, इसलिए गलत forum post 2.0 के साथ सबसे ऊपर है। पड़ाव 2 की training यही क्रम बदलती है।</p>
+
+  <p>DPR सवाल और passage को अलग-अलग पढ़ता है, और इसका फ़ायदा speed में है। उसका काम दो हिस्सों में बँटता है:</p>
+  <ol class="plain">
+    <li><button class="def" data-w="w-offline">Offline</button>, यानी सवाल आने से पहले: passage encoder हर passage का vector एक बार बनाता है, और सबको एक <button class="def" data-w="w-index">index</button> में रखता है।</li>
+    <li>Online, यानी सवाल आने पर: question encoder सिर्फ़ एक बार चलता है। फिर index के vectors से dot product निकलते हैं, और सबसे बड़े k scores वाले passages लौटते हैं।</li>
+  </ol>
+  <p>अगर एक ही model सवाल और passage को साथ पढ़ता, तो हर सवाल पर उसे हर passage के साथ अलग से चलना पड़ता। Lesson 5 के Wikipedia में करीब 2.1 करोड़ passages थे, यानी हर सवाल पर 2.1 करोड़ बार model चलता। DPR में model हर सवाल पर सिर्फ़ 1 बार चलता है। दो encoders वाले इस ढाँचे को <b class="term">bi-encoder</b> कहते हैं।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p43.png"><img src="img/slide-p43.png" alt="Stanford slide: DPR का offline और online हिस्सा" loading="lazy"></a>
+    <figcaption>Stanford की slide: DPR का offline और online हिस्सा। ऊपर offline हिस्सा है, और नीचे online। अब आप इसका हर box पढ़ सकते हैं। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>सवाल का vector दोगुना कर दीजिए, यानी [2.0, 1.0, 1.0, 2.0]। तीनों scores क्या होंगे, और क्या क्रम बदलेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Scores 2.0, 4.0 और 3.0 हो जाते हैं। Dot product के हर गुणा में एक number सवाल के vector से आता है। वो दोगुना हुआ, तो हर गुणा दोगुना हुआ, और उनका जोड़ भी: queue log के लिए 2.0 × 0.2 + 1.0 × 0.4 + 1.0 × 0.4 + 2.0 × 0.4 = 2.0। हर score दोगुना हुआ, लेकिन क्रम वही रहा, और forum post अब भी सबसे ऊपर है। पड़ाव 2 में ये बात काम आएगी।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="contrastive">
+  <h3><span class="cn">2</span>Contrastive loss: सही passage को गलत passages से आगे करना</h3>
+
+  <p><b>Contrastive loss सही passage के score की तुलना गलत passages के scores से करता है।</b> सही passage जितना आगे होता है, loss उतना छोटा होता है। DPR के दोनों encoders इसी loss को छोटा करने के लिए train होते हैं।</p>
+
+  <p>इस तुलना के लिए हर training सवाल के साथ दो तरह के passages चाहिए:</p>
+  <dl class="words">
+    <dt>Positive</dt><dd>सवाल का सही passage। Training data में ये हर सवाल के साथ लिखा होता है। हमारे सवाल के लिए ये queue log है।</dd>
+    <dt>Negative</dt><dd>उसी सवाल के लिए गलत passage। हमारे example में forum post और Homework 1 की announcement।</dd>
+  </dl>
+
+  <p>तुलना इसलिए ज़रूरी है, क्योंकि retriever सिर्फ़ ऊपर वाले passages आगे भेजता है, यानी उसके लिए क्रम मायने रखता है। पड़ाव 1 के सवाल में आपने देखा कि सवाल का vector लंबा करने से सारे scores बढ़ते हैं, लेकिन क्रम वही रहता है। अगर training सिर्फ़ positive का score बढ़ाने को कहे, तो encoder यही आसान रास्ता ले सकता है।</p>
+
+  <p>अब पड़ाव 1 के scores पर loss निकालिए: queue log 1.0, forum post 2.0 और Homework 1.5। Loss तीन steps में निकलता है:</p>
+  <ol class="plain">
+    <li>हर score का <button class="def" data-w="w-exp">e<sup>score</sup></button> लीजिए: 2.72, 7.39 और 4.48। e एक खास number है, करीब 2.718, इसलिए e<sup>1.0</sup> = 2.72 और e<sup>2.0</sup> = 2.718 × 2.718 = 7.39। तीनों का जोड़ 14.59 है।</li>
+    <li>Positive का हिस्सा निकालिए: 2.72 ÷ 14.59 = 0.186।</li>
+    <li>इस हिस्से का −ln लीजिए: −ln 0.186 = 1.68। यही loss है। ln बताता है कि e को किस power तक उठाएँ, तो वो number मिले। जाँच: e<sup>−1.68</sup> = 1 ÷ e<sup>1.68</sup> = 1 ÷ 5.37 = 0.186।</li>
+  </ol>
+  <p>Step 1 और 2 मिलकर <button class="def" data-w="w-softmax">softmax</button> हैं, और step 3 lesson 4 वाला <button class="def" data-w="w-loss">loss</button> है। Formula में यही तीन steps हैं:</p>
+  <div class="formula">𝓛 = − ln <span class="frac"><span>e<sup>s+</sup></span><span>e<sup>s+</sup> + ∑ e<sup>s−</sup></span></span></div>
+  <p>ऊपर positive का e<sup>score</sup> है (2.72), और नीचे positive और सारे negatives के e<sup>score</sup> का जोड़ (14.59)।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>तीनों scores में 1 जोड़ दीजिए: 2.0, 3.0 और 2.5। Loss कितना होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>1.68 ही। Score में 1 जोड़ने से e<sup>score</sup> 2.72 गुना हो जाता है, क्योंकि e<sup>a+1</sup> = e<sup>a</sup> × e। जैसे e<sup>2.0</sup> = e<sup>1.0</sup> × 2.72 = 7.39। ऊपर और नीचे, दोनों 2.72 से गुणा होते हैं, और भाग में ये कट जाता है। इसलिए queue log का हिस्सा 0.186 ही रहता है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">नीचे की table में चार हालात हैं। आख़िरी दो rows training के दो stages हैं, और पड़ाव 3 बीच वाला stage इस्तेमाल करता है। <span class="mine">scores मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Scores (queue log, forum post, Homework)</th><th class="numh">Queue log का हिस्सा</th><th class="numh">Loss</th></tr></thead>
+    <tbody>
+      <tr><td>Training से पहले: 1.0, 2.0, 1.5</td><td class="num">0.186</td><td class="num">1.68</td></tr>
+      <tr><td>सवाल का vector दोगुना: 2.0, 4.0, 3.0</td><td class="num">0.090</td><td class="num">2.41</td></tr>
+      <tr><td>कुछ training के बाद: 3.0, 2.0, 0.5</td><td class="num">0.690</td><td class="num">0.372</td></tr>
+      <tr class="hi"><td>Training के बाद: 5.0, 2.0, 0.5</td><td class="num">0.943</td><td class="num">0.059</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>सवाल का vector दोगुना करने पर loss 1.68 से बढ़कर 2.41 हो जाता है, क्योंकि forum post और आगे निकल गया। तो लंबे vector वाला आसान रास्ता यहाँ काम नहीं करता।</li>
+    <li>Training चलने पर queue log आगे निकलता है, और loss 1.68 से 0.372 और फिर 0.059 तक घटता है।</li>
+  </ul>
+  <p><b>इसलिए encoders के पास loss घटाने का एक ही रास्ता है: queue log का score बाकी दोनों से ज़्यादा करना।</b></p>
+
+  <div class="widget" id="cl">
+    <h4>Contrastive loss खुद चलाइए</h4>
+    <p class="hint">तीनों scores बदलिए। Loss तब छोटा होता है, जब queue log बाकी दोनों से काफ़ी ऊपर हो। तीनों को बराबर खिसकाइए, तो loss नहीं बदलता।</p>
+    <div class="ctl">
+      <label for="c1">Queue log (positive)</label><input id="c1" type="range" min="-2" max="6" step="0.1" value="1"><output id="co1">1.0</output>
+      <label for="c2">Forum post</label><input id="c2" type="range" min="-2" max="6" step="0.1" value="2"><output id="co2">2.0</output>
+      <label for="c3">Homework</label><input id="c3" type="range" min="-2" max="6" step="0.1" value="1.5"><output id="co3">1.5</output>
+    </div>
+    <div class="btns">
+      <button type="button" data-s="1,2,1.5">Training से पहले</button>
+      <button type="button" data-s="2,4,3">सवाल का vector दोगुना</button>
+      <button type="button" data-s="2,3,2.5">सबमें 1 जोड़िए</button>
+      <button type="button" data-s="3,2,0.5">कुछ training के बाद</button>
+      <button type="button" data-s="5,2,0.5">Training के बाद</button>
+    </div>
+    <div class="bars" id="cl-bars"></div>
+    <p class="out" id="cl-out"></p>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="negatives">
+  <h3><span class="cn">3</span>Negatives: batch से और BM25 से</h3>
+
+  <p>Contrastive loss को हर सवाल के लिए negatives चाहिए, और negatives जितने ज़्यादा, तुलना उतनी कड़ी। लेकिन हर negative को passage encoder से गुज़ारना पड़ता है, और ये महँगा है। DPR दो जगह से negatives लेता है, जिनमें ये खर्च कम है।</p>
+
+  <h4 class="sub" id="inbatch">Batch के बाकी सवालों के positives</h4>
+
+  <p><b>In-batch negatives का मतलब है: batch के बाकी सवालों के positives को इस सवाल के negatives मानना।</b> Training सवालों को छोटे groups में चलाती है, जिन्हें <b class="term">batch</b> कहते हैं। Batch के हर सवाल का positive उसी step में encode हो चुका होता है, इसलिए इन negatives पर कोई extra encoding नहीं लगती।</p>
+
+  <p>नीचे कुछ training के बाद का 3 सवालों वाला एक batch है। हर row में bold number उस सवाल का positive है, और उसी row के बाकी numbers उसके negatives। <span class="mine">scores मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>सवाल ↓ / passage →</th><th class="numh">Queue log</th><th class="numh">Syllabus</th><th class="numh">Office hours</th><th class="numh">Loss</th></tr></thead>
+    <tbody>
+      <tr><td>Least crowded office hour?</td><td class="num"><b>3.0</b></td><td class="num">1.0</td><td class="num">0.5</td><td class="num">0.197</td></tr>
+      <tr><td>When is the milestone due?</td><td class="num">0.8</td><td class="num"><b>3.0</b></td><td class="num">1.2</td><td class="num">0.244</td></tr>
+      <tr class="hi"><td>Where are office hours held?</td><td class="num">0.3</td><td class="num">2.5</td><td class="num"><b>2.0</b></td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">तीसरी row आप निकालिए</p>
+    <p>Positive office hours page है, score 2.0। Negatives queue log (0.3) और syllabus (2.5) हैं। Loss कितना है, और ये row बाकी दो से अलग क्यों है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>e<sup>0.3</sup> = 1.35, e<sup>2.5</sup> = 12.18 और e<sup>2.0</sup> = 7.39, जिनका जोड़ 20.92 है। Office hours page का हिस्सा 7.39 ÷ 20.92 = 0.353 है, और loss = −ln 0.353 = <b>1.041</b>। इस row में गलत syllabus (2.5) सही page (2.0) से ऊपर है, इसलिए इसका loss सबसे बड़ा है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Paper में batch 128 सवालों का है, इसलिए हर सवाल को 127 in-batch negatives मिलते हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="hard">BM25 वाले hard negatives</h4>
+
+  <p><b>Hard negative वो गलत passage है, जो सवाल से मिलता-जुलता दिखता है, लेकिन जिसमें जवाब नहीं होता।</b> हमारे सवाल के लिए forum post ऐसा ही passage है। उसमें least और crowded, दोनों शब्द हैं, लेकिन भीड़ का कोई data नहीं है।</p>
+
+  <p>In-batch negatives ज़्यादातर आसान होते हैं, क्योंकि वो दूसरे सवालों के passages हैं। Hard negatives पर loss बड़ा आता है, और loss जितना बड़ा हो, training encoders को उतना ज़्यादा बदलती है। कुछ training के बाद queue log 3.0 पर है, और दोनों negatives की तुलना ऐसी दिखती है: <span class="mine">scores मेरे बनाए हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Negative</th><th>Loss, सिर्फ़ इसी negative के साथ</th><th>Encoder क्या सीखता है</th></tr></thead>
+    <tbody>
+      <tr><td>Homework की announcement<span class="sub">आसान negative, score 0.5</span></td><td>0.079<span class="sub">queue log का हिस्सा 0.924</span></td><td>लगभग कुछ नहीं, क्योंकि फ़र्क पहले से साफ़ है</td></tr>
+      <tr class="hi"><td>Forum post<span class="sub">hard negative, score 2.0</span></td><td>0.313, करीब 4 गुना<span class="sub">queue log का हिस्सा 0.731</span></td><td>सवाल के शब्द काफ़ी नहीं, passage में भीड़ का data चाहिए</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>पहली row ऐसे निकली: e<sup>3.0</sup> = 20.09 और e<sup>0.5</sup> = 1.65, जिनका जोड़ 21.73 है। Queue log का हिस्सा 20.09 ÷ 21.73 = 0.924 है, और loss = −ln 0.924 = 0.079।</p>
+
+  <p>ऐसे passages ढूँढने के लिए DPR, BM25 का इस्तेमाल करता है। हर training सवाल के लिए वो BM25 के ऊपर वाले passages में से एक passage लेता है, जिसमें जवाब नहीं है। ये तरीका इसलिए काम करता है, क्योंकि BM25 वही गलती करता है जो encoders से छुड़वानी है। इस सवाल पर भी BM25 ने forum post को ही सबसे ऊपर रखा था।</p>
+
+  <p class="callout"><b>ध्यान दीजिए:</b> Hard negatives लेने से पहले labels check कीजिए। कभी BM25 के ऊपर वाले passage में सचमुच जवाब होता है, बस उसका label छूट गया होता है। तब encoder सही passage को नीचे धकेलना सीखता है।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="results">
+  <h3><span class="cn">4</span>DPR, BM25 से कितना आगे है</h3>
+
+  <p>DPR paper retriever को <b class="term">top-k retrieval accuracy</b> से नापता है: कितने % सवालों में जवाब वाला passage top-k में आया। NQ dataset में Google पर लोगों के असली सवाल हैं। उस पर top-20 accuracy BM25 की 59.1% है, और DPR की 78.4%।</p>
+
+  <p>1,000 सवालों में ये 591 और 784 सवाल हैं। <b>मतलब DPR के साथ 193 और सवालों में reader तक जवाब वाला passage पहुँचता है।</b></p>
+
+  <p>DPR 5 में से 4 datasets पर आगे है। SQuAD पर वो पीछे है, 63.2 बनाम 68.8, क्योंकि वहाँ लोगों ने passage पढ़कर सवाल लिखे थे। इसलिए उन सवालों में passage के ही शब्द हैं, और exact शब्द मिलाना BM25 का काम है। <span class="mine">ये वजह paper में है</span></p>
+
+  <details class="more">
+    <summary>पाँचों datasets के numbers</summary>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Dataset</th><th class="numh">BM25</th><th class="numh">DPR</th></tr></thead>
+      <tbody>
+        <tr><td>NQ</td><td class="num">59.1</td><td class="num">78.4</td></tr>
+        <tr><td>TriviaQA</td><td class="num">66.9</td><td class="num">79.4</td></tr>
+        <tr><td>WQ</td><td class="num">55.0</td><td class="num">73.2</td></tr>
+        <tr><td>TREC</td><td class="num">70.9</td><td class="num">79.8</td></tr>
+        <tr class="hi"><td>SQuAD</td><td class="num">68.8</td><td class="num">63.2</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">Top-20 accuracy (%), test set पर। यहाँ DPR हर dataset पर अलग train हुआ है।</p>
+  </details>
+
+  <p>DPR को labeled जोड़े चाहिए, और paper ने ये भी नापा कि कितने। NQ पर सिर्फ़ 1,000 जोड़ों से train हुआ DPR भी BM25 से आगे है, और जोड़े बढ़ाने पर accuracy और बढ़ती है।</p>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="limits">
+  <h3><span class="cn">5</span>DPR कहाँ कमज़ोर है</h3>
+
+  <p>DPR पूरे corpus के पैमाने पर semantic match में जीतता है, लेकिन उसकी तीन कमज़ोरियाँ हैं:</p>
+  <ul class="plain">
+    <li>Error 4012 जैसा code सिर्फ़ एक-दो passages में हो, तो BM25 उसे rare मानकर ऊपर रखता है। DPR का vector पूरे passage की बात समेटता है, और उसमें ऐसा एक code आसानी से दब जाता है। Lesson 15 इसी case से शुरू होता है।</li>
+    <li>Passage का vector सवाल देखे बिना बनता है, इसलिए सवाल और passage सिर्फ़ आख़िरी dot product पर मिलते हैं। Lesson 14 का reranker इसी कमी पर काम करता है।</li>
+    <li>Training के लिए labeled सवाल-passage जोड़े चाहिए, भले 1,000 ही हों।</li>
+  </ul>
+  <p>BM25 की ताकत और कमज़ोरी इसकी उल्टी है। इसलिए <a href="14-hybrid-rerank-dense.html">lesson 14</a> BM25 और DPR, दोनों की lists मिलाता है।</p>
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 4 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। इनमें पहले slide के symbols और उनका गणित है, फिर पूरे batch का एक गुणा और paper के experiments। उसके बाद असली पैमाना है, और आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="notation">
+  <h3><span class="cn">6</span>Slide के symbols, और gradient का गणित</h3>
+
+  <p>अब तक सब कुछ एक सवाल और उसके numbers पर था। Slide यही हिसाब symbols में लिखती है, ताकि वो batch के हर सवाल पर लागू हो। Slide का पूरा formula ये है:</p>
+  <div class="formula">𝓛<sub><i>i</i></sub> = − log <span class="frac"><span>exp(s(q<sub><i>i</i></sub>, p<sub><i>i</i></sub><sup>+</sup>))</span><span>exp(s(q<sub><i>i</i></sub>, p<sub><i>i</i></sub><sup>+</sup>)) + ∑<sub><i>j</i>=1</sub><sup><i>n</i></sup> exp(s(q<sub><i>i</i></sub>, p<sub><i>i,j</i></sub><sup>−</sup>))</span></span></div>
+  <p>नीचे की table हर symbol को हमारे example के number से जोड़ती है:</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>मतलब</th><th>हमारे example में</th></tr></thead>
+    <tbody>
+      <tr><td>q<sub><i>i</i></sub></td><td>Batch का i-वाँ सवाल</td><td>least crowded वाला सवाल, i = 1</td></tr>
+      <tr><td>p<sub><i>i</i></sub><sup>+</sup></td><td>सवाल q<sub><i>i</i></sub> का positive</td><td>queue log</td></tr>
+      <tr><td>p<sub><i>i,j</i></sub><sup>−</sup></td><td>सवाल q<sub><i>i</i></sub> का j-वाँ negative। j, 1 से n तक चलता है।</td><td>j = 1 पर forum post, j = 2 पर Homework, और n = 2</td></tr>
+      <tr><td>E<sub>Q</sub>( · ; θ<sub>Q</sub>)</td><td>Question encoder। “·” की जगह text आता है, और θ<sub>Q</sub> उसके <button class="def" data-w="w-parameters">parameters</button> हैं, यानी वो numbers जिन्हें training बदलती है।</td><td>पड़ाव 1 का question encoder</td></tr>
+      <tr><td>E<sub>P</sub>( · ; θ<sub>P</sub>)</td><td>Passage encoder, जिसके parameters θ<sub>P</sub> हैं</td><td>पड़ाव 1 का passage encoder</td></tr>
+      <tr><td>h<sub>q<sub><i>i</i></sub></sub> = E<sub>Q</sub>(q<sub><i>i</i></sub>) ∈ ℝ<sup><i>d</i></sup></td><td>सवाल का vector। <button class="def" data-w="w-rd">ℝ<sup>d</sup></button> का मतलब है d real numbers की list, और ∈ का मतलब “इसका हिस्सा है”।</td><td>[1.0, 0.5, 0.5, 1.0], यानी d = 4</td></tr>
+      <tr><td>s(q<sub><i>i</i></sub>, p) = E<sub>Q</sub>(q<sub><i>i</i></sub>)<sup>⊤</sup>E<sub>P</sub>(p)</td><td>Score, यानी दोनों vectors का dot product। Slide इसे inner-product similarity कहती है, और inner product dot product का ही दूसरा नाम है।</td><td>1.0, 2.0 और 1.5</td></tr>
+      <tr><td>exp(x)</td><td>e<sup>x</sup>, जहाँ e करीब 2.718 है</td><td>exp(1.0) = 2.72</td></tr>
+      <tr><td>∑<sub><i>j</i>=1</sub><sup><i>n</i></sup></td><td>j = 1 से n तक सबका <button class="def" data-w="w-sigma">जोड़</button></td><td>7.39 + 4.48</td></tr>
+      <tr><td>log</td><td>Natural log, यानी ln</td><td>−ln 0.186</td></tr>
+      <tr><td>𝓛<sub><i>i</i></sub></td><td>सवाल q<sub><i>i</i></sub> का loss</td><td>1.68</td></tr>
+      <tr><td>∇<sub>θ<sub>Q</sub></sub>𝓛<sub><i>i</i></sub></td><td>θ<sub>Q</sub> के हर parameter पर loss की दर, एक list में। ये नीचे step by step आता है।</td><td>–</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4 class="sub" id="nabla">Gradient: हर score पर loss की दर</h4>
+
+  <p>Lesson 4 में <button class="def" data-w="w-gradient">gradient</button> का मतलब आया था: किस parameter को किस दिशा में बदलें, कि loss घटे। Parameters करोड़ों में हैं, इसलिए पहले यही बात तीन scores पर देखिए, जहाँ हिसाब छोटा है।</p>
+
+  <p>किसी चीज़ की दर निकालने का तरीका सीधा है। Input को बहुत थोड़ा बदलिए, और देखिए कि output कितना बदला। फिर उस बदलाव को input के बदलाव से भाग दीजिए। Training से पहले वाले scores 1.0, 2.0 और 1.5 पर loss 1.68 है। अब एक बार में एक score 0.01 बढ़ाइए:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किसका score 0.01 बढ़ा</th><th class="numh">Loss का बदलाव</th><th class="numh">बदलाव ÷ 0.01</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log (positive)</td><td class="num">−0.0081</td><td class="num">−0.81</td></tr>
+      <tr><td>Forum post</td><td class="num">+0.0051</td><td class="num">+0.51</td></tr>
+      <tr><td>Homework</td><td class="num">+0.0031</td><td class="num">+0.31</td></tr>
+    </tbody>
+  </table></div>
+  <p>0.01 की जगह और छोटा बदलाव लीजिए, तो ये दरें −0.814, +0.506 और +0.307 पर टिक जाती हैं। जिस number पर दर टिकती है, वही gradient है। Minus का मतलब है कि queue log का score बढ़ने पर loss घटता है। Plus का मतलब है कि किसी negative का score बढ़ने पर loss बढ़ता है।</p>
+
+  <p>इस दर को ∂𝓛/∂s लिखते हैं: score s थोड़ा बदले, तो loss 𝓛 किस दर से बदलता है। ∂ का मतलब है कि सिर्फ़ यही एक score बदला, बाकी सब वैसे ही रहे। इसे <b class="term">partial derivative</b> कहते हैं।</p>
+
+  <h4 class="sub" id="whyshare">ये दरें softmax के हिस्सों जैसी क्यों हैं</h4>
+
+  <p>ये दरें पड़ाव 2 के softmax वाले हिस्सों से मिलती हैं। −0.814 = 0.186 − 1 है, और 0.506 और 0.307 सीधे forum post और Homework के हिस्से हैं। ये संयोग नहीं है, और इसकी वजह पाँच छोटे steps में निकलती है:</p>
+  <ol class="plain">
+    <li><b>Loss को दो हिस्सों में तोड़िए।</b> Lesson 4 के दो नियम हैं: ln(a ÷ b) = ln a − ln b, और ln(e<sup>x</sup>) = x। इसलिए 𝓛 = −ln(e<sup>s+</sup> ÷ Z) = −s<sup>+</sup> + ln Z, जहाँ Z सारे e<sup>score</sup> का जोड़ है, यानी 14.59। जाँच: −1.0 + ln 14.59 = −1.0 + 2.680 = 1.680।</li>
+    <li><b>e<sup>s</sup> की दर खुद e<sup>s</sup> है।</b> जाँच: e<sup>1.01</sup> − e<sup>1.00</sup> = 2.7456 − 2.7183 = 0.0273, और 0.0273 ÷ 0.01 = 2.73, यानी करीब e<sup>1.0</sup> = 2.72।</li>
+    <li><b>ln Z की दर 1 ÷ Z है।</b> जाँच: ln 14.60 − ln 14.59 = 0.000685, और 0.000685 ÷ 0.01 = 0.0685, जो 1 ÷ 14.59 = 0.0685 के बराबर है।</li>
+    <li><b>दो जुड़ी हुई दरें गुणा होती हैं।</b> Queue log का score बदले, तो Z में सिर्फ़ e<sup>s+</sup> बदलता है, 2.72 की दर से। Z बदले, तो ln Z उसके 1 ÷ 14.59 गुना बदलता है। इसलिए ln Z की दर 2.72 × (1 ÷ 14.59) = 0.186 है, जो queue log का हिस्सा है। जुड़ी हुई दरों को गुणा करने के इस नियम को <b class="term">chain rule</b> कहते हैं। ये दरों वाला chain rule है, lesson 4 के probability वाले chain rule से अलग।</li>
+    <li><b>दोनों हिस्से जोड़िए।</b> 𝓛 = −s<sup>+</sup> + ln Z में queue log के लिए दर −1 + 0.186 = −0.814 है। Forum post के score पर −s<sup>+</sup> वाला हिस्सा नहीं बदलता, इसलिए उसकी दर सिर्फ़ 7.39 ÷ 14.59 = 0.506 है।</li>
+  </ol>
+  <p><b>मतलब हर negative की दर उसका अपना softmax वाला हिस्सा है। इसलिए training हर negative के score को उसके हिस्से जितने ज़ोर से नीचे धकेलती है।</b> पड़ाव 3 में hard negative इसी वजह से ज़्यादा सिखाता था। कुछ training के बाद (3.0, 2.0, 0.5) forum post का हिस्सा 0.254 है, और Homework का सिर्फ़ 0.057।</p>
+
+  <h4 class="sub" id="qvector">एक कदम पीछे: सवाल के vector पर दर</h4>
+
+  <p>Score से एक कदम पीछे सवाल का vector h<sub>q</sub> है, जिसमें 4 numbers हैं: q<sub>1</sub> से q<sub>4</sub>। किसी passage का score q<sub>1</sub>p<sub>1</sub> + q<sub>2</sub>p<sub>2</sub> + q<sub>3</sub>p<sub>3</sub> + q<sub>4</sub>p<sub>4</sub> है। q<sub>1</sub> को 0.01 बढ़ाइए, तो score p<sub>1</sub> × 0.01 बढ़ता है। इसलिए score की q<sub>1</sub> पर दर p<sub>1</sub> है, यानी उस passage के vector का पहला number।</p>
+
+  <p>q<sub>1</sub> बदलने से तीनों scores बदलते हैं, और हर score loss को अपनी दर से बदलता है। Chain rule से loss की q<sub>1</sub> पर दर ऐसे निकलती है:</p>
+  <ol class="plain">
+    <li>Queue log: score की दर −0.814, गुणा उसका पहला number 0.2, यानी −0.163।</li>
+    <li>Forum post: 0.506 × 0.8 = 0.405।</li>
+    <li>Homework: 0.307 × 0.5 = 0.154।</li>
+    <li>तीनों का जोड़: −0.163 + 0.405 + 0.154 = 0.396।</li>
+  </ol>
+  <p>चारों numbers के लिए यही करने पर [0.396, 0.304, 0.061, 0.081] मिलता है <span class="mine">हिसाब मेरा</span>। इसे ∂𝓛/∂h<sub>q</sub> लिखते हैं, यानी h<sub>q</sub> के हर number के लिए एक दर। पहले दो numbers सबसे बड़े हैं, क्योंकि forum post के vector में यही दो numbers बड़े हैं, 0.8 और 1.0। Formula यही हिसाब ऐसे लिखता है:</p>
+  <div class="formula">∂𝓛 / ∂h<sub>q</sub> = (p<sup>+</sup> − 1) h<sub>p+</sub> + ∑<sub>j</sub> p<sub>j</sub> h<sub>pj</sub></div>
+  <p>यहाँ p<sup>+</sup> और p<sub>j</sub> softmax वाले हिस्से हैं, और h<sub>p+</sub> और h<sub>pj</sub> passages के vectors। ऊपर के चार steps इसी formula का पहला number हैं।</p>
+
+  <p>अब सवाल के vector को इसकी उल्टी दिशा में थोड़ा खिसकाइए, यानी हर number में से उसकी दर का 0.5 गुना घटाइए। नया vector [0.802, 0.348, 0.469, 0.959] बनता है, और scores 0.871, 1.657 और 1.301 हो जाते हैं। Queue log का score भी थोड़ा गिरा, लेकिन forum post का उससे ज़्यादा गिरा। इसलिए दोनों का फ़र्क 1.0 से घटकर 0.786 रह गया, और loss 1.68 से 1.554 हो गया।</p>
+
+  <h4 class="sub" id="params">आख़िरी कदम: encoder के parameters तक</h4>
+
+  <p>सवाल का vector खुद parameter नहीं है। उसे encoder बनाता है, और encoder के करोड़ों parameters हैं। Lesson 5 वाला <button class="def" data-w="w-backprop">backpropagation</button> यही chain rule पीछे की तरफ़ encoder की हर layer तक लगाता है। इससे हर parameter के लिए एक दर मिलती है। इन सारी दरों की list को ∇<sub>θ<sub>Q</sub></sub>𝓛<sub><i>i</i></sub> लिखते हैं, और <button class="def" data-w="w-nabla">∇</button> को nabla पढ़ते हैं।</p>
+
+  <p>Training हर parameter को उसकी दर की उल्टी दिशा में थोड़ा खिसकाती है, ठीक वैसे जैसे ऊपर सवाल के vector को खिसकाया। ∇<sub>θ<sub>Q</sub></sub>𝓛<sub><i>i</i></sub> से question encoder बदलता है, और ∇<sub>θ<sub>P</sub></sub>𝓛<sub><i>i</i></sub> से passage encoder। पड़ाव 9 की slide पर यही दो लाल arrows हैं।</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="matrix">
+  <h3><span class="cn">7</span>पूरा batch एक गुणा में, और negatives पर paper के experiments</h3>
+
+  <p>पड़ाव 3 की batch वाली table असल में एक matrix है। <b>Matrix numbers की एक table है, जिसमें rows और columns होते हैं।</b> Batch के सवालों के vectors को एक के नीचे एक रखिए, तो matrix Q बनती है: हर row एक सवाल का vector। उनके positives के vectors से इसी तरह matrix P बनती है।</p>
+
+  <p>P<sup>⊤</sup> लिखने का मतलब है P की rows को columns बना देना, और इसे transpose कहते हैं। Q और P<sup>⊤</sup> के गुणा का नियम ये है। नतीजे में row i और column j वाला number, Q की row i और P की row j का dot product है। 2 सवालों और 2 numbers वाले vectors पर देखिए: <span class="mine">numbers मेरे बनाए</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>सवाल ↓ / positive →</th><th class="numh">p<sub>1</sub> = [0, 2]</th><th class="numh">p<sub>2</sub> = [1, 0]</th></tr></thead>
+    <tbody>
+      <tr><td>q<sub>1</sub> = [1, 2]</td><td class="num"><b>1×0 + 2×2 = 4</b></td><td class="num">1×1 + 2×0 = 1</td></tr>
+      <tr><td>q<sub>2</sub> = [2, 0]</td><td class="num">2×0 + 0×2 = 0</td><td class="num"><b>2×1 + 0×0 = 2</b></td></tr>
+    </tbody>
+  </table></div>
+  <p>ये 2 × 2 table ही S = QP<sup>⊤</sup> है। Diagonal पर, यानी row 1 column 1 और row 2 column 2 पर, हर सवाल का अपना positive है: 4 और 2। बाकी cells उसके in-batch negatives हैं। Paper पूरे batch के scores इसी एक गुणा से निकालता है: <span class="mine">paper से</span></p>
+  <div class="formula">S = Q P<sup>⊤</sup></div>
+  <p>B सवालों के batch में S में B × B scores होते हैं। हर row पर अलग से contrastive loss लगता है, इसलिए एक step में B training examples बनते हैं। Paper में B = 128 है, यानी एक गुणा से 128 × 128 = 16,384 scores, और हर सवाल को 127 in-batch negatives।</p>
+
+  <p>Paper हर सवाल के साथ एक BM25 negative भी जोड़ता है। Batch के सारे 128 BM25 negatives, batch के हर सवाल के negatives बनते हैं। तो हर सवाल को 127 + 128 = 255 negatives मिलते हैं। Slide के formula का n DPR की असली training में यही 255 है। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="ablation">Paper के experiments: कौन से negatives कितने काम के</h4>
+
+  <p>Paper ने NQ के dev set पर negatives के कई तरीके आज़माए। Dev set वो सवाल हैं, जिन पर researchers training के दौरान अपने फ़ैसले जाँचते हैं। <b class="term">1-of-N</b> में हर सवाल के अपने अलग negatives होते हैं, जो batch के बाकी सवालों के साथ share नहीं होते। In-batch में negatives batch के अंदर से आते हैं। <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>तरीका</th><th class="numh">हर सवाल के negatives</th><th class="numh">Top-20 (%)</th></tr></thead>
+    <tbody>
+      <tr><td>1-of-N, random passages</td><td class="num">7</td><td class="num">64.3</td></tr>
+      <tr><td>1-of-N, BM25 passages</td><td class="num">7</td><td class="num">63.3</td></tr>
+      <tr><td>1-of-N, दूसरे सवालों के positives<span class="sub">पूरे training data से</span></td><td class="num">7</td><td class="num">63.1</td></tr>
+      <tr><td>In-batch, batch 8</td><td class="num">7</td><td class="num">69.1</td></tr>
+      <tr><td>In-batch, batch 128</td><td class="num">127</td><td class="num">73.0</td></tr>
+      <tr class="hi"><td>In-batch, batch 128, साथ में हर सवाल का 1 BM25 negative</td><td class="num">127 + 128</td><td class="num">78.0</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>1-of-N में negative की किस्म से top-20 पर लगभग फ़र्क नहीं पड़ता: तीनों 63 से 64 के बीच हैं।</li>
+    <li>वही 7 negatives batch के अंदर से आएँ, तो accuracy 63.1 से 69.1 हो जाती है। Paper की वजह ये है कि batch के अंदर एक ही गुणा से ज़्यादा जोड़े बनते हैं, यानी training examples बढ़ते हैं।</li>
+    <li>Batch 8 से 128 करने पर negatives 7 से 127 होते हैं, और accuracy 69.1 से 73.0।</li>
+    <li>हर सवाल का एक BM25 negative जोड़ने से accuracy 73.0 से 78.0 हो जाती है। दूसरा BM25 negative मदद नहीं करता: batch 32 पर एक के साथ 77.3, और दो के साथ 76.4।</li>
+  </ul>
+  <p class="note">ये dev set के numbers हैं। Test set पर final DPR का top-20 78.4 है, जो पड़ाव 4 में आया था।</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="scale">
+  <h3><span class="cn">8</span>असली पैमाना और पूरे नतीजे</h3>
+
+  <p>हमारे example में 3 passages और 4 numbers वाले vectors थे, ताकि हिसाब हाथ से हो सके। Paper में mechanism वही है, सिर्फ़ numbers बड़े हैं: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>चीज़</th><th>हमारा example</th><th>DPR paper में</th></tr></thead>
+    <tbody>
+      <tr><td>Passages</td><td>3</td><td>21,015,324, Wikipedia के 100-100 शब्दों के टुकड़े</td></tr>
+      <tr><td>Vector की लंबाई d</td><td>4</td><td>768, BERT-base का output vector</td></tr>
+      <tr><td>Encoders</td><td>पड़ाव 1 वाले</td><td>दो अलग BERT-base</td></tr>
+      <tr><td>Batch</td><td>3 सवाल</td><td>128 सवाल</td></tr>
+      <tr><td>हर सवाल के negatives, यानी n</td><td>2</td><td>127 in-batch + 128 BM25 = 255</td></tr>
+      <tr><td>सारे passage vectors बनाना</td><td>हाथ से</td><td>8 GPUs पर करीब 8.8 घंटे</td></tr>
+      <tr><td>Index बनाना</td><td>–</td><td>FAISS में HNSW index, करीब 8.5 घंटे</td></tr>
+      <tr><td>Search की speed</td><td>–</td><td>995 सवाल per second, हर सवाल पर top 100<span class="sub">BM25: 23.7 सवाल per second, एक CPU thread पर</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <p><button class="def" data-w="w-faiss">FAISS</button> vectors में तेज़ search की एक open-source library है। DPR ने उसमें lesson 10 वाला <button class="def" data-w="w-hnsw">HNSW</button> index लिया। Search तेज़ है, लेकिन index बनाना महँगा है। BM25 का inverted index करीब 30 minute में बनता है, जबकि DPR के vectors और index में मिलाकर 8.8 + 8.5 = 17.3 घंटे लगते हैं। Encoder बदले, तो ये सब दोबारा करना पड़ता है।</p>
+
+  <h4 class="sub" id="fullresults">पूरे नतीजे</h4>
+
+  <p>पड़ाव 4 में NQ पर top-20 accuracy आई थी: BM25 59.1% और DPR 78.4%। Top-5 पर फ़र्क और बड़ा है: BM25 42.9%, और DPR 65.2%। <span class="mine">paper से</span> नीचे पाँचों datasets हैं, साथ में BM25 और DPR दोनों के scores मिलाकर बना retriever भी:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Dataset</th><th class="numh">BM25</th><th class="numh">DPR</th><th class="numh">BM25 + DPR</th></tr></thead>
+    <tbody>
+      <tr><td>NQ</td><td class="num">59.1</td><td class="num">78.4</td><td class="num">76.6</td></tr>
+      <tr><td>TriviaQA</td><td class="num">66.9</td><td class="num">79.4</td><td class="num">79.8</td></tr>
+      <tr><td>WQ</td><td class="num">55.0</td><td class="num">73.2</td><td class="num">71.0</td></tr>
+      <tr><td>TREC</td><td class="num">70.9</td><td class="num">79.8</td><td class="num">85.2</td></tr>
+      <tr class="hi"><td>SQuAD</td><td class="num">68.8</td><td class="num">63.2</td><td class="num">71.5</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Top-20 accuracy (%), test set पर। यहाँ DPR हर dataset पर अलग train हुआ है।</p>
+
+  <p>Paper ने score के लिए dot product की जगह cosine और <button class="def" data-w="w-distance">दूरी</button> (L2) भी आज़माई। L2 के नतीजे dot product जितने ही रहे, और दोनों cosine से बेहतर थे। इसलिए DPR ने सबसे सीधा dot product रखा। <span class="mine">paper से</span></p>
+
+  <p>DPR से पहले <button class="def" data-w="w-orqa">ORQA</button> (2019) नाम का dense retriever भी BM25 से आगे निकला था। लेकिन ORQA ने retriever को पहले एक बनावटी काम पर अलग से pretrain किया था। उसमें model को एक sentence मिलता है, और उसे बताना होता है कि वो किस passage से निकला। DPR ने ऐसी extra pretraining नहीं की, उसने सिर्फ़ BERT और सवाल-passage जोड़े लिए।</p>
+
+  <p>फिर भी पूरे system में DPR आगे है। NQ पर <button class="def" data-w="w-em">Exact Match</button> DPR के साथ 41.5 है, ORQA के साथ 33.3, और BM25 के साथ 32.6। REALM भी extra pretraining करता है, और उसका Exact Match 39.2 और 40.4 है।</p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">9</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे Stanford की DPR वाली चार slides हैं, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई symbol अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p44.png"><img src="img/slide-p44.png" alt="Stanford slide: DPR की training, दोनों encoders, score और contrastive loss" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p44-loss.png"><img src="img/slide-p44-loss.png" alt="उसी slide का loss वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की training वाली slide, और नीचे उसी का loss वाला हिस्सा, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Training वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>h<sub>q<sub>i</sub></sub> ∈ ℝ<sup>d</sup> में d कितना है? हमारे example में कितना था, और DPR में कितना है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>हमारे example में 4, और DPR में 768। d vector में numbers की गिनती है। (पड़ाव 6 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Loss के नीचे ∑ में n क्या है? हमारे example में n कितना था, और DPR की training में कितना?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>n एक सवाल के negatives की गिनती है। हमारे example में 2 थे, forum post और Homework। DPR में 127 + 128 = 255 हैं। (पड़ाव 6 और 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>दोनों तरफ़ के लाल dashed arrows क्या कहते हैं? Lesson 5 के RAG से इसमें क्या फ़र्क है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Arrows पर ∇<sub>θ<sub>Q</sub></sub>𝓛<sub>i</sub> और ∇<sub>θ<sub>P</sub></sub>𝓛<sub>i</sub> लिखे हैं, यानी training दोनों encoders के parameters बदलती है। Lesson 5 के RAG में passage encoder नहीं बदलता था, क्योंकि तब 2.1 करोड़ passages के vectors दोबारा बनाने पड़ते।</p>
+          <p>DPR की training के दौरान कोई index नहीं होता। हर step में सिर्फ़ batch के passages encode होते हैं, इसलिए passage encoder भी बदल सकता है। Index training ख़त्म होने के बाद एक बार बनता है। (पड़ाव 1 और 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p47.png"><img src="img/slide-p47.png" alt="Stanford slide: DPR 5 में से 4 datasets पर BM25 से आगे" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p47-table.png"><img src="img/slide-p47-table.png" alt="उसी slide की table, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की results वाली slide, और नीचे उसकी table, बड़ी करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Results वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Top-20 में DPR किस dataset पर BM25 से पीछे है, और क्यों?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>SQuAD पर, 63.2 बनाम 68.8। वहाँ लोगों ने passage पढ़कर सवाल लिखे थे, इसलिए सवालों में passage के ही शब्द हैं, और ये BM25 के पक्ष में जाता है। (पड़ाव 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>NQ पर BM25 और DPR का फ़र्क top-20 में कितना है, और top-100 में कितना?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Top-20 में 78.4 − 59.1 = 19.3, और top-100 में 85.4 − 73.7 = 11.7। k बढ़ने पर फ़र्क घटता है, क्योंकि 100 passages में BM25 को भी अक्सर सही passage मिल जाता है। (पड़ाव 4 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Single और Multi का क्या मतलब है? Multi वाले DPR का SQuAD पर score 51.6 क्यों गिरा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Single में DPR हर dataset पर अलग train हुआ। Multi में एक ही DPR सारे datasets को मिलाकर train हुआ, लेकिन paper ने उसमें SQuAD नहीं डाला। इसलिए Multi वाला DPR SQuAD के सवालों पर train ही नहीं हुआ। <span class="mine">paper से</span></p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p48.png"><img src="img/slide-p48.png" alt="Stanford slide: 1,000 सवाल-जवाब जोड़े BM25 से आगे निकलने को काफ़ी हैं" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p48-graph.png"><img src="img/slide-p48-graph.png" alt="उसी slide का graph, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p48-table.png"><img src="img/slide-p48-table.png" alt="उसी slide की table, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की training data वाली slide, और नीचे उसका graph और table, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Training data वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Graph में नीली line BM25 है, और नारंगी line सिर्फ़ 1,000 जोड़ों वाला DPR। नारंगी line कहाँ नीली से ऊपर है, और k = 100 पर क्या होता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>छोटे k पर नारंगी line साफ़ ऊपर है। k बढ़ने पर फ़र्क घटता है, और k = 100 पर दोनों लगभग बराबर हैं। ज़्यादा जोड़ों वाली lines हर k पर और ऊपर हैं। (पड़ाव 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>Table में DPR के आगे 41.5 किस चीज़ का number है? और ORQA और REALM से ये तुलना ख़ास क्यों है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>41.5, NQ पर पूरे system का Exact Match है, यानी कितने % जवाब हूबहू सही निकले। ORQA और REALM ने retriever के लिए extra pretraining की थी, और DPR ने नहीं की। फिर भी DPR उनसे आगे है। Slide की line <q>No extra pretraining</q> यही कहती है। (पड़ाव 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Slide कहती है कि DPR, REALM से आगे है। क्या ये table के हर column में सच है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>नहीं। TREC पर Single वाला DPR 25.9 पर है, जबकि REALM<sub>Wiki</sub> 46.8 पर। TREC सबसे छोटा dataset है, इसलिए उस पर अकेले train हुए DPR के पास कम जोड़े थे। Multi वाला DPR, जो सारे datasets मिलाकर train हुआ, TREC पर 49.4 तक पहुँचता है। Slide की heading NQ के numbers पर टिकी है। <span class="mine">paper से</span></p>
+          <p>Table की बाकी rows, जैसे HardEM और GraphRetriever, दूसरे systems हैं। इस lesson के लिए उनके नाम ज़रूरी नहीं हैं।</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p54.png"><img src="img/slide-p54.png" alt="Stanford slide: तेज़ और धीमे retrievers की तुलना" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p54-table.png"><img src="img/slide-p54-table.png" alt="उसी slide की table, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की तुलना वाली slide: चार retrievers, और नीचे उसकी table, बड़ी करके। ColBERT और cross-encoder वाली rows lesson 14 और 15 में आती हैं।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">तुलना वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>DPR की row में “Precomputed offline: One vector per passage” का क्या मतलब है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Passage encoder सवाल आने से पहले हर passage का एक vector बनाकर index में रख देता है। सवाल आने पर सिर्फ़ question encoder चलता है। (पड़ाव 1)</p>
+        </details>
+      </li>
+      <li>
+        <p>Cross-encoder हर 1,000 passages पर 10,700 ms लेता है, और DPR दसियों ms। इतना फ़र्क क्यों है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Cross-encoder सवाल और passage को साथ पढ़ता है, इसलिए उसे हर passage के साथ model चलाना पड़ता है, और पहले से कुछ नहीं बनता। DPR में model हर सवाल पर एक बार चलता है, और बाकी काम dot products का है। Slide के नीचे लिखा है कि ये numbers अलग-अलग hardware पर नापे गए, इसलिए सिर्फ़ मोटा फ़र्क देखिए। (पड़ाव 1)</p>
+        </details>
+      </li>
+      <li>
+        <p>DPR की row में “Breaks on: Rare literals; needs labeled pairs” लिखा है। ये दोनों बातें किस पड़ाव में आईं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>पड़ाव 5 में। Error 4012 जैसा rare code DPR के vector में दब जाता है, और training के लिए labeled सवाल-passage जोड़े चाहिए, भले 1,000 ही।</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>DPR एक bi-encoder है: दो BERT encoders, और score उनके vectors का dot product। Passages के vectors offline index में बनते हैं, इसलिए हर सवाल पर question encoder सिर्फ़ एक बार चलता है।</li>
+    <li>Contrastive loss positive के score की तुलना negatives से करता है: softmax, फिर −ln। हर negative पर loss की दर उसका softmax वाला हिस्सा है, इसलिए hard negatives सबसे ज़्यादा सिखाते हैं।</li>
+    <li>पूरे batch के scores एक matrix गुणा S = QP<sup>⊤</sup> से आते हैं, और एक BM25 negative top-20 को 73.0 से 78.0 करता है। बिना extra pretraining के DPR 5 में से 4 datasets पर BM25 से आगे है। लेकिन exact शब्दों वाले सवालों पर BM25 अब भी जीत सकता है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-dpr">DPR</dt><dd>Dense Passage Retrieval: दो BERT encoders वाला bi-encoder retriever, जो सवाल-passage जोड़ों पर contrastive loss से train होता है। 2020 में Karpukhin और साथियों ने बनाया, और lesson 5 के RAG का retriever यही था।</dd>
+    <dt id="w-biencoder">Bi-encoder</dt><dd>सवाल और passage के लिए दो अलग encoders, और score उनका dot product। Passages पहले से encode होते हैं। जैसे 2.1 करोड़ passages हों, तब भी हर सवाल पर model 1 बार चलता है।</dd>
+    <dt id="w-pretraining">Pretraining</dt><dd>बहुत सारे आम text पर model की पहली, बड़ी training। जैसे BERT पहले आम text पर train होता है।</dd>
+    <dt id="w-finetuning">Fine-tuning</dt><dd>पहले से trained model को अपने काम के data पर और train करना। जैसे DPR, BERT को सवाल-passage जोड़ों पर train करता है।</dd>
+    <dt id="w-positive">Positive और negative passage</dt><dd>सवाल का सही passage (p<sub>i</sub><sup>+</sup>), और गलत passages (p<sub>i,j</sub><sup>−</sup>)। जैसे least crowded सवाल का positive queue log है, और negatives forum post और Homework।</dd>
+    <dt id="w-contrastive">Contrastive loss</dt><dd>Positive और negatives के scores पर softmax, फिर positive का −ln। ये सिर्फ़ scores के फ़र्क देखता है। जैसे scores 1.0, 2.0, 1.5 पर loss 1.68, और 5.0, 2.0, 0.5 पर 0.059।</dd>
+    <dt id="w-batch">Batch</dt><dd>Training में एक साथ चलने वाले सवालों का group। जैसे DPR में 128 सवालों का batch।</dd>
+    <dt id="w-inbatch">In-batch negatives</dt><dd>Batch के बाकी सवालों के positives को negatives की तरह इस्तेमाल करना। जैसे 128 के batch में हर सवाल को 127 negatives मिलते हैं।</dd>
+    <dt id="w-hardneg">Hard negative</dt><dd>सवाल से मिलता-जुलता, लेकिन गलत passage। DPR इन्हें BM25 के ऊपर वाले passages से लेता है। जैसे इस सवाल पर forum post।</dd>
+    <dt id="w-partial">∂ (partial derivative)</dt><dd>बाकी सब वैसा रखकर एक input थोड़ा बदलें, तो output किस दर से बदलता है। जैसे ∂𝓛/∂s<sup>+</sup> = −0.814, यानी queue log का score 0.01 बढ़े, तो loss करीब 0.008 घटता है।</dd>
+    <dt id="w-chainrule">Chain rule (दरों वाला)</dt><dd>एक के बाद एक जुड़ी दरें गुणा होती हैं। जैसे queue log के score पर ln Z की दर 2.72 × (1 ÷ 14.59) = 0.186 है। Lesson 4 का probability वाला chain rule इससे अलग है।</dd>
+    <dt id="w-rd">ℝ<sup>d</sup></dt><dd>d real numbers की list, यानी d dimension वाला vector। जैसे [1.0, 0.5, 0.5, 1.0] ∈ ℝ<sup>4</sup>, और DPR के vectors ℝ<sup>768</sup> में हैं।</dd>
+    <dt id="w-nabla">∇ (nabla)</dt><dd>∇<sub>θ</sub>𝓛: θ के हर parameter पर loss की दर, एक list में। Training हर parameter को उसकी दर की उल्टी दिशा में थोड़ा खिसकाती है। जैसे तीन scores पर ये दरें −0.814, +0.506 और +0.307 थीं।</dd>
+    <dt id="w-faiss">FAISS</dt><dd>Vectors में तेज़ search की open-source library। जैसे DPR ने इसमें 2.1 करोड़ vectors का HNSW index बनाया, जिसमें करीब 8.5 घंटे लगे।</dd>
+    <dt id="w-orqa">ORQA</dt><dd>2019 का dense retriever, जिसने retriever को extra pretraining से सिखाया। जैसे NQ पर पूरे system का Exact Match ORQA के साथ 33.3, और DPR के साथ 41.5।</dd>
+    <dt id="w-topkacc">Top-k retrieval accuracy</dt><dd>कितने % सवालों में top-k में जवाब वाला passage है। जैसे NQ पर top-20 में DPR की 78.4%।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="11-bm25-dense.html">पिछला: Lesson 11</a>
+    <a href="13-metrics-dense.html">अगला: Lesson 13, Retriever को नापना</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Paper: Karpukhin et al., 2020, “Dense Passage Retrieval for Open-Domain Question Answering”। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var ins = [1, 2, 3].map(function (i) { return document.getElementById("c" + i); });
+  var outs = [1, 2, 3].map(function (i) { return document.getElementById("co" + i); });
+  var names = ["Queue log", "Forum post", "Homework"];
+  var btns = document.querySelectorAll("#cl .btns button");
+  function render() {
+    var s = ins.map(function (x) { return Number(x.value); });
+    outs.forEach(function (o, i) { o.textContent = s[i].toFixed(1); });
+    var e = s.map(Math.exp), t = e[0] + e[1] + e[2], p = e.map(function (x) { return x / t; });
+    document.getElementById("cl-bars").innerHTML = p.map(function (v, i) {
+      return "<span>" + names[i] + '</span><div class="bar' + (i === 0 ? " win" : "") + '"><span style="width:' + v * 100 + '%"></span></div><span class="val">' + v.toFixed(3) + "</span>";
+    }).join("");
+    document.getElementById("cl-out").innerHTML = "Queue log का हिस्सा " + p[0].toFixed(3) + ", तो loss = −ln " + p[0].toFixed(3) + " = <b>" + (-Math.log(p[0])).toFixed(3) + "</b>";
+    var key = s.map(String).join(",");
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.s === key ? "true" : "false"); });
+  }
+  ins.forEach(function (x) { x.addEventListener("input", render); });
+  btns.forEach(function (b) { b.addEventListener("click", function () { var v = b.dataset.s.split(","); ins.forEach(function (x, i) { x.value = v[i]; }); render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

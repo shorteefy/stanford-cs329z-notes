@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="LLM सिर्फ़ prompt की बातों से जवाब लिखता है, और prompt में 60,000 में से 14 passages ही समाते हैं। हर सवाल पर वो 14 चुनने का सीधा तरीका बनाना है, और आख़िर में retriever-reader वाली Stanford slides और DrQA के numbers खुद पढ़ने हैं।">
+<title>Lesson 2: Retrieval (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  figure.slide.narrow img { max-width: 340px; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 2 / 18 · <a href="02-retrieval.html">आसान</a> · <b>गहरा</b> · <a href="02-retrieval-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 2 · गहरा version</p>
+  <h1>Retrieval: जवाब लिखने से पहले ढूँढना</h1>
+  <p class="lede"><b>Retrieval वो step है, जो सवाल आने पर आपके documents में से काम के टुकड़े ढूँढता है, ताकि LLM उन्हें पढ़कर जवाब लिखे।</b> ये काम दो हिस्से करते हैं: retriever टुकड़े ढूँढता है, और reader उन्हें पढ़कर जवाब लिखता है।</p>
+  <p class="lede">इसकी ज़रूरत <a href="01-how-llms-answer-dense.html#prompt">lesson 1</a> में दिखी थी। Queue log की एक line <button class="def" data-w="w-prompt">prompt</button> में रखते ही Thursday की probability 0.21 से 0.81 हो गई, लेकिन वो line हमने खुद चुनी थी। अब एक company सोचिए, जिसके पास 2,000 documents हैं, और हर document में करीब 30 paragraphs, यानी 2,000 × 30 = 60,000 paragraphs। Lesson 1 वाली <button class="def" data-w="w-context">context window</button> में passages के लिए 7,000 tokens की जगह थी। तो 500 tokens वाले 7,000 ÷ 500 = 14 paragraphs ही समाते हैं।</p>
+  <p class="lede">इसलिए किसी program को हर सवाल पर 60,000 में से वो 14 चुनने होंगे, जिनमें जवाब है। ये lesson ऐसा program सबसे सीधे तरीके से बनाता है: शब्द गिनकर। Course के 3 सवालों में से एक पर ये ठीक चलता है। दूसरे पर ये सही और गलत text को बराबर रखता है, और तीसरे पर कुछ नहीं लौटाता।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 8 पड़ाव हैं। पहले 4 आसान version जैसे ही हैं, और 5 से 8 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#corpus">Corpus, document, passage और query</a><span class="can">बता पाएँगे कि retriever पूरा document क्यों नहीं लौटाता।</span></li>
+      <li><a href="#retrieval">Retrieval: सवाल आने पर सही passage prompt में</a><span class="can">Retrieval वाला prompt और Stanford की Why Retrieval? slide पढ़ पाएँगे।</span></li>
+      <li><a href="#retriever">Retriever: हर passage को score, फिर top-K</a><span class="can">Scores हाथ से निकाल पाएँगे, और बता पाएँगे कि पुराना forum post queue log के बराबर क्यों आया।</span></li>
+      <li><a href="#recall-ceiling">Recall ceiling: जो passage नहीं आया, reader उसे नहीं पढ़ता</a><span class="can">हिसाब से दिखा पाएँगे कि retriever पूरे system की हद क्यों तय करता है।</span></li>
+      <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="5"><a href="#framework">Retriever और reader, functions की तरह</a><span class="can">f(𝒟, Q) और g(Q, {P<sub>1</sub>, …, P<sub>K</sub>}) को अपने example से जोड़ पाएँगे, और slide की हर line समझा पाएँगे।</span></li>
+      <li><a href="#drqa">DrQA: पूरे Wikipedia पर retriever और reader</a><span class="can">DrQA का retriever, reader और distant supervision वाला training data समझा पाएँगे।</span></li>
+      <li><a href="#ceiling-real">Recall ceiling असली numbers में, और K का हिसाब</a><span class="can">DrQA के numbers से ceiling निकाल पाएँगे, और हमारे corpus पर हर K का नतीजा बता पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">इस lesson की सारी Stanford slides की हर line समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="01-how-llms-answer-dense.html#prompt">Lesson 1</a> (token, prompt, context window, parameters, hallucination)। बाकी हर नई चीज़ ये lesson खुद समझाता है। पड़ाव 5 से आगे बाद के lessons के कुछ शब्द आते हैं, जैसे TF-IDF और Exact Match। ये lesson उन्हें वहीं थोड़े में समझाता है। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="corpus">
+  <h3><span class="cn">1</span>Corpus, document और passage: retriever किसमें ढूँढता है</h3>
+
+  <p><b>आपके सारे documents के set को corpus कहते हैं, और retriever इसी corpus में ढूँढता है।</b> Corpus की हर एक चीज़ एक <b class="term">document</b> है: एक web page, एक file, या एक email। Corpus का दूसरा नाम collection है।</p>
+
+  <p>Retriever पूरा document नहीं लौटाता, क्योंकि prompt में सिर्फ़ 14 टुकड़ों की जगह है, और लंबे document का ज़्यादातर हिस्सा सवाल से जुड़ा नहीं होता। जैसे 40 pages के syllabus में milestone की तारीख 2 lines में होगी। इसलिए retriever एक छोटा टुकड़ा लौटाता है, जैसे एक paragraph, और इसे <b class="term">passage</b> कहते हैं।</p>
+
+  <p>जिस सवाल के लिए ढूँढना है, उसे <b class="term">query</b> कहते हैं। इस lesson की पहली query lesson 1 वाली ही है: <q>which office hour is least crowded</q>।</p>
+
+  <p>आगे के lessons इसी छोटे corpus पर लौटेंगे। इसमें 6 documents हैं, और हर document से एक passage। हर passage का एक छोटा ID भी है, जैसे P3, ताकि जवाब उसका नाम ले सके। <span class="mine">syllabus, queue log, Homework 1 की announcement और project page की बातें slides से हैं, office hours page और पुराना forum post मेरे बनाए</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>ID</th><th>Passage</th></tr></thead>
+    <tbody>
+      <tr><td><b>P1</b></td><td>Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10.<span class="sub">Syllabus</span></td></tr>
+      <tr><td><b>P2</b></td><td>Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs.<span class="sub">Office hours page</span></td></tr>
+      <tr><td><b>P3</b></td><td>Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<span class="sub">Queue log</span></td></tr>
+      <tr><td><b>P4</b></td><td>Old forum post (2024): midweek afternoons are usually the least crowded time to visit.<span class="sub">पुराना forum post</span></td></tr>
+      <tr><td><b>P5</b></td><td>Homework 1 will be released on Oct 5.<span class="sub">Homework 1 की announcement</span></td></tr>
+      <tr><td><b>P6</b></td><td>Project proposal due on Oct 9. Teams of 1-3 people are recommended.<span class="sub">Project page</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>मान लीजिए syllabus और Homework 1 की announcement एक ही document के दो paragraphs होते। तब documents कितने होते, और passages कितने?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Documents <b>5</b>, लेकिन passages अब भी <b>6</b>, और retriever इन्हीं 6 में से चुनता है। Company में भी यही फ़र्क है: 2,000 documents, लेकिन 60,000 passages।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="retrieval">
+  <h3><span class="cn">2</span>Retrieval: सवाल आने पर सही passage prompt में रखना</h3>
+
+  <p><b>Retrieval का मतलब है: query आने पर corpus से सबसे काम के passages ढूँढना, और उन्हें सवाल के साथ prompt में रखना।</b> तब model को सब कुछ पहले से याद नहीं करवाना पड़ता। Stanford की slide इसे just-in-time कहती है, यानी सही text ठीक सवाल आने के वक्त model के सामने आता है।</p>
+
+  <p>हमारी query पर retriever queue log ढूँढता है, और LLM को कुछ ऐसा prompt मिलता है: <span class="mine">मेरा example</span></p>
+  <div class="sentence">Answer the question using the passage below. Cite the passage ID.<br>[P3] Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3.<br>Question: Which office hour is least crowded?</div>
+
+  <p>जवाब आता है: <q>Thursday 9am, about 3 students ahead of you [P3].</q> आख़िर का [P3] बताता है कि बात किस passage से आई। जवाब के साथ लिखे उसके source को <b class="term">citation</b> कहते हैं। Citation देखकर आप queue log खोलकर check कर सकते हैं कि बात सच में वहाँ लिखी है।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval? अकेले LLM का जवाब और retrieval के साथ LLM का जवाब" loading="lazy"></a>
+    <figcaption>Stanford की Why Retrieval? वाली slide। बाईं तरफ़ अकेले LLM का अंदाज़ा है, और दाईं तरफ़ retriever का लौटाया queue log और उससे लिखा जवाब। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>Lesson 1 में model की सारी जानकारी उसके <button class="def" data-w="w-parameters">parameters</button> में थी, और इसकी दो दिक्कतें थीं। नई बात डालने के लिए training चाहिए थी, और model अपना source नहीं बता सकता था। Retrieval में नई बात के लिए बस corpus में passage जोड़िए, और source citation से दिखता है। Stanford की slide इन दो फ़ायदों को Dynamic और Interpretable कहती है।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p11.png"><img src="img/slide-p11.png" alt="Stanford slide: retrieval से LM की कमियाँ दूर करना, Dynamic और Interpretable" loading="lazy"></a>
+    <figcaption>Stanford की slide: just-in-time, Dynamic और Interpretable। नीचे के diagram में reader के जवाब का [1] एक citation है।</figcaption>
+  </figure>
+
+  <p>Lesson 1 में parameters के अंदर की जानकारी को <button class="def" data-w="w-parametric">parametric knowledge</button> कहा था। यहाँ जानकारी corpus में है, यानी model के बाहर, और ऐसी जानकारी को <b class="term">non-parametric memory</b> कहते हैं।</p>
+
+  <p>लेकिन retrieval उतना ही अच्छा है, जितना ढूँढना। Lesson 1 के आख़िर में दिखा था कि पुराना forum post prompt में हो, तो model फिर Wednesday लिख सकता है। इसलिए अगला पड़ाव ढूँढने का पक्का नियम बनाता है।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="retriever">
+  <h3><span class="cn">3</span>Retriever: हर passage को score, फिर top-K</h3>
+
+  <p><b>Retriever हर passage को query के लिए एक score देता है, scores के हिसाब से sort करता है, और ऊपर के K passages लौटाता है।</b> Score एक number है, जो बताता है कि passage query के लिए कितना काम का है।</p>
+
+  <p>ऊपर के K passages को <b class="term">top-K</b> कहते हैं। K पहले से तय होता है, जैसे 2 या 100।</p>
+
+  <p>सबसे आसान score <b class="term">word overlap</b> है: query के कितने शब्द passage में भी हैं। लेकिन which, is और the जैसे शब्द लगभग हर text में होते हैं, इसलिए उन्हें गिनने से कुछ पता नहीं चलता।</p>
+
+  <p>ऐसे बहुत आम शब्दों को <b class="term">stopwords</b> कहते हैं, और retriever गिनने से पहले उन्हें हटा देता है। Query <q>which office hour is least crowded</q> से which और is हटाइए। तब चार शब्द बचते हैं: office, hour, least और crowded।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Queue log में जवाब है, और पुराने forum post में सिर्फ़ 2024 की एक राय। Corpus table में दोनों में ये चार शब्द ढूँढिए। Word overlap किसे ज़्यादा score देगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>किसी को नहीं, दोनों को 2 मिलता है। Queue log में office और hour हैं, और forum post में least और crowded।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">पूरे corpus के scores ये हैं:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>मिले शब्द</th><th class="numh">Score</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log</td><td>office, hour</td><td class="num">2</td></tr>
+      <tr class="hi"><td>पुराना forum post</td><td>least, crowded</td><td class="num">2</td></tr>
+      <tr><td>Office hours page</td><td>office<span class="sub">Retriever शब्दों को हूबहू मिलाता है, इसलिए hours और hour उसके लिए अलग शब्द हैं।</span></td><td class="num">1</td></tr>
+      <tr><td>Syllabus, Homework 1 की announcement, project page</td><td>कोई नहीं</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Word overlap सिर्फ़ शब्द गिनता है, इसलिए उसे नहीं दिखता कि queue log तीन हफ़्ते का data है, और forum post 2024 की एक राय। K = 2 पर retriever दोनों लौटाता है। <b>तब prompt में सच्चे data के साथ वो पुरानी राय भी पहुँचती है, जिसके भरोसे model फिर Wednesday लिख सकता है।</b></p>
+
+  <p>Query और top-K passages पढ़कर जवाब लिखने वाले हिस्से को <b class="term">reader</b> कहते हैं। आज reader अक्सर एक LLM होता है, जो इस खास काम पर train नहीं हुआ, बस prompt की instruction पढ़कर काम करता है। ऊपर वाले prompt की पहली line, <q>Answer the question using the passage below</q>, यही instruction है।</p>
+
+  <p>Training के बिना, सिर्फ़ instruction से काम करने को <b class="term">zero-shot</b> कहते हैं। Reader अक्सर ऐसा ही LLM रहता है, इसलिए lessons 3 से 15 ज़्यादातर retriever को बेहतर बनाते हैं।</p>
+
+  <div class="widget" id="rw">
+    <h4>Retriever खुद चलाइए</h4>
+    <p class="hint">एक query चुनिए, और K बदलिए। Score 0 वाले passages retriever नहीं लौटाता। Score बराबर हो, तो corpus में पहले लिखा passage ऊपर आता है।</p>
+    <div class="btns" id="rw-q"></div>
+    <div class="ctl"><label for="rw-k">K, कितने passages लौटाने हैं</label><input id="rw-k" type="range" min="1" max="6" step="1" value="2"><output id="rw-ko">2</output></div>
+    <p class="note" id="rw-words" style="margin-bottom:10px"></p>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th class="num">Rank</th><th>Passage</th><th class="numh">Score</th></tr></thead>
+      <tbody id="rw-body"></tbody>
+    </table></div>
+    <p class="out" id="rw-out"></p>
+  </div>
+
+  <div class="recall">
+    <p class="rl">खुद निकालिए</p>
+    <p>Query: <q>when is the project milestone due</q>। Stopwords हटाइए, और syllabus और project page का score निकालिए। K = 1 हो, तो reader को कौन सा passage मिलेगा? Widget में check कीजिए।</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>बचे शब्द: project, milestone, due। Syllabus में तीनों हैं, इसलिए score <b>3</b>। Project page में project और due हैं, इसलिए score <b>2</b>। K = 1 पर reader को syllabus मिलेगा, जिसमें सही तारीख है: Week 6, Thursday 11:59pm।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="recall-ceiling">
+  <h3><span class="cn">4</span>Recall ceiling: जो passage नहीं आया, reader उसे नहीं पढ़ता</h3>
+
+  <p>अब widget में तीसरी query चुनिए: <q>when can I get help from a TA</q>। Stopwords हटाने पर help और ta बचते हैं। जवाब office hours page में है, लेकिन वहाँ TAs लिखा है, ta नहीं, और help किसी passage में नहीं है। इसलिए हर score 0 है, और retriever कुछ नहीं लौटाता। Reader कितना भी अच्छा हो, office hours page उसके prompt तक पहुँचा ही नहीं।</p>
+
+  <p><b>Retriever कितनी बार ज़रूरी passage ढूँढ पाता है, उसे मोटे तौर पर retriever का recall कहते हैं।</b> जैसे 100 सवालों में से 60 पर सही passage top-K में आया, तो recall 60% है। 60% का मतलब है 100 में से 60, यानी 60 ÷ 100 = 0.6। Recall को ठीक-ठीक नापने के तरीके <a href="13-metrics-dense.html">lesson 13</a> में हैं।</p>
+
+  <p>अब reader जोड़िए: सही passage मिलने पर वो 90% सवालों के सही जवाब देता है, यानी हर सवाल पर 0.9। तब 60 सवालों पर 60 × 0.9 = 54 सही जवाब आते हैं। बाकी 100 − 60 = 40 सवालों पर passages से कोई सही जवाब नहीं आता। अब आप reader को बेहतर कर सकते हैं, या retriever को। <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>बदलाव</th><th>हिसाब</th><th class="numh">सही जवाब</th></tr></thead>
+    <tbody>
+      <tr><td>अभी</td><td>60 × 0.9</td><td class="num">54</td></tr>
+      <tr><td>Reader perfect कर दिया</td><td>60 × 1.0</td><td class="num">60</td></tr>
+      <tr class="hi"><td>Retriever 80 तक ले गए, reader वैसा ही</td><td>?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">तीसरी row आप निकालिए</p>
+    <p>Retriever अब 80 सवालों पर सही passage लाता है, और reader अब भी 90% सही है। कितने सही जवाब मिलेंगे? Perfect reader से ज़्यादा, या कम?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>80 × 0.9 = <b>72</b>, यानी perfect reader से 72 − 60 = 12 ज़्यादा। Perfect reader भी 60 से आगे नहीं जा सकता, क्योंकि बाकी 40 सवालों पर सही passage उस तक पहुँचा ही नहीं।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Perfect reader 60 पर गुणा के एक नियम की वजह से रुकता है। किसी number को 1 से छोटे number से गुणा करें, तो वो घटता है, जैसे 60 × 0.5 = 30। 1 से गुणा करें, तो वो वैसा ही रहता है, जैसे 60 × 1.0 = 60। Reader का हिस्सा 1 से ज़्यादा नहीं हो सकता, क्योंकि 1 का मतलब है हर सवाल सही।</p>
+
+  <p><b>इसलिए सही जवाब उन 60 सवालों से ज़्यादा नहीं हो सकते, जिन पर retriever सही passage लाया।</b> यानी retriever का recall पूरे system की ऊपरी हद बन जाता है।</p>
+
+  <p>इस हद को <b class="term">recall ceiling</b> कहते हैं, यानी recall की छत। Stanford की slide उसके नीचे लिखती है <q>Missing evidence limits agent</q>, यानी जो सबूत prompt तक नहीं पहुँचा, वो system को रोकता है। Agent <a href="16-agentic-rag-dense.html">lesson 16</a> में आता है।</p>
+
+  <figure class="slide narrow">
+    <a href="img/slide-p63-retrieval.png"><img src="img/slide-p63-retrieval.png" alt="Stanford slide Issues with RAG का retrieval वाला हिस्सा: Recall ceiling, Missing evidence limits agent" loading="lazy"></a>
+    <figcaption>Stanford की slide Issues with RAG का retrieval वाला हिस्सा। बाकी दो दिक्कतें <a href="18-failure-modes-dense.html">lesson 18</a> में आती हैं।</figcaption>
+  </figure>
+
+  <p>K बढ़ाने से recall बढ़ता है, लेकिन गलत passages भी साथ आते हैं, जैसे K = 2 पर पुराना forum post। और company वाले prompt में 14 से ज़्यादा passages समाते ही नहीं।</p>
+
+  <p>Word overlap 6 passages पर भी दो बार चूका। पहली बार उसने सही और गलत passage को बराबर रखा। दूसरी बार query और passage ने एक बात अलग शब्दों में कही, help from a TA और run by the TAs, और score 0 आया। <a href="03-vectors-dense.html">Lesson 3</a> यहीं से शुरू होता है: text को ऐसे numbers में बदलना, जिनमें एक जैसी बात कहने वाले texts के numbers पास-पास हों।</p>
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 4 पड़ाव आसान version जैसे ही हैं। आगे के 4 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले retriever-reader slide के symbols और function का गणित है, फिर DrQA नाम का असली system और उसका training data। उसके बाद recall ceiling असली numbers में है, और आख़िर में आप slides खुद पढ़ते हैं।</p>
+</div>
+
+<!-- 5 -->
+<article class="concept" id="framework">
+  <h3><span class="cn">5</span>Retriever और reader, functions की तरह: slide के symbols</h3>
+
+  <p><b>Slide retriever और reader को दो functions की तरह लिखती है: retriever corpus और query से K passages देता है, और reader उनसे जवाब।</b> इसे पढ़ने के लिए पहले function का मतलब चाहिए।</p>
+
+  <p>Function एक नियम है, जो input लेकर output देता है। जैसे नियम हो “दोगुना करके 1 जोड़िए”, तो इसे f(x) = 2x + 1 लिखते हैं। यहाँ f नियम का नाम है, और x input। तब f(3) = 2 × 3 + 1 = 7। Code में भी function यही करता है: arguments लेता है, और एक value लौटाता है।</p>
+
+  <p>Function के एक से ज़्यादा inputs भी हो सकते हैं। जैसे f(x, y) = x + 2y में f(1, 3) = 1 + 2 × 3 = 7। Slide की दोनों lines ऐसे ही दो inputs वाले functions हैं, और “⟶” का मतलब है “ये output देता है”:</p>
+
+  <div class="formula">
+    <div><span class="fl">Retriever</span><i>f</i>(𝒟, <i>Q</i>) ⟶ <i>P</i><sub>1</sub>, …, <i>P</i><sub><i>K</i></sub></div>
+    <div><span class="fl">Reader</span><i>g</i>(<i>Q</i>, {<i>P</i><sub>1</sub>, …, <i>P</i><sub><i>K</i></sub>}) ⟶ <i>A</i></div>
+  </div>
+
+  <p>नीचे की table हर symbol को हमारे example से जोड़ती है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Symbol</th><th>मतलब</th><th>हमारे example में</th></tr></thead>
+    <tbody>
+      <tr><td>𝒟 = D<sub>1</sub>, D<sub>2</sub>, …, D<sub>N</sub></td><td>पूरा corpus, यानी documents की list। नीचे का छोटा number बताता है कि list में कौन सा document है, और “…” का मतलब है “इसी तरह आगे तक”।</td><td>D<sub>1</sub> = syllabus से D<sub>6</sub> = project page तक</td></tr>
+      <tr><td>N</td><td>Corpus में documents की गिनती</td><td>6<span class="sub">company में 2,000</span></td></tr>
+      <tr><td>Q</td><td>Query</td><td>which office hour is least crowded</td></tr>
+      <tr><td>f</td><td>Retriever का नियम</td><td>word overlap, फिर top-K</td></tr>
+      <tr><td>K</td><td>कितने passages लौटाने हैं। Slide कहती है कि K पहले से तय होता है, जैसे 100।</td><td>2</td></tr>
+      <tr><td>P<sub>1</sub>, …, P<sub>K</sub></td><td>Retriever के लौटाए K passages, score के क्रम में</td><td>P<sub>1</sub> = queue log, P<sub>2</sub> = पुराना forum post</td></tr>
+      <tr><td>{ … }</td><td>Curly brackets चीज़ों का एक group बनाते हैं, जिसे <button class="def" data-w="w-set">set</button> कहते हैं।</td><td>{queue log, पुराना forum post}</td></tr>
+      <tr><td>g</td><td>Reader का नियम</td><td>पड़ाव 3 वाला zero-shot LLM</td></tr>
+      <tr><td>A</td><td>जवाब, जिसे slide answer string कहती है, यानी text का एक टुकड़ा</td><td>Thursday 9am, about 3 students ahead of you</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Input में documents (D) हैं, और output में passages (P), क्योंकि पड़ाव 1 के मुताबिक retriever documents के टुकड़े लौटाता है। हमारी query पर दोनों functions तीन steps में चलते हैं:</p>
+  <ol class="plain">
+    <li>f(𝒟, Q): retriever हर passage का score निकालता है। Corpus के क्रम में scores 0, 1, 2, 2, 0, 0 हैं।</li>
+    <li>K = 2 पर ऊपर के दो passages लौटते हैं: P<sub>1</sub> = queue log और P<sub>2</sub> = पुराना forum post। दोनों का score 2 है, इसलिए यहाँ corpus का क्रम चला।</li>
+    <li>g(Q, {queue log, पुराना forum post}): reader दोनों passages पढ़कर A लिखता है। इस set में उलटी बातें कहने वाले दो passages हैं, इसलिए A में Thursday 9am भी आ सकता है, और Wednesday भी।</li>
+  </ol>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>Query <q>when is the project milestone due</q> और K = 2 पर f(𝒟, Q) क्या लौटाता है? K = 1 हो, तो g का input क्या है?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>K = 2 पर f लौटाता है: P<sub>1</sub> = syllabus (score 3) और P<sub>2</sub> = project page (score 2)। K = 1 पर g(Q, {syllabus}) बनता है, और A = Week 6, Thursday 11:59pm।</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="readcomp">A reading comprehension problem: reader का काम</h4>
+
+  <p>Reader वाली line के आगे slide पर <q>A reading comprehension problem!</q> लिखा है। <b class="term">Reading comprehension</b> का मतलब है: दिया हुआ text पढ़कर उसी पर पूछे सवाल का जवाब देना। Retriever के बाद reader का काम ठीक यही है, क्योंकि passages उसके हाथ में आ चुके हैं।</p>
+
+  <p>इस काम का सबसे मशहूर dataset <b class="term">SQuAD</b> है, यानी Stanford Question Answering Dataset। SQuAD बनाने वालों ने लोगों को Wikipedia का एक paragraph दिखाया, और लोगों ने उसी paragraph पर सवाल लिखे। जवाब हमेशा उसी paragraph का एक टुकड़ा है, और ऐसे टुकड़े को span कहते हैं। Training में 87,599 सवाल हैं। <span class="mine">paper से</span> एक example:</p>
+  <div class="sentence">Paragraph: … At the beginning of the 17th century the empire contained 32 provinces and numerous vassal states. …<br>Q: How many provinces did the Ottoman empire contain in the 17th century?<br>A: 32</div>
+
+  <h4 class="sub" id="fixed">Slide की बाकी lines: fixed retriever, और दो तरह के readers</h4>
+
+  <p>Slide के नीचे दो lines और हैं। पहली line retriever के बारे में है: <q>A standard TF-IDF information-retrieval sparse model (a fixed module)</q>। इसके तीन हिस्से हैं:</p>
+  <ul class="plain">
+    <li><button class="def" data-w="w-tfidf">TF-IDF</button> word overlap जैसा ही शब्द मिलाने का तरीका है, बस वो हर शब्द को बराबर नहीं गिनता। जो शब्द कम documents में आता है, उसे ज़्यादा वज़न मिलता है। जैसे least सिर्फ़ forum post में है, और office दो passages में, तो least का वज़न office से ज़्यादा है। पूरा हिसाब <a href="11-bm25-dense.html">lesson 11</a> में है।</li>
+    <li><button class="def" data-w="w-sparse">Sparse</button> का मतलब है: passage एक लंबी list है, जिसमें vocabulary के हर शब्द के लिए एक number है, और ज़्यादातर numbers 0 हैं। हमारे 6 passages में 69 अलग शब्द हैं, और पुराने forum post में उनमें से 14। तो उसकी list की 69 − 14 = 55 जगहों पर 0 है।</li>
+    <li>Fixed module का मतलब है कि retriever train नहीं होता। उसका नियम पहले से लिखा है, और data देखकर नहीं बदलता। हमारा word overlap भी fixed है: query वही रहे, तो scores हमेशा वही रहते हैं। <a href="12-dpr-dense.html">Lesson 12</a> का DPR इसके उलट train होने वाला retriever है।</li>
+  </ul>
+
+  <p>दूसरी line reader के बारे में है: <q>a neural reading comprehension model</q>। Neural model का मतलब है parameters वाला model, जो examples से train होता है, जैसे lesson 1 का LLM। Slide ऐसे reader के दो रास्ते बताती है:</p>
+  <ul class="plain">
+    <li><q>Could be trained on SQuAD and other distantly-supervised QA datasets</q>: reader को SQuAD जैसे data पर train कीजिए। Distantly supervised data पड़ाव 6 में आता है।</li>
+    <li><q>Or a zero-shot LLM (ChatGPT etc)</q>: पड़ाव 3 वाला reader, जो इस काम पर train हुए बिना instruction पढ़कर जवाब लिखता है।</li>
+  </ul>
+</article>
+
+<!-- 6 -->
+<article class="concept" id="drqa">
+  <h3><span class="cn">6</span>DrQA: पूरे Wikipedia पर retriever और reader</h3>
+
+  <p><b>DrQA 2017 का एक system है, जो सवाल का जवाब पूरे English Wikipedia में ढूँढकर देता है।</b> Danqi Chen और साथियों ने इसे Facebook AI Research में बनाया। <span class="mine">paper से</span> Stanford की slide इसे retriever-reader ढाँचे के example की तरह दिखाती है। Slide का सवाल है <q>How many of Warsaw's inhabitants spoke Polish in 1933?</q>, और जवाब 833,500।</p>
+
+  <p>यहाँ सवाल किसी भी विषय पर हो सकता है, और system को सही paragraph पहले से नहीं मिलता। ऐसे सवाल-जवाब को <b class="term">open-domain QA</b> कहते हैं। SQuAD वाले reading comprehension में paragraph सवाल के साथ आता है, और open-domain QA में system को उसे पूरे corpus से खुद ढूँढना पड़ता है।</p>
+
+  <h4 class="sub" id="drqa-retriever">DrQA का retriever</h4>
+
+  <p>DrQA का corpus 21 December 2016 का English Wikipedia है। List जैसे कुछ pages हटाने के बाद उसमें 5,075,182 articles बचे, यानी N = 5,075,182। Retriever train नहीं होता, और paper खुद उसे non-machine learning कहता है। वो सवाल और हर article को TF-IDF वाले शब्द-वज़नों की list की तरह देखता है, और इन lists से हर article का score निकालता है। हर सवाल पर वो 5 articles लौटाता है, यानी K = 5। <span class="mine">paper से</span></p>
+
+  <p>ये retriever अकेले शब्दों के साथ साथ-साथ आने वाले दो शब्द भी मिलाता है। साथ-साथ आने वाले दो शब्दों को <b class="term">bigram</b> कहते हैं। हमारी query के bigrams हैं: which office, office hour, hour is, is least और least crowded।</p>
+
+  <p>इन articles में अलग-अलग शब्द ही 9,008,962 हैं, और अलग-अलग bigrams इनसे कहीं ज़्यादा। इसलिए DrQA एक hash function से हर bigram को 2<sup>24</sup> खानों में से एक खाने का number देता है। Hash function एक तय नियम है, जो किसी भी text से एक तय range का number बनाता है। 2<sup>24</sup> का मतलब है 2 को 24 बार आपस में गुणा करना, यानी 16,777,216 खाने। <span class="mine">paper से</span></p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>हमारे corpus पर शब्दों की जगह query के bigrams गिनिए। क्या queue log और पुराने forum post का tie टूटेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>नहीं। Queue log में office hour है, और forum post में least crowded, यानी दोनों में 1 bigram मिलता है। बाकी 4 passages में query का कोई bigram नहीं है। Stopwords हटाकर bigrams बनाइए (office hour, hour least, least crowded), तब भी यही नतीजा आता है। <span class="mine">हिसाब मेरा</span></p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Paper ने नापा कि कितने % सवालों में जवाब का text retriever के लौटाए 5 articles में से किसी एक में है। मुकाबले में Wikipedia का अपना search engine था: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Dataset</th><th class="numh">Wikipedia search</th><th class="numh">DrQA, सिर्फ़ शब्द</th><th class="numh">DrQA, शब्द + bigrams</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>SQuAD</td><td class="num">62.7</td><td class="num">76.1</td><td class="num">77.8</td></tr>
+      <tr><td>CuratedTREC<span class="sub">TREC मुकाबलों के 2,180 सवाल</span></td><td class="num">81.0</td><td class="num">85.2</td><td class="num">86.0</td></tr>
+      <tr><td>WebQuestions<span class="sub">Google Suggest से लिए सवाल</span></td><td class="num">73.7</td><td class="num">75.5</td><td class="num">74.4</td></tr>
+      <tr><td>WikiMovies<span class="sub">films के बारे में सवाल</span></td><td class="num">61.7</td><td class="num">54.4</td><td class="num">70.3</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>SQuAD पर DrQA का retriever Wikipedia search से 77.8 − 62.7 = 15.1 points आगे है।</li>
+    <li>Bigrams से तीन datasets पर फ़ायदा हुआ, सबसे ज़्यादा WikiMovies पर, 54.4 से 70.3। WebQuestions पर थोड़ा नुकसान हुआ, 75.5 से 74.4।</li>
+    <li>Paper ने BM25 और word embeddings वाले retrievers भी आज़माए, और दोनों इससे पीछे रहे। <span class="mine">paper से</span></li>
+  </ul>
+
+  <h4 class="sub" id="drqa-reader">DrQA का reader</h4>
+
+  <p>DrQA का reader एक neural network है, जो SQuAD पर train हुआ। वो paragraph के हर token को दो probabilities देता है: जवाब यहाँ से शुरू होता है, और जवाब यहाँ ख़त्म होता है। फिर वो ऐसा टुकड़ा चुनता है, जिसके शुरू और आख़िर की probabilities का गुणा सबसे बड़ा हो। शर्त ये है कि शुरू और आख़िर के बीच 15 tokens से ज़्यादा का फ़ासला न हो। <span class="mine">paper से</span></p>
+
+  <p><b>यानी DrQA का reader जवाब खुद नहीं गढ़ता, वो लौटाए गए text में से एक span चुनता है।</b> पड़ाव 7 में ये बात ceiling के लिए ज़रूरी है। SQuAD के उन सवालों पर, जो training में नहीं थे, और जिनके साथ सही paragraph मिलता है, इस reader का <button class="def" data-w="w-em">Exact Match</button> 69.5% है। Exact Match का मतलब है कि जवाब हूबहू सही जवाब से मिले, तभी उसे सही गिनते हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="distant">Distant supervision: paragraph के label के बिना training data</h4>
+
+  <p><b>Distant supervision का मतलब है: जिस data में सिर्फ़ सवाल और जवाब हैं, उसके लिए सही paragraph अपने आप ढूँढकर training example बनाना।</b> SQuAD में हर सवाल के साथ उसका paragraph है, लेकिन CuratedTREC, WebQuestions और WikiMovies में सिर्फ़ सवाल-जवाब के जोड़े हैं। Reader को paragraph से span चुनना सीखना है, इसलिए उसे paragraph चाहिए। Slide पर distantly-supervised QA datasets का मतलब यही है।</p>
+
+  <p>हमारे corpus पर एक जोड़ा लीजिए: सवाल <q>when is the project milestone due</q>, और जवाब Week 6, Thursday 11:59pm। किसी passage पर label नहीं है। <span class="mine">मेरा example</span></p>
+  <ol class="plain">
+    <li>सवाल पर retriever चलाइए: syllabus को 3 मिलता है, project page को 2, और बाकी चारों को 0।</li>
+    <li>लौटे passages में से वो हटाइए, जिनमें जवाब का text हूबहू नहीं है। Project page में Week 6, Thursday 11:59pm नहीं है, इसलिए वो हटता है।</li>
+    <li>बचा syllabus training example बनता है: सवाल, syllabus, और उसमें जवाब वाला span।</li>
+  </ol>
+
+  <p>DrQA ने यही बड़े पैमाने पर किया, और साथ में कुछ filters लगाए। हर सवाल पर retriever के top 5 articles लिए, और जिन paragraphs में जवाब हूबहू नहीं था, उन्हें हटाया। 25 characters से छोटे और 1,500 से लंबे paragraphs भी हटे। सवाल में कोई नाम हो, जैसे Chadwick, तो वो नाम न रखने वाले paragraphs भी हटे। फिर जवाब के आस-पास के 20 tokens में सवाल के शब्द और bigrams गिनकर ज़्यादा से ज़्यादा 5 paragraphs रखे। <span class="mine">paper से</span></p>
+
+  <p>Paragraph का label किसी इंसान ने नहीं लगाया, बल्कि जवाब के text से अपने आप निकला, इसलिए इसे distant, यानी सीधा नहीं, supervision कहते हैं। जवाब का text किसी paragraph में संयोग से भी हो सकता है, इसलिए ऐसा label कभी-कभी गलत होता है। <span class="mine">ये चेतावनी मेरी</span></p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="ceiling-real">
+  <h3><span class="cn">7</span>Recall ceiling असली numbers में, और K का पूरा हिसाब</h3>
+
+  <p><b>DrQA में recall ceiling साफ़ दिखती है, क्योंकि उसका reader सिर्फ़ लौटाए गए text में से span चुन सकता है।</b> अगर जवाब का text 5 articles में है ही नहीं, तो reader उसे किसी भी तरह नहीं लिख सकता। Retriever SQuAD के 77.8% सवालों पर जवाब वाला article लाता है, इसलिए पूरा system ज़्यादा से ज़्यादा 77.8% सवालों पर सही हो सकता है। <span class="mine">numbers paper से, ceiling का हिसाब मेरा</span></p>
+
+  <p>Paper ने अलग-अलग हालात में reader को नापा। SQuAD के सवालों पर नतीजे ये हैं: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Reader को क्या मिला</th><th class="numh">Exact Match (%)</th></tr></thead>
+    <tbody>
+      <tr><td>सिर्फ़ सही paragraph, SQuAD की तरह</td><td class="num">69.5</td></tr>
+      <tr><td>सही article, पूरा</td><td class="num">49.4</td></tr>
+      <tr class="hi"><td>Retriever के 5 articles, पूरे Wikipedia से<span class="sub">SQuAD और distant supervision वाले data पर साथ train हुए reader के साथ 29.8</span></td><td class="num">27.1</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Ceiling, यानी retriever कितने % सवालों पर जवाब वाला article लाया: 77.8।</p>
+
+  <p>अब पड़ाव 4 वाला गुणा यहाँ लगाइए। अगर reader 5 articles में भी उतना ही अच्छा होता, जितना एक सही paragraph में, तो सही जवाब 77.8% का 0.695 हिस्सा होते। <span class="mine">हिसाब मेरा</span></p>
+  <ol class="plain">
+    <li>दोनों percentages को हिस्से में बदलिए: 77.8% = 0.778, और 69.5% = 0.695।</li>
+    <li>गुणा कीजिए: 0.778 × 0.695 = 0.541, यानी 54.1%।</li>
+    <li>असल नतीजे से मिलाइए: 54.1 ÷ 27.1 = 2.0, यानी असल नतीजा इस अंदाज़े का आधा है।</li>
+  </ol>
+
+  <p>Paper इस गिरावट की दो वजहें बताता है। पहली, एक paragraph की जगह 5 पूरे articles पढ़ने हैं, और उनमें उसी विषय के बहुत से sentences जवाब जैसे दिखते हैं। इसीलिए सही article मिलने पर भी number 69.5 से 49.4 पर आ जाता है। दूसरी, लोगों ने SQuAD के सवाल एक खास paragraph देखकर लिखे थे, इसलिए paragraph के बिना कई सवाल अधूरे लगते हैं। <span class="mine">paper से</span></p>
+
+  <p><b>मतलब recall ceiling सिर्फ़ ऊपरी हद है: system उसके नीचे कहीं भी रह सकता है।</b> DrQA में ceiling 77.8 है, और असल नतीजा 27.1। Retriever जितने सवालों पर चूका, वो ceiling तय करता है। Reader की कमज़ोरी ceiling और असल नतीजे के बीच का फ़ासला बनाती है।</p>
+
+  <h4 class="sub" id="ktable">हमारे corpus पर K बदलिए</h4>
+
+  <p>Least crowded वाली query पर हर K का नतीजा ये है। Score 0 वाले passages नहीं लौटते। <span class="mine">हिसाब मेरा</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">K</th><th>Retriever क्या लौटाता है</th><th>Queue log आया?</th><th class="numh">बिना जवाब वाले</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td>queue log</td><td>हाँ</td><td class="num">0</td></tr>
+      <tr><td class="num">2</td><td>queue log, पुराना forum post</td><td>हाँ</td><td class="num">1</td></tr>
+      <tr><td class="num">3 से 6</td><td>queue log, पुराना forum post, office hours page</td><td>हाँ</td><td class="num">2</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>K = 1 पर queue log सिर्फ़ इसलिए आया, क्योंकि बराबर scores पर corpus का क्रम चलता है। Corpus में queue log (P3) forum post (P4) से पहले लिखा है। अगर forum post पहले लिखा होता, तो K = 1 पर reader को सिर्फ़ forum post मिलता। यानी tie में नतीजा ऐसा नियम तय करता है, जिसका सवाल से कोई लेना-देना नहीं।</p>
+
+  <p>अब तीनों widget queries को K = 2 पर देखिए। Least crowded पर queue log आता है, milestone पर syllabus आता है, और TA वाली query पर कुछ नहीं आता। तो 3 में से 2 queries पर सही passage पहुँचा, और 2 ÷ 3 = 0.667। <a href="13-metrics-dense.html">Lesson 13</a> इस तरह के नाप को <button class="def" data-w="w-hitk">Hit@k</button> कहता है। इन 3 queries पर कोई भी reader passages के दम पर 3 में से 2 से ज़्यादा जवाब नहीं दे सकता।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>TA वाली query पर K = 6 कीजिए। क्या office hours page अब reader तक पहुँचेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>नहीं। हर passage का score 0 है, और retriever score 0 वाले passages लौटाता ही नहीं, इसलिए K कितना भी हो, कुछ नहीं आता। K बढ़ाने से recall तभी बढ़ता है, जब सही passage का score 0 से ऊपर हो, बस वो नीचे के rank पर हो।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Company वाले system में हर passage 500 tokens का है, इसलिए K passages के लिए K × 500 tokens चाहिए। K = 14 पर 14 × 500 = 7,000 tokens लगते हैं, यानी lesson 1 वाली पूरी जगह। इससे बड़ा K prompt में समाता ही नहीं, चाहे recall के लिए वो कितना भी अच्छा हो।</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">8</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे इस lesson की Stanford slides हैं, बिना किसी बदलाव के। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई बात अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval?" loading="lazy"></a>
+    <figcaption>Stanford की slide: Why Retrieval?</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Why Retrieval? वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Slide की query में this week भी है, यानी <q>which office hour this week is least crowded</q>। Word overlap के scores में क्या बदलेगा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>this एक stopword है, और week बचता है। Syllabus में Week 6 और Week 10 हैं, इसलिए syllabus को 1 मिलता है। Queue log में weeks लिखा है, week नहीं, इसलिए वो 2 पर रहता है, और forum post भी 2 पर। Tie वैसा ही रहता है। (पड़ाव 3)</p>
+        </details>
+      </li>
+      <li>
+        <p>दाईं तरफ़ के box में retriever का काम कौन सा है, और reader का कौन सा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Retrieved वाली line retriever का लौटाया passage है, यानी queue log। नीचे का जवाब reader ने उसी passage से लिखा। (पड़ाव 2 और 3)</p>
+        </details>
+      </li>
+      <li>
+        <p>बाईं तरफ़ का जवाब midweek hours की बात करता है। हमारे corpus का कौन सा passage यही कहता है, और K = 2 पर उसका क्या असर है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>पुराना forum post: midweek afternoons are usually the least crowded। K = 2 पर वो queue log के साथ prompt में जाता है, और reader फिर Wednesday लिख सकता है। (पड़ाव 3)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p11.png"><img src="img/slide-p11.png" alt="Stanford slide: Using Retrieval to Overcome LMs’ Shortcomings" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p11-diagram.png"><img src="img/slide-p11-diagram.png" alt="उसी slide का diagram, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Using Retrieval to Overcome LMs’ Shortcomings, और नीचे उसका diagram, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Just-in-time वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Just-in-time का क्या मतलब है, और ये <q>memorize everything</q> से कैसे अलग है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Model सब कुछ अपने parameters में याद नहीं रखता। सही text ठीक सवाल आने के वक्त prompt में आता है। (पड़ाव 2)</p>
+        </details>
+      </li>
+      <li>
+        <p>Dynamic और Interpretable, lesson 1 की कौन सी दिक्कतें हल करते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Dynamic: नई बात के लिए training नहीं चाहिए, बस corpus में passage जोड़िए। Interpretable: citation से आप source खोलकर check कर सकते हैं। (पड़ाव 2)</p>
+        </details>
+      </li>
+      <li>
+        <p>Diagram में Text Collection क्या है, और जवाब के आख़िर में [1] क्यों है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Text Collection corpus है, जिसमें retriever ढूँढता है। [1] Wikipedia - Immune system लौटाए गए passage का source है, और जवाब का [1] उसी की citation है। (पड़ाव 1 और 2)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p12.png"><img src="img/slide-p12.png" alt="Stanford slide: Retrieval Often Used in Open-Domain QA, DrQA" loading="lazy"></a>
+    <figcaption>Stanford की slide: Retrieval Often Used in Open-Domain QA। बीच का Wikipedia article image के तौर पर है, उसे पढ़ना ज़रूरी नहीं।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Open-domain QA वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>इस slide पर corpus क्या है, और DrQA में उसका N कितना है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>पूरा English Wikipedia। Paper में 5,075,182 articles हैं, यानी N = 5,075,182। (पड़ाव 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Document Reader ने 833,500 कहाँ से लिखा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Retriever के लौटाए Warsaw वाले article से। DrQA का reader जवाब खुद नहीं गढ़ता, वो article का एक span चुनता है। (पड़ाव 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>इसे open-domain QA क्यों कहते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>सवाल किसी भी विषय पर हो सकता है, और system को paragraph पहले से नहीं मिलता। उसे पूरे Wikipedia में खुद ढूँढना पड़ता है। (पड़ाव 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p13.png"><img src="img/slide-p13.png" alt="Stanford slide: Retriever-Reader Framework" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p13-formula.png"><img src="img/slide-p13-formula.png" alt="उसी slide की retriever और reader वाली lines, बड़ी करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p13-parts.png"><img src="img/slide-p13-parts.png" alt="उसी slide का retriever और reader वाला text, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Retriever-Reader Framework, और नीचे उसकी दोनों lines और नीचे का text, बड़ा करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Retriever-Reader Framework वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>f(𝒟, Q) ⟶ P<sub>1</sub>, …, P<sub>K</sub> को हमारी पहली query और K = 2 पर लिखिए।</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>f(6 passages वाला corpus, which office hour is least crowded) ⟶ queue log, पुराना forum post। (पड़ाव 5)</p>
+        </details>
+      </li>
+      <li>
+        <p>Slide retriever को a fixed module क्यों कहती है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>DrQA का TF-IDF retriever train नहीं होता। उसका नियम पहले से तय है, जैसे हमारे word overlap का। (पड़ाव 5 और 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Reader की पहली bullet में distantly-supervised का क्या मतलब है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>जिन datasets में सिर्फ़ सवाल-जवाब हैं, उनके paragraphs एक नियम ने retriever और जवाब के text से अपने आप ढूँढे। हमारे corpus पर ये नियम milestone वाले सवाल के लिए syllabus चुनता है। (पड़ाव 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p63.png"><img src="img/slide-p63.png" alt="Stanford slide: Issues with RAG" loading="lazy"></a>
+  </figure>
+  <figure class="slide narrow">
+    <a href="img/slide-p63-retrieval.png"><img src="img/slide-p63-retrieval.png" alt="उसी slide का retrieval वाला हिस्सा, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की slide: Issues with RAG, और नीचे उसका retrieval वाला हिस्सा, बड़ा करके। बाकी दिक्कतें <a href="18-failure-modes-dense.html">lesson 18</a> में आती हैं।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Issues with RAG वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p><q>Missing evidence limits agent</q>: पड़ाव 4 की table में ये हद कितनी थी?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>60 सवाल। Retriever 60 सवालों पर सही passage लाया, इसलिए perfect reader भी 60 पर रुका। (पड़ाव 4)</p>
+        </details>
+      </li>
+      <li>
+        <p>DrQA में ये हद कितनी है, और असल नतीजा कितना?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Ceiling 77.8% है, और असल Exact Match 27.1%। (पड़ाव 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>Least crowded वाली query पर K = 2 के prompt में दो passages उलटी बातें कहते हैं। Reader-side के कौन से boxes इससे मिलते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Distraction, यानी मिलता-जुलता लेकिन बेकार text, और Evidence conflict, यानी sources का आपस में टकराना। दोनों lesson 18 में आते हैं। (पड़ाव 3)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p2.png"><img src="img/slide-p2.png" alt="Stanford slide: Announcements" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p7.png"><img src="img/slide-p7.png" alt="Stanford slide: Project Team and Key Considerations" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p25.png"><img src="img/slide-p25.png" alt="Stanford slide: Chunking: Same Text, Three Splits" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p25-chunks.png"><img src="img/slide-p25-chunks.png" alt="Chunking वाली slide के तीनों तरीके, बड़े करके" loading="lazy"></a>
+    <figcaption>तीन Stanford slides, जिनसे हमारे corpus के passages आए: Announcements, Project Team and Key Considerations, और Chunking: Same Text, Three Splits। आख़िर में chunking वाले तीनों तरीके, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Corpus वाली slides पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>हमारे corpus के कौन से passages इन तीन slides से आए?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Announcements वाली slide से Homework 1 की announcement और project proposal की तारीख आई। Project Team वाली slide से 1-3 लोगों की team आई, और ये दोनों बातें project page में हैं। Chunking वाली slide से syllabus का पूरा text आया। (पड़ाव 1)</p>
+        </details>
+      </li>
+      <li>
+        <p>Chunking वाली slide पर 50 tokens वाले fixed chunks में milestone की तारीख कहाँ टूटी? इसका retrieval पर क्या असर है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>पहले chunk में due Week 6, Thursday तक है, और 11:59pm दूसरे chunk में। Retriever सिर्फ़ पहला chunk लौटाए, तो reader को पूरी तारीख नहीं मिलती। Passage कहाँ ख़त्म हो, ये <a href="07-chunking-dense.html">lesson 7</a> का विषय है। (पड़ाव 1)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Retrieval: हर query पर corpus से कुछ passages चुनकर prompt में रखना। इसके लिए training नहीं चाहिए, और जवाब के साथ citation आता है।</li>
+    <li>Retriever f(𝒟, Q) top-K passages देता है, और reader g(Q, {P<sub>1</sub>, …, P<sub>K</sub>}) उनसे जवाब लिखता है। Word overlap queue log और पुराने forum post को बराबर 2 देता है, और bigrams भी ये tie नहीं तोड़ते।</li>
+    <li>जो passage retriever नहीं लाया, reader उसे कभी नहीं पढ़ता, और यही recall ceiling है। DrQA में ceiling 77.8% है, लेकिन पूरा system 27.1% पर रहता है, क्योंकि ceiling सिर्फ़ ऊपरी हद है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-corpus">Corpus (collection)</dt><dd>सारे documents का set। जैसे company के 2,000 documents, या इस course के 6 छोटे texts।</dd>
+    <dt id="w-document">Document</dt><dd>Corpus की एक चीज़: web page, file या email। जैसे course का syllabus।</dd>
+    <dt id="w-passage">Passage</dt><dd>Document का छोटा टुकड़ा, जो retriever लौटाता है। जैसे syllabus का वो paragraph, जिसमें milestone की तारीख है।</dd>
+    <dt id="w-query">Query</dt><dd>वो सवाल, जिसके लिए ढूँढना है। जैसे “which office hour is least crowded”।</dd>
+    <dt id="w-retrieval">Retrieval</dt><dd>Query के लिए काम के passages ढूँढकर prompt में रखना। जैसे queue log का passage सवाल के साथ prompt में जाए।</dd>
+    <dt id="w-citation">Citation</dt><dd>जवाब के साथ उसका source। जैसे “Thursday 9am [P3]” में [P3], यानी queue log।</dd>
+    <dt id="w-nonparam">Non-parametric memory</dt><dd>Model के बाहर, corpus में रखी जानकारी। जैसे queue log: उसे बदलने के लिए training नहीं चाहिए।</dd>
+    <dt id="w-retriever">Retriever</dt><dd>हर passage को score देकर top-K लौटाने वाला हिस्सा। जैसे इस lesson का word overlap वाला retriever।</dd>
+    <dt id="w-score">Score</dt><dd>Passage query के लिए कितना काम का है, उसका number। जैसे word overlap में queue log का score 2।</dd>
+    <dt id="w-topk">Top-K</dt><dd>सबसे ज़्यादा score वाले K passages। जैसे K = 2 पर queue log और पुराना forum post।</dd>
+    <dt id="w-overlap">Word overlap</dt><dd>Query के कितने शब्द passage में भी हैं। सबसे आसान score। जैसे queue log में office और hour हैं, तो score 2।</dd>
+    <dt id="w-stopwords">Stopwords</dt><dd>is, the, which जैसे बहुत आम शब्द, जिन्हें गिनती में नहीं लेते। “which office hour is least crowded” से which और is हटते हैं।</dd>
+    <dt id="w-reader">Reader</dt><dd>Query और top-K passages पढ़कर जवाब लिखने वाला हिस्सा। आज अक्सर एक LLM। जैसे queue log पढ़कर “Thursday 9am” लिखना।</dd>
+    <dt id="w-zeroshot">Zero-shot</dt><dd>उस खास काम पर training के बिना, सिर्फ़ instruction पढ़कर काम करना। जैसे prompt में लिखा “Answer the question using the passage below”।</dd>
+    <dt id="w-recall">Recall</dt><dd>Retriever कितनी बार ज़रूरी passage ढूँढ पाता है। जैसे 100 सवालों में 60 पर, तो recall 60%।</dd>
+    <dt id="w-ceiling">Recall ceiling</dt><dd>Retriever का recall पूरे system की ऊपरी हद बन जाता है। Recall 60% है, तो reader कितना भी अच्छा हो, 100 में से 60 से ज़्यादा जवाब passages के दम पर नहीं आते।</dd>
+    <dt id="w-readcomp">Reading comprehension</dt><dd>दिया हुआ text पढ़कर उसी पर पूछे सवाल का जवाब देना। Retriever के बाद reader का काम यही है। जैसे Ottoman empire वाला paragraph पढ़कर 32 बताना।</dd>
+    <dt id="w-squad">SQuAD</dt><dd>Stanford Question Answering Dataset: Wikipedia के paragraphs पर लोगों के लिखे सवाल, और जवाब हमेशा paragraph का एक span। जैसे training में 87,599 सवाल।</dd>
+    <dt id="w-opendomain">Open-domain QA</dt><dd>किसी भी विषय का सवाल, जिसका paragraph साथ नहीं मिलता, इसलिए system उसे पूरे corpus में खुद ढूँढता है। जैसे DrQA में Warsaw वाला सवाल, पूरे Wikipedia पर।</dd>
+    <dt id="w-drqa">DrQA</dt><dd>2017 का retriever-reader system: fixed TF-IDF retriever पूरे Wikipedia से 5 articles लौटाता है, और neural reader उनमें से एक span चुनता है। जैसे Warsaw वाले सवाल पर 833,500।</dd>
+    <dt id="w-bigram">Bigram</dt><dd>साथ-साथ आने वाले दो शब्द। जैसे queue log में office hour, और forum post में least crowded।</dd>
+    <dt id="w-distant">Distant supervision</dt><dd>सिर्फ़ सवाल-जवाब वाले data के लिए paragraph अपने आप ढूँढना: retriever चलाइए, और जिन passages में जवाब का text हूबहू है, उन्हें रखिए। जैसे milestone वाले सवाल पर syllabus।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="01-how-llms-answer-dense.html">पिछला: Lesson 1</a>
+    <a href="03-vectors-dense.html">अगला: Lesson 3, Vectors और similarity</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Paper: Chen et al., 2017, “Reading Wikipedia to Answer Open-Domain Questions”। “मेरा” और “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var PASSAGES = [
+    { id: "P1", name: "Syllabus", text: "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10." },
+    { id: "P2", name: "Office hours page", text: "Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs." },
+    { id: "P3", name: "Queue log", text: "Queue log, last 3 weeks: Tuesday 4pm office hour averaged 14 students waiting; Thursday 9am office hour averaged 3." },
+    { id: "P4", name: "पुराना forum post", text: "Old forum post (2024): midweek afternoons are usually the least crowded time to visit." },
+    { id: "P5", name: "Homework 1 की announcement", text: "Homework 1 will be released on Oct 5." },
+    { id: "P6", name: "Project page", text: "Project proposal due on Oct 9. Teams of 1-3 people are recommended." }
+  ];
+  var QUERIES = [
+    { q: "which office hour is least crowded", answer: "P3" },
+    { q: "when is the project milestone due", answer: "P1" },
+    { q: "when can I get help from a TA", answer: "P2" }
+  ];
+  var STOP = ["which", "is", "the", "when", "can", "i", "get", "from", "a", "an", "to", "of", "on", "in", "it", "and", "are", "be", "this", "what", "how", "do"];
+  var T = {
+    words: "Stopwords हटाने के बाद query के शब्द: ",
+    none: function (ans) { return "Retriever ने <b>कुछ नहीं</b> लौटाया। सही passage, " + ans + ", reader तक नहीं पहुँचा।"; },
+    got: function (list, ans, hit, extra) {
+      return "Reader को मिले: <b>" + list + "</b>। सही passage, " + ans + (hit ? ", इनमें <b>है</b>।" : ", इनमें <b>नहीं है</b>।") +
+        (extra > 0 ? " साथ में " + extra + " और passage भी " + (extra === 1 ? "गया।" : "गए।") : "");
+    }
+  };
+
+  function words(s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function byId(id) { return PASSAGES.filter(function (p) { return p.id === id; })[0]; }
+
+  var qi = 0;
+  var qBox = document.getElementById("rw-q");
+  var kIn = document.getElementById("rw-k");
+  var kOut = document.getElementById("rw-ko");
+  var body = document.getElementById("rw-body");
+  var out = document.getElementById("rw-out");
+  var wordsEl = document.getElementById("rw-words");
+
+  qBox.innerHTML = QUERIES.map(function (x, i) { return '<button type="button" data-i="' + i + '">' + esc(x.q) + "</button>"; }).join("");
+  qBox.querySelectorAll("button").forEach(function (b) {
+    b.addEventListener("click", function () { qi = Number(b.dataset.i); render(); });
+  });
+  kIn.addEventListener("input", render);
+
+  function highlight(text, qset) {
+    return text.split(/([A-Za-z0-9]+)/).map(function (part) {
+      return qset[part.toLowerCase()] ? "<mark>" + esc(part) + "</mark>" : esc(part);
+    }).join("");
+  }
+
+  function render() {
+    var K = Number(kIn.value);
+    kOut.textContent = K;
+    qBox.querySelectorAll("button").forEach(function (b, i) { b.setAttribute("aria-pressed", i === qi ? "true" : "false"); });
+    var Q = QUERIES[qi];
+    var qw = words(Q.q).filter(function (w) { return STOP.indexOf(w) < 0; });
+    var qset = {};
+    qw.forEach(function (w) { qset[w] = true; });
+    wordsEl.innerHTML = T.words + "<b>" + qw.join(", ") + "</b>";
+
+    var scored = PASSAGES.map(function (p, idx) {
+      var pw = {};
+      words(p.text).forEach(function (w) { pw[w] = true; });
+      var s = 0;
+      Object.keys(qset).forEach(function (w) { if (pw[w]) s++; });
+      return { p: p, s: s, idx: idx };
+    });
+    scored.sort(function (a, b) { return b.s - a.s || a.idx - b.idx; });
+
+    var returned = [];
+    body.innerHTML = scored.map(function (r, rank) {
+      var inTop = r.s > 0 && rank < K;
+      if (inTop) returned.push(r.p.id);
+      return '<tr class="' + (inTop ? "hi" : "") + '"><td class="num">' + (r.s > 0 ? rank + 1 : "") + "</td><td><b>" + r.p.id + " " + esc(r.p.name) + '</b><span class="sub">' +
+        highlight(r.p.text, qset) + '</span></td><td class="num">' + r.s + "</td></tr>";
+    }).join("");
+
+    var ans = byId(Q.answer).name;
+    if (returned.length === 0) {
+      out.innerHTML = T.none(ans);
+    } else {
+      var hit = returned.indexOf(Q.answer) >= 0;
+      var list = returned.map(function (id) { return byId(id).name; }).join(", ");
+      out.innerHTML = T.got(list, ans, hit, hit ? returned.length - 1 : 0);
+    }
+  }
+  render();
+})();
+</script>
+</body>
+</html>

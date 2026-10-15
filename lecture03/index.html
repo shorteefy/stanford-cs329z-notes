@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lecture 3: RAG + Agents</title>
+<link rel="stylesheet" href="study.css">
+</head>
+<body>
+<main>
+
+<nav class="topbar">
+  <a href="../index.html">AI Agents, पहली नींव से · सारे lectures</a>
+  <span class="switch"><b>हिन्दी</b> · <a href="index-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">CS 329Z · Engineering AI Agents · Lecture 3</p>
+  <h1>RAG + Agents, पहली नींव से</h1>
+  <p class="lede">ये lecture एक सवाल पर टिका है: LLM को सही जानकारी सही वक्त पर कैसे दें, और ये तरीका कहाँ टूटता है। यहाँ वो सवाल 18 lessons में बँटा है, और सारे तैयार हैं। हर lesson पिछले lessons पर बनता है, और हर नया शब्द वहीं समझाता है, जहाँ वो पहली बार आता है।</p>
+</header>
+
+<section class="how" style="margin-bottom:40px">
+  <h2 style="font-size:20px">कैसे पढ़ें</h2>
+  <ul class="plain">
+    <li>Lessons क्रम से पढ़ सकते हैं, लेकिन ये ज़रूरी नहीं। नीचे का नक्शा बताता है कि किस lesson से पहले क्या चाहिए। कोई नया शब्द अपने lesson से पहले बिना मतलब के नहीं आता। बाद के lessons में वो फिर आए, तो वहाँ उसके lesson का नाम होता है।</li>
+    <li>हर lesson पहले बताता है कि नई चीज़ क्या है, फिर उसे एक असली गड़बड़ पर लगाता है, जैसे BM25 का पुराने forum post को queue log से ऊपर रखना। Lesson के ऊपर एक सीढ़ी है: हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे। जो पड़ाव पहले से आता है, उसे छोड़ सकते हैं।</li>
+    <li>कई जगह “पहले सोचिए” वाला सवाल है, और कहीं-कहीं table की एक row आपको खुद निकालनी है। जवाब खोलने से पहले खुद हल कीजिए, कागज़ पर हिसाब लगाकर।</li>
+    <li>Widgets में numbers बदलिए। हर widget में वही mechanism चलता है, जो lesson में समझाया है।</li>
+    <li>जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click कीजिए। उसका मतलब वहीं खुल जाता है, और साथ में उस lesson का link भी होता है जहाँ वो पूरा समझाया है।</li>
+    <li>हर lesson के दो versions हैं। <b>आसान</b> version मुख्य बात धीरे-धीरे सिखाता है। <b>गहरा</b> version Stanford की slides की हर line तक जाता है, और paper की वो बातें भी लेता है जिन पर slide टिकी है। दोनों English में भी हैं, और lesson के ऊपर के switch से आप कभी भी बदल सकते हैं।</li>
+  </ul>
+  <p class="note">मैंने माना है कि आप code पढ़ लेते हैं और school का गणित जानते हैं, लेकिन ML और statistics के शब्द आपके लिए नए हैं। कोई lesson बहुत आसान या बहुत भारी लगे, तो बताइए।</p>
+</section>
+
+<section id="map" class="mapsec">
+  <h2>Lessons का नक्शा</h2>
+  <p>ये नक्शा बताता है कि कौन सा lesson किस पर टिका है। हर line एक dependency है: नीचे वाले lesson को ऊपर वाला चाहिए। एक ही row के lessons एक-दूसरे पर नहीं टिके, इसलिए उन्हें किसी भी क्रम में पढ़ सकते हैं।</p>
+  <p>किसी lesson पर click कीजिए। नक्शा दिखाएगा कि उससे पहले क्या चाहिए, वो आगे क्या खोलता है, और कौन से lessons उससे आज़ाद हैं।</p>
+  <div class="mlegend">
+    <span><i class="sw base"></i>नींव: बाकी सब इन पर टिके हैं</span>
+    <span><i class="sw core"></i>मुख्य रास्ता</span>
+    <span><i class="sw deep"></i>गहराई: पहली बार छोड़ सकते हैं</span>
+  </div>
+  <div class="lmap" id="lmap">
+    <svg class="lmap-edges" id="lmap-edges" aria-hidden="true"></svg>
+    <div class="lmap-grid">
+      <button type="button" class="mnode base span" data-id="1" style="grid-area:1/2/2/4"><b>1</b><span>LLM का जवाब</span></button>
+      <button type="button" class="mnode base span" data-id="2" style="grid-area:2/2/3/4"><b>2</b><span>Retrieval</span></button>
+      <button type="button" class="mnode base span" data-id="3" style="grid-area:3/2/4/4"><b>3</b><span>Vectors</span></button>
+      <button type="button" class="mnode base span" data-id="4" style="grid-area:4/2/5/4"><b>4</b><span>Probability</span></button>
+      <button type="button" class="mnode base" data-id="5" style="grid-area:5/2/6/3"><b>5</b><span>RAG model</span></button>
+      <button type="button" class="mnode core" data-id="11" style="grid-area:5/3/6/4"><b>11</b><span>BM25</span></button>
+      <button type="button" class="mnode core" data-id="13" style="grid-area:5/4/6/5"><b>13</b><span>नापना</span></button>
+      <button type="button" class="mnode core" data-id="6" style="grid-area:6/2/7/3"><b>6</b><span>RAG pipeline</span></button>
+      <button type="button" class="mnode core" data-id="12" style="grid-area:6/3/7/4"><b>12</b><span>DPR</span></button>
+      <button type="button" class="mnode core" data-id="7" style="grid-area:7/1/8/2"><b>7</b><span>Chunking</span></button>
+      <button type="button" class="mnode core" data-id="14" style="grid-area:7/3/8/4"><b>14</b><span>Hybrid, rerank</span></button>
+      <button type="button" class="mnode deep" data-id="8" style="grid-area:8/1/9/2"><b>8</b><span>खोया context</span></button>
+      <button type="button" class="mnode deep" data-id="9" style="grid-area:8/2/9/3"><b>9</b><span>RAPTOR, GraphRAG</span></button>
+      <button type="button" class="mnode core" data-id="16" style="grid-area:8/3/9/4"><b>16</b><span>Agentic RAG</span></button>
+      <button type="button" class="mnode deep" data-id="15" style="grid-area:8/4/9/5"><b>15</b><span>ColBERT</span></button>
+      <button type="button" class="mnode deep" data-id="10" style="grid-area:9/2/10/3"><b>10</b><span>Vector search</span></button>
+      <button type="button" class="mnode deep" data-id="17" style="grid-area:9/3/10/4"><b>17</b><span>Search-R1</span></button>
+      <button type="button" class="mnode core span" data-id="18" style="grid-area:10/2/11/4"><b>18</b><span>कहाँ टूटता है</span></button>
+    </div>
+  </div>
+  <div class="mapinfo" id="mapinfo" aria-live="polite"></div>
+  <p class="note">Lines हर lesson की “पहले से क्या चाहिए” line से बनी हैं। जो dependency किसी दूसरे रास्ते से पहले ही आ जाती है, उसकी line नहीं दिखाई। नींव, मुख्य और गहराई वाला बँटवारा मेरा है। गहराई वाले lessons पर आगे के दो ही lessons टिके हैं। Lesson 18 सबको जोड़ता है, और lesson 10 को lesson 9 से clustering और graph के शब्द चाहिए।</p>
+</section>
+
+<section>
+  <h2>18 lessons</h2>
+  <p>हर lesson पिछले lesson की एक कमी से शुरू होता है।</p>
+  <ol class="lessons">
+    <!-- ROWS START -->
+    <li class="ready"><span class="n">1</span><span><a class="ttl" href="01-how-llms-answer.html">LLM जवाब कैसे लिखता है, और कहाँ फँसता है</a><span class="why">Office hours वाले सवाल पर अकेले LLM ने queue log देखे बिना भरोसे से Wednesday लिखा। ये lesson दिखाता है कि LLM जवाब token by token कैसे बनाता है, और data न हो तो कहाँ फँसता है।</span><span class="new">LLM, Token, Vocabulary, Tokenizer, Probability, Next-token prediction, Parameters (weights), Training, Parametric knowledge, Knowledge cutoff, Prompt, Context window, Hallucination</span></span><span class="st"><a href="01-how-llms-answer.html">आसान</a> · <a href="01-how-llms-answer-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">2</span><span><a class="ttl" href="02-retrieval.html">Retrieval: जवाब लिखने से पहले ढूँढना</a><span class="why">LLM सिर्फ़ उन्हीं बातों से जवाब लिखता है, जो उसके prompt में हैं, और prompt में 60,000 में से 14 passages ही समाते हैं। हर सवाल पर वो 14 passages चुनने का सबसे सीधा तरीका बनाना है।</span><span class="new">Corpus (collection), Document, Passage, Query, Retrieval, Citation, Non-parametric memory, Retriever, Score, Top-K, Word overlap, Stopwords, Reader, Zero-shot, Recall, Recall ceiling</span></span><span class="st"><a href="02-retrieval.html">आसान</a> · <a href="02-retrieval-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">3</span><span><a class="ttl" href="03-vectors.html">Text को numbers में बदलना: vectors और similarity</a><span class="why">Query “when can I get help from a TA” और जवाब वाले office hours page में एक भी शब्द common नहीं है। इसलिए word overlap ने हर passage को 0 दिया। Text को vectors में बदलकर उनकी तुलना करनी है।</span><span class="new">Vector, Dimension, Dot product (inner product), ∑ (sigma), Length, Cosine similarity, Normalize, Embedding, Embedding model (encoder), Index, Offline और online</span></span><span class="st"><a href="03-vectors.html">आसान</a> · <a href="03-vectors-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">4</span><span><a class="ttl" href="04-probability-tools.html">Probability के औज़ार: RAG का formula पढ़ने की तैयारी</a><span class="why">Retriever का score 1.56 और LLM की probability 0.81 सीधे नहीं जुड़ते, लेकिन lesson 5 का RAG formula इन्हीं से जवाब की probability बनाता है। ये lesson वो औज़ार बनाता है, जिनसे आप वो formula हाथ से चला सकें।</span><span class="new">Conditional probability, p(A|B), Chain rule (probability वाला), ∏ (capital pi), Marginalization, ≈, exp और e, Softmax, ∝, d<sup>⊤</sup>q, Natural log, ln, Loss, Likelihood, Negative log-likelihood, Gradient</span></span><span class="st"><a href="04-probability-tools.html">आसान</a> · <a href="04-probability-tools-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">5</span><span><a class="ttl" href="05-rag-model.html">RAG model: retriever और generator एक साथ</a><span class="why">Lesson 4 के आख़िर में retriever ने पुराने forum post को ज़्यादा वज़न दिया, और सही जवाब का chance 0.685 से 0.315 पर गिर गया। Retriever को सुधारना है, जबकि training data में सिर्फ़ सवाल और जवाब हैं।</span><span class="new">RAG, Latent variable, η और θ, BERT, MIPS, Generator, Encoder-decoder, Concatenate, RAG-Sequence, RAG-Token, End-to-end training, Backpropagation, Exact Match, Closed book और open book</span></span><span class="st"><a href="05-rag-model.html">आसान</a> · <a href="05-rag-model-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">6</span><span><a class="ttl" href="06-rag-pipeline.html">RAG pipeline: Naive, Advanced और Modular</a><span class="why">API वाले LLM को आप train नहीं कर सकते, इसलिए lesson 2 की दोनों गलतियाँ लौट आती हैं। उन्हें LLM से पहले के steps में सुधारना है।</span><span class="new">Frozen LLM, Pipeline, Naive RAG, Indexing time और query time, Pre-retrieval, Query routing, Query rewriting, Query expansion, Post-retrieval, Rerank और reranker, Summary, Fusion, Advanced RAG, Modular RAG, Pattern, Demonstrations (few-shot), Multi-hop question</span></span><span class="st"><a href="06-rag-pipeline.html">आसान</a> · <a href="06-rag-pipeline-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">7</span><span><a class="ttl" href="07-chunking.html">Chunking: document को retrieval के टुकड़ों में काटना</a><span class="why">40 pages का syllabus हर 50 tokens पर कटा, तो milestone की तारीख दो chunks में टूट गई। न काटें, तो पूरे syllabus के एक vector में milestone की 2 lines घुल जाती हैं।</span><span class="new">Word type और token in context, Static word embedding, Contextual embedding, Passage embedding, Multimodal embedding, Graph embedding, Mean pooling, Chunk, Fixed-size chunking, Overlap, Stride, Semantic chunking, Context-enriched chunking, Metadata, AI-driven dynamic chunking</span></span><span class="st"><a href="07-chunking.html">आसान</a> · <a href="07-chunking-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">8</span><span><a class="ttl" href="08-contextual-retrieval.html">Chunk का खोया context वापस लाना</a><span class="why">काटने के बाद ACME वाले chunk में न company का नाम बचा, न quarter, इसलिए retriever उसे 49 मिलते-जुलते chunks से अलग नहीं कर पाता। Chunk को उसका खोया context वापस देना है।</span><span class="new">Context loss, Contextual retrieval, Failed retrievals@20, Naive chunking, Late chunking, Long-context encoder</span></span><span class="st"><a href="08-contextual-retrieval.html">आसान</a> · <a href="08-contextual-retrieval-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">9</span><span><a class="ttl" href="09-raptor-graphrag.html">पूरे document पर फैले सवाल: RAPTOR और GraphRAG</a><span class="why">“सारी deadlines क्या हैं?” का जवाब तीन passages में बिखरा है, इसलिए top-K सिर्फ़ एक टुकड़ा ऊपर लाता है। Index में कई passages का सार चाहिए, ताकि पूरे document पर फैले सवाल का जवाब एक जगह मिले।</span><span class="new">Detail question और thematic question, Clustering, Cluster और centroid, Soft clustering, RAPTOR, Tree, node, leaf, root, Entity, Relation, Knowledge graph और edge, Community, GraphRAG, Query-focused summarization</span></span><span class="st"><a href="09-raptor-graphrag.html">आसान</a> · <a href="09-raptor-graphrag-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">10</span><span><a class="ttl" href="10-vector-search.html">करोड़ों vectors में तेज़ search</a><span class="why">Lesson 3 का retriever हर query पर index के हर vector से तुलना करता है। 10 करोड़ passages पर इसमें हर query करीब 7.7 seconds लेती है। कम vectors देखकर ज़्यादातर बार वही सबसे पास वाले vectors ढूँढने हैं।</span><span class="new">Exact search (brute force), Big-O, O(N·d), Nearest neighbors, ANN, दूरी, IVF, nprobe, Product quantization (PQ), Codebook, Proximity graph, Greedy search, HNSW</span></span><span class="st"><a href="10-vector-search.html">आसान</a> · <a href="10-vector-search-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">11</span><span><a class="ttl" href="11-bm25.html">BM25: rare शब्द, गिनती और length से बना score</a><span class="why">Lesson 2 के word overlap ने queue log और पुराने forum post को बराबर 2 दिया। हर शब्द को rarity, गिनती और length से वज़न देकर ये tie तोड़ना है, और देखना है कि वो किस तरफ़ टूटता है।</span><span class="new">Term, Document frequency, n(q), IDF, TF-IDF, Term frequency, f(q, D), Saturation और k1, Length normalization, b और avgdl, BM25, Inverted index, Sparse और dense vector</span></span><span class="st"><a href="11-bm25.html">आसान</a> · <a href="11-bm25-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">12</span><span><a class="ttl" href="12-dpr.html">DPR: सवाल-passage जोड़ों से train हुआ retriever</a><span class="why">BM25 ने पुराने forum post को queue log से ऊपर रखा। दो encoders को सवाल-passage जोड़ों से train करके सही passage ऊपर लाना है।</span><span class="new">DPR, Bi-encoder, Pretraining, Fine-tuning, Positive और negative passage, Contrastive loss, Batch, In-batch negatives, Hard negative, Top-k retrieval accuracy</span></span><span class="st"><a href="12-dpr.html">आसान</a> · <a href="12-dpr-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">13</span><span><a class="ttl" href="13-metrics.html">Retriever को नापना: Hit@k, MRR, Recall@k और nDCG</a><span class="why">Retriever सुधरा, दूसरे सवाल का सही passage ऊपर आया, फिर भी top-3 वाली गिनती 0.667 पर अटकी रही। ऐसे numbers बनाने हैं, जो ये बदलाव देख सकें।</span><span class="new">Relevance labels, Set, ∩, ∅, |A|, 𝟙[शर्त], Hit@k, Failed@k, MRR@k, Recall@k, log<sub>2</sub>, DCG और IDCG, nDCG@k</span></span><span class="st"><a href="13-metrics.html">आसान</a> · <a href="13-metrics-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">14</span><span><a class="ttl" href="14-hybrid-rerank.html">Hybrid search और reranking</a><span class="why">BM25 ने E2 को तीसरे rank पर रखा, dense ने पहले। दोनों lists को एक list में मिलाना है, और फिर ऊपर के passages को query के साथ पढ़कर उनका क्रम सुधारना है।</span><span class="new">Paraphrase, Literal, Hybrid search, Reciprocal rank fusion (RRF), Attention, Cross-encoder, Reranking, Shortlist</span></span><span class="st"><a href="14-hybrid-rerank.html">आसान</a> · <a href="14-hybrid-rerank-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">15</span><span><a class="ttl" href="15-colbert.html">ColBERT: हर token का अपना vector</a><span class="why">Query error 4012 पर एक vector वाले bi-encoder ने छोटे, गलत upload note को जवाब वाले लंबे FAQ से ऊपर रखा। हर token का अपना vector रखकर, और query के हर token का सबसे अच्छा match जोड़कर, सही passage ऊपर लाना है।</span><span class="new">Late interaction, MaxSim, ColBERT, Latency, FLOPs, Cascade</span></span><span class="st"><a href="15-colbert.html">आसान</a> · <a href="15-colbert-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">16</span><span><a class="ttl" href="16-agentic-rag.html">Agentic RAG: ढूँढना एक फ़ैसला है</a><span class="why">BM25 ने पुराने forum post को queue log से ऊपर रखा, और pipeline ने उसे बिना परखे prompt में भेज दिया। ढूँढना एक तय step की जगह हर कदम का फ़ैसला बने, और जो मिला उसे कोई परखे।</span><span class="new">Agent, Action और tool, Observation, Agentic RAG, Self-RAG, Reflection tokens, CRAG, Retrieval evaluator, Knowledge refinement, Threshold</span></span><span class="st"><a href="16-agentic-rag.html">आसान</a> · <a href="16-agentic-rag-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">17</span><span><a class="ttl" href="17-search-r1.html">Search-R1: कब और क्या search करें, ये सीखना</a><span class="why">Training data में सिर्फ़ सही जवाब था, search के steps नहीं। Model को कब और क्या search करना है, ये सिर्फ़ आख़िरी जवाब के reward से सीखना है।</span><span class="new">Reinforcement learning (RL), Policy, Rollout (trajectory), Reward, Search-R1, Advantage, PPO और value model, GRPO, Standard deviation, Reference LLM और KL penalty</span></span><span class="st"><a href="17-search-r1.html">आसान</a> · <a href="17-search-r1-dense.html">गहरा</a></span></li>
+    <li class="ready"><span class="n">18</span><span><a class="ttl" href="18-failure-modes.html">RAG कहाँ टूटता है: ढूँढने, पढ़ने और loop की 9 failures</a><span class="why">Citation सही दिखा, फिर भी जवाब गलत था, क्योंकि index में office hours page पुराना था। बाहर से हर गलत जवाब एक जैसा दिखता है, इसलिए पहले पहचानना है कि गलती ढूँढने में हुई, पढ़ने में, या agent के loop में।</span><span class="new">Stale index, Permission leak, Lost in the middle, Distraction, Evidence conflict, Compounding error, No stopping rule, Prompt injection</span></span><span class="st"><a href="18-failure-modes.html">आसान</a> · <a href="18-failure-modes-dense.html">गहरा</a></span></li>
+    <!-- ROWS END -->
+  </ol>
+  <p class="note" style="margin-top:12px">Slides 2–8 course project के बारे में हैं, इसलिए किसी lesson में नहीं हैं।</p>
+</section>
+
+<section style="margin-top:56px">
+  <h2>अब तक के शब्द</h2>
+  <p>सारे 18 lessons के नए शब्द, A से Z। हर शब्द उस lesson से link है, जहाँ वो समझाया है।</p>
+  <dl class="words">
+    <!-- GLOSSARY START -->
+    <dt><a href="03-vectors.html#w-sigma">∑ (sigma)</a></dt><dd>नीचे लिखी range पर जोड़ते जाइए। जैसे i = 1 से 2 तक a<sub>i</sub>b<sub>i</sub> का जोड़, यानी a<sub>1</sub>b<sub>1</sub> + a<sub>2</sub>b<sub>2</sub>।</dd>
+    <dt><a href="04-probability-tools.html#w-prod">∏ (capital pi)</a></dt><dd>नीचे लिखी range पर सबका गुणा। जैसे तीन tokens पर 0.21 × 0.31 × 0.71 = 0.046।</dd>
+    <dt><a href="04-probability-tools.html#w-approx">≈</a></dt><dd>करीब बराबर। RAG के formula में सिर्फ़ top-K passages जुड़ते हैं, इसलिए जोड़ “करीब” बराबर है।</dd>
+    <dt><a href="04-probability-tools.html#w-propto">∝</a></dt><dd>के अनुपात में। आख़िर में सबको एक ही number से ऐसे भाग दीजिए कि जोड़ 1 हो। जैसे exps 2.718 और 1 से 0.731 और 0.269।</dd>
+    <dt><a href="05-rag-model.html#w-eta-theta">η और θ</a></dt><dd>Retriever (eta) और generator (theta) के parameters के नाम। इसीलिए retriever को p<sub>η</sub>(z|x) लिखते हैं, और generator को p<sub>θ</sub>(y|x, z)।</dd>
+    <dt><a href="07-chunking-dense.html#w-ceil">⌈x⌉ (ceiling)</a></dt><dd>x या उससे बड़ा सबसे छोटा पूरा number। जैसे ⌈23.75⌉ = 24, और chunks = ⌈(1,000 − 50) ÷ 40⌉ + 1 = 25।</dd>
+    <dt><a href="10-vector-search.html#w-distance">दूरी</a></dt><dd>दो vectors के फ़र्क वाले vector की length। जैसे [0.8, 0.2] और [0.9, 0.1] का फ़र्क [0.1, −0.1] है, तो दूरी √(0.01 + 0.01) = 0.14।</dd>
+    <dt><a href="12-dpr-dense.html#w-partial">∂ (partial derivative)</a></dt><dd>बाकी सब वैसा रखकर एक input थोड़ा बदलें, तो output किस दर से बदलता है। जैसे ∂𝓛/∂s<sup>+</sup> = −0.814, यानी queue log का score 0.01 बढ़े, तो loss करीब 0.008 घटता है।</dd>
+    <dt><a href="12-dpr-dense.html#w-rd">ℝ<sup>d</sup></a></dt><dd>d real numbers की list, यानी d dimension वाला vector। जैसे [1.0, 0.5, 0.5, 1.0] ∈ ℝ<sup>4</sup>, और DPR के vectors ℝ<sup>768</sup> में हैं।</dd>
+    <dt><a href="12-dpr-dense.html#w-nabla">∇ (nabla)</a></dt><dd>∇<sub>θ</sub>𝓛: θ के हर parameter पर loss की दर, एक list में। Training हर parameter को उसकी दर की उल्टी दिशा में थोड़ा खिसकाती है। जैसे तीन scores पर ये दरें −0.814, +0.506 और +0.307 थीं।</dd>
+    <dt><a href="13-metrics.html#w-indicator">𝟙[शर्त]</a></dt><dd>शर्त सच हो तो 1, नहीं तो 0। जैसे q3 के top-3 में कोई सही passage नहीं है, तो 𝟙[R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) ≠ ∅] = 0।</dd>
+    <dt><a href="13-metrics-dense.html#w-subset">⊆ (subset)</a></dt><dd>A ⊆ B का मतलब है कि A की हर चीज़ B में भी है। जैसे Top<sub>3</sub>(q1) ⊆ Top<sub>5</sub>(q1), इसलिए Recall@5 कभी Recall@3 से कम नहीं होता।</dd>
+    <dt><a href="14-hybrid-rerank-dense.html#w-cls">[CLS] और [SEP]</a></dt><dd>BERT के input के खास tokens। [CLS] सबसे आगे आता है, और cross-encoder में उसका आख़िरी vector पूरी जोड़ी की बात रखता है। [SEP] query और passage को अलग करता है, जैसे [CLS] query [SEP] passage [SEP]।</dd>
+    <dt><a href="05-rag-model-dense.html#w-ablation">Ablation</a></dt><dd>Model का एक हिस्सा हटाकर या रोककर दोबारा नापना, ताकि उस हिस्से का असर दिखे। जैसे RAG-Sequence में query encoder रोकने पर NQ (dev) 44.0 से 41.2 पर आता है।</dd>
+    <dt><a href="16-agentic-rag.html#w-action">Action और tool</a></dt><dd>Agent का चुना काम, जैसे <q>OH timings</q> search करना। Tool वो program है, जो ये काम करता है, जैसे search engine।</dd>
+    <dt><a href="06-rag-pipeline.html#w-advanced">Advanced RAG</a></dt><dd>Naive RAG में pre-retrieval और post-retrieval steps जोड़कर बनी pipeline। जैसे Rewrite, Retrieve, Rerank, Read।</dd>
+    <dt><a href="17-search-r1.html#w-advantage">Advantage</a></dt><dd>Rollout उम्मीद से कितना बेहतर या बुरा रहा। जैसे rewards 0, 0, 0, 1 में o<sub>4</sub> का +1.73, और बाकी तीन का −0.58।</dd>
+    <dt><a href="16-agentic-rag.html#w-agent">Agent</a></dt><dd>Loop में काम करने वाला LLM, जो action चुनता है, observation पढ़ता है, और अगला action तय करता है। जैसे <q>OH timings</q> की search खाली आई, तो agent ने नई query लिखी।</dd>
+    <dt><a href="16-agentic-rag.html#w-agentic">Agentic RAG</a></dt><dd>RAG, जिसमें ढूँढना agent का action है, pipeline का तय step नहीं। जैसे 17 × 3 पर 0 searches, और Jed Hoyer वाले सवाल पर 3।</dd>
+    <dt><a href="07-chunking.html#w-aichunk">AI-driven dynamic chunking</a></dt><dd>LLM से पूछकर काटना कि text में बात कहाँ बदलती है। हर document पर LLM calls लगती हैं।</dd>
+    <dt><a href="10-vector-search.html#w-ann">ANN</a></dt><dd>Approximate nearest neighbor search: कम vectors देखकर ज़्यादातर बार सही neighbors ढूँढना। जैसे असली top-10 में से 9 मिलें, तो recall 0.9।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-attention">Attention</a></dt><dd>हर token बाकी tokens के vectors का वज़न वाला औसत लेकर अपना नया vector बनाता है, और वज़नों का जोड़ 1 होता है। जैसे crowded [0.5, 0.5] averaged [1.0, 0.0] को 0.6 वज़न दे, तो [0.8, 0.2] बनता है।</dd>
+    <dt><a href="05-rag-model.html#w-backprop">Backpropagation</a></dt><dd>Loss से पीछे की तरफ़ चलकर हर parameter का gradient निकालने का तरीका, छोटे में backprop। RAG में ये generator और query encoder तक जाता है, passage encoder तक नहीं।</dd>
+    <dt><a href="01-how-llms-answer-dense.html#w-bart">BART</a></dt><dd>Text पढ़कर text लिखने वाला model, जिसमें करीब 400 million parameters हैं। RAG का generator यही है। जैसे Jeopardy test में अकेला BART सिर्फ़ 7.1% जोड़ों में ज़्यादा factual निकला।</dd>
+    <dt><a href="12-dpr.html#w-batch">Batch</a></dt><dd>Training में एक साथ चलने वाले सवालों का group। जैसे DPR में 128 सवालों का batch।</dd>
+    <dt><a href="16-agentic-rag-dense.html#w-beam">Beam search</a></dt><dd>हर कदम पर सबसे ऊँचे score वाले B अधूरे जवाब रखकर आगे बढ़ना। जैसे B = 2 पर queue log (2.15) और forum post (1.475) वाले जवाब अगले कदम तक रहते हैं, और Homework (0.425) छूटता है।</dd>
+    <dt><a href="05-rag-model.html#w-bert">BERT</a></dt><dd>Google का 2018 का encoder model। RAG के retriever के दोनों encoders, query encoder और passage encoder, इसी से बने हैं।</dd>
+    <dt><a href="12-dpr.html#w-biencoder">Bi-encoder</a></dt><dd>सवाल और passage के लिए दो अलग encoders, और score उनका dot product। Passages पहले से encode होते हैं। जैसे 2.1 करोड़ passages हों, तब भी हर सवाल पर model 1 बार चलता है।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-bic">BIC</a></dt><dd>ln(N) · k − 2 ln(L̂): fit की likelihood और parameters की गिनती तौलकर clusters की गिनती चुनना, और सबसे छोटा BIC जीतता है। जैसे 6 passages पर K = 2 का BIC −23.64, और K = 3 का −20.11।</dd>
+    <dt><a href="10-vector-search.html#w-bigo">Big-O, O(N·d)</a></dt><dd>N या d बढ़ने पर खर्च किस हिसाब से बढ़ता है। जैसे O(N·d) में N दोगुना हो, तो खर्च भी दोगुना।</dd>
+    <dt><a href="02-retrieval-dense.html#w-bigram">Bigram</a></dt><dd>साथ-साथ आने वाले दो शब्द। जैसे queue log में office hour, और forum post में least crowded।</dd>
+    <dt><a href="11-bm25.html#w-bm25">BM25</a></dt><dd>हर query term का IDF × TF हिस्सा, सब terms का जोड़। जैसे forum post का 2.749, और queue log का 2.473।</dd>
+    <dt><a href="15-colbert-dense.html#w-candgen">Candidate generation</a></dt><dd>सस्ते तरीके से उम्मीदवार passages निकालना, ताकि महँगा हिसाब सिर्फ़ उन पर चले। जैसे ColBERT में हर query vector के top-1,000 token vectors, यानी ज़्यादा से ज़्यादा 32,000 passages।</dd>
+    <dt><a href="15-colbert.html#w-cascade">Cascade</a></dt><dd>Retrievers की line, जिसमें हर अगला step कम passages पर ज़्यादा सटीक और महँगा काम करता है। जैसे करोड़ों से 1,000, फिर 50, फिर 5।</dd>
+    <dt><a href="04-probability-tools.html#w-chain">Chain rule (probability वाला)</a></dt><dd>p(A और B) = p(A) × p(B|A)। कई steps हों, तो सबका गुणा। जैसे p(Tuesday) × p(भरा | Tuesday) = 0.5 × 0.8 = 0.40। Lesson 12 का दरों वाला chain rule इससे अलग है।</dd>
+    <dt><a href="12-dpr-dense.html#w-chainrule">Chain rule (दरों वाला)</a></dt><dd>एक के बाद एक जुड़ी दरें गुणा होती हैं। जैसे queue log के score पर ln Z की दर 2.72 × (1 ÷ 14.59) = 0.186 है। Lesson 4 का probability वाला chain rule इससे अलग है।</dd>
+    <dt><a href="07-chunking.html#w-chunk">Chunk</a></dt><dd>Retrieval के लिए document का एक टुकड़ा, और retrieval की basic unit। जैसे 40 pages के syllabus का Grading वाला हिस्सा।</dd>
+    <dt><a href="02-retrieval.html#w-citation">Citation</a></dt><dd>जवाब के साथ उसका source। जैसे “Thursday 9am [P3]” में [P3], यानी queue log।</dd>
+    <dt><a href="17-search-r1-dense.html#w-clip">Clipping और ε</a></dt><dd>Ratio को 1 − ε से 1 + ε के बीच रोकना, और फिर min से छोटा term लेना। जैसे ε = 0.2 और A = +1.73 पर ratio 1.5 का term 2.076 पर रुकता है।</dd>
+    <dt><a href="05-rag-model.html#w-closed">Closed book और open book</a></dt><dd>सिर्फ़ parameters से जवाब, या पहले documents में ढूँढकर जवाब। जैसे NQ पर closed book T5-11B 34.5, और open book RAG-Sequence 44.5।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-cluster">Cluster और centroid</a></dt><dd>Cluster एक group है, और centroid उसके vectors का औसत। जैसे [0.1, 0.9], [0.2, 0.8] और [0.15, 0.85] का centroid [0.15, 0.85]।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-clustering">Clustering</a></dt><dd>Vectors को ऐसे groups में बाँटना कि एक group के vectors आपस में पास हों। जैसे syllabus [0.1, 0.9] और project page [0.2, 0.8] का cosine 0.99 है, तो दोनों एक group में।</dd>
+    <dt><a href="10-vector-search.html#w-codebook">Codebook</a></dt><dd>हर टुकड़े के नमूना vectors (codewords) की list। जैसे #0 [1, 0], #1 [0, 1], #2 [0.5, 0.5], #3 [0.7, 0.7]।</dd>
+    <dt><a href="15-colbert.html#w-colbert">ColBERT</a></dt><dd>Late interaction वाला retriever, जो हर token का vector रखता है और MaxSim से score देता है। 2020 में Khattab और Zaharia ने बनाया। जैसे MS MARCO पर उसका Recall@1000 96.8 है।</dd>
+    <dt><a href="04-probability-tools-dense.html#w-colvec">Column vector और ⊤</a></dt><dd>Column vector के numbers ऊपर-नीचे लिखे होते हैं, और ⊤ (transpose) उसे row बना देता है। Row गुणा column dot product है। जैसे row [0.9, 0.1] गुणा column [0.8, 0.2] = 0.74।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-community">Community</a></dt><dd>Graph का आपस में बहुत जुड़ा हिस्सा। जैसे Office hours, TAs, Room 104 और Zoom।</dd>
+    <dt><a href="18-failure-modes.html#w-compounding">Compounding error</a></dt><dd>पहले कदम की गलती आगे के हर कदम में जाए। जैसे हर कदम 0.9 पर सही हो, तो 3 कदम 0.729, और 5 कदम 0.59।</dd>
+    <dt><a href="05-rag-model.html#w-concat">Concatenate</a></dt><dd>दो texts को आगे-पीछे जोड़कर एक text बनाना। जैसे <q>question: …</q> के बाद <q>passage: …</q> जोड़ना।</dd>
+    <dt><a href="04-probability-tools.html#w-conditional">Conditional probability, p(A|B)</a></dt><dd>B पता हो, तो A की probability। “|” को “given” पढ़िए। जैसे p(भरा | Tuesday) = 16 ÷ 20 = 0.80।</dd>
+    <dt><a href="08-contextual-retrieval.html#w-contextloss">Context loss</a></dt><dd>काटने के बाद chunk ये न बता पाए कि वो किस document या विषय की बात है। जैसे <q>The company’s revenue grew by 3%</q> में company का नाम नहीं है।</dd>
+    <dt><a href="01-how-llms-answer.html#w-context">Context window</a></dt><dd>Model एक बार में ज़्यादा से ज़्यादा कितने tokens पढ़ सकता है। Prompt और जवाब, दोनों इसमें आते हैं। जैसे 8,000 की window में 7,500 का prompt हो, तो जवाब के लिए 500 बचते हैं।</dd>
+    <dt><a href="07-chunking.html#w-enriched">Context-enriched chunking</a></dt><dd>हर chunk के साथ metadata या summary रखना। जैसे हर chunk के ऊपर <q>Source: CS 329Z syllabus, section: Grading</q>।</dd>
+    <dt><a href="07-chunking.html#w-contextual">Contextual embedding</a></dt><dd>हर token का अपने sentence के हिसाब से अलग vector। जैसे BERT। <q>Late days may not be applied</q> में late [0.1, 0.9] है, और <q>late afternoon office hours</q> में [0.9, 0.1]। <span class="mine">मेरे numbers</span></dd>
+    <dt><a href="08-contextual-retrieval.html#w-ctxretrieval">Contextual retrieval</a></dt><dd>हर chunk के आगे LLM का लिखा 50–100 tokens का context जोड़कर index करना। जैसे <q>From ACME Corp’s Q2 2023 SEC filing</q>।</dd>
+    <dt><a href="12-dpr.html#w-contrastive">Contrastive loss</a></dt><dd>Positive और negatives के scores पर softmax, फिर positive का −ln। ये सिर्फ़ scores के फ़र्क देखता है। जैसे scores 1.0, 2.0, 1.5 पर loss 1.68, और 5.0, 2.0, 0.5 पर 0.059।</dd>
+    <dt><a href="02-retrieval.html#w-corpus">Corpus (collection)</a></dt><dd>सारे documents का set। जैसे company के 2,000 documents, या इस course के 6 छोटे texts।</dd>
+    <dt><a href="03-vectors.html#w-cosine">Cosine similarity</a></dt><dd>Dot product ÷ दोनों lengths का गुणा। सिर्फ़ दिशा देखता है, −1 से 1 के बीच। जैसे 0.74 ÷ (0.82 × 0.91) = 0.99।</dd>
+    <dt><a href="16-agentic-rag.html#w-crag">CRAG</a></dt><dd>Corrective RAG: एक evaluator retrieval को Correct, Incorrect या Ambiguous कहता है, और उसी हिसाब से refinement, web search या दोनों चलते हैं। जैसे 0.4 वाला forum post Ambiguous है।</dd>
+    <dt><a href="16-agentic-rag-dense.html#w-critic">Critic</a></dt><dd>किसी और के लिखे या लाए को grade देने वाला model। जैसे Self-RAG में Llama 2 7B का critic training data में reflection tokens लगाता है, और CRAG की slide अपने evaluator को critic कहती है।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-crossenc">Cross-encoder</a></dt><dd>Query और passage को जोड़कर एक model में डालने वाला reranker, जो जोड़ी का सीधा score देता है। ये हर passage पर पूरा चलता है, जैसे BERT-base में 10.7 ms per passage।</dd>
+    <dt><a href="13-metrics.html#w-dcg">DCG और IDCG</a></dt><dd>हर rank का grade ÷ log<sub>2</sub>(rank + 1), फिर जोड़। IDCG सबसे अच्छे क्रम का DCG। जैसे q1 का क्रम queue log (3), forum post (0), office hours page (1): DCG 3.5, IDCG 3.631।</dd>
+    <dt><a href="03-vectors-dense.html#w-decomposable">Decomposable similarity</a></dt><dd>ऐसा score, जो सवाल के vector और passage के vector से निकले, और passage का vector सवाल देखे बिना बने। तभी offline index बन सकता है। जैसे dot product, cosine और दूरी।</dd>
+    <dt><a href="06-rag-pipeline.html#w-demos">Demonstrations (few-shot)</a></dt><dd>Prompt में सवाल से पहले दिए गए हल किए हुए examples। जैसे “Q: When is the milestone due? A: Week 6, Thursday [P1]”।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-detailq">Detail question और thematic question</a></dt><dd>जवाब एक जगह लिखा हो, या कई passages को मिलाकर बने। जैसे “milestone कब है?” और “सारी deadlines क्या हैं?”।</dd>
+    <dt><a href="03-vectors.html#w-dimension">Dimension</a></dt><dd>Vector में कितने numbers हैं। जैसे [0.9, 0.1] का dimension 2 है, और BERT-base के vectors का 768।</dd>
+    <dt><a href="02-retrieval-dense.html#w-distant">Distant supervision</a></dt><dd>सिर्फ़ सवाल-जवाब वाले data के लिए paragraph अपने आप ढूँढना: retriever चलाइए, और जिन passages में जवाब का text हूबहू है, उन्हें रखिए। जैसे milestone वाले सवाल पर syllabus।</dd>
+    <dt><a href="18-failure-modes.html#w-distraction">Distraction</a></dt><dd>मिलता-जुलता लेकिन बेकार passage reader को भटका दे। जैसे 2024 का पुराना forum post।</dd>
+    <dt><a href="02-retrieval.html#w-document">Document</a></dt><dd>Corpus की एक चीज़: web page, file या email। जैसे course का syllabus।</dd>
+    <dt><a href="11-bm25.html#w-df">Document frequency, n(q)</a></dt><dd>कितने documents में term q है। जैसे milestone का n = 1, और office का 2।</dd>
+    <dt><a href="03-vectors.html#w-dot">Dot product (inner product)</a></dt><dd>एक ही जगह वाले numbers का गुणा, फिर सबका जोड़। जैसे [0.8, 0.2] और [0.9, 0.1]: 0.72 + 0.02 = 0.74।</dd>
+    <dt><a href="12-dpr.html#w-dpr">DPR</a></dt><dd>Dense Passage Retrieval: दो BERT encoders वाला bi-encoder retriever, जो सवाल-passage जोड़ों पर contrastive loss से train होता है। 2020 में Karpukhin और साथियों ने बनाया, और lesson 5 के RAG का retriever यही था।</dd>
+    <dt><a href="02-retrieval-dense.html#w-drqa">DrQA</a></dt><dd>2017 का retriever-reader system: fixed TF-IDF retriever पूरे Wikipedia से 5 articles लौटाता है, और neural reader उनमें से एक span चुनता है। जैसे Warsaw वाले सवाल पर 833,500।</dd>
+    <dt><a href="06-rag-pipeline-dense.html#w-dsp">DSP</a></dt><dd>Demonstrate–Search–Predict: frozen LM और frozen retriever के बीच text भेजने वाला program, जो demonstrations खुद बनाता है। 2022 में Stanford के Khattab और साथियों ने बनाया। जैसे HotPotQA पर Exact Match 51.4।</dd>
+    <dt><a href="04-probability-tools.html#w-transpose">d<sup>⊤</sup>q</a></dt><dd>Vectors d और q का dot product लिखने का एक तरीका। जैसे office hours page [0.9, 0.1] और सवाल [0.8, 0.2] पर 0.74।</dd>
+    <dt><a href="10-vector-search-dense.html#w-ef">ef</a></dt><dd>HNSW की search में अब तक मिले सबसे पास वाले nodes की list का size। बड़ा ef यानी ज़्यादा दूरियाँ और ऊँचा recall। जैसे node 70 से ef = 3 पर नतीजा {75, 70, 80}।</dd>
+    <dt><a href="03-vectors.html#w-embedding">Embedding</a></dt><dd>Trained model से बना text का vector। मिलती-जुलती बात वाले texts की दिशा मिलती-जुलती होती है, जैसे “help from a TA” और “run by the TAs”।</dd>
+    <dt><a href="03-vectors.html#w-encoder">Embedding model (encoder)</a></dt><dd>Text पढ़कर तय लंबाई का embedding बनाने वाला model। जैसे query को [0.8, 0.2] जैसा vector देना।</dd>
+    <dt><a href="05-rag-model.html#w-encdec">Encoder-decoder</a></dt><dd>Encoder input के vectors बनाता है, और decoder उन्हें देखकर एक-एक token लिखता है। BART ऐसा model है।</dd>
+    <dt><a href="05-rag-model.html#w-e2e">End-to-end training</a></dt><dd>एक ही loss से सारे हिस्सों को साथ train करना। RAG में query encoder और generator, दोनों उसी −ln p(y|x) से सीखते हैं। जैसे −ln 0.70 = 0.357।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-entity">Entity</a></dt><dd>नाम वाली कोई चीज़: व्यक्ति, जगह, course, document या तारीख। जैसे Week 6, TAs, Room 104।</dd>
+    <dt><a href="18-failure-modes.html#w-conflict">Evidence conflict</a></dt><dd>दो sources, या source और model के parameters, अलग बात कहें। जैसे Week 6 और Week 7।</dd>
+    <dt><a href="05-rag-model.html#w-em">Exact Match</a></dt><dd>जवाब सही जवाब से हूबहू मिले, तभी सही। Score ऐसे सवालों का % है। जैसे NQ पर RAG-Sequence का 44.5।</dd>
+    <dt><a href="10-vector-search.html#w-exact">Exact search (brute force)</a></dt><dd>हर vector से तुलना करके पक्का सही top-k निकालना। जैसे 21 vectors हों, तो 21 दूरियाँ गिनना।</dd>
+    <dt><a href="04-probability-tools.html#w-exp">exp और e</a></dt><dd>exp(s) = e<sup>s</sup>, जहाँ e करीब 2.718 है। हमेशा 0 से बड़ा, और e<sup>a+1</sup> = e<sup>a</sup> × e। जैसे exp(1) = 2.718, exp(0) = 1, exp(−1) = 0.368।</dd>
+    <dt><a href="17-search-r1-dense.html#w-expect">Expected value, 𝔼[ · ]</a></dt><dd>हर नतीजे को उसकी probability से गुणा करके जोड़ना, यानी बहुत सारे rollouts पर औसत। जैसे 0.6 × 1 + 0.4 × 0 = 0.6।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-f1">F1</a></dt><dd>Precision और recall को मिलाने वाला नाप, 2PR ÷ (P + R)। जैसे P = 0.75 और R = 0.6 पर F1 = 0.667।</dd>
+    <dt><a href="08-contextual-retrieval.html#w-failed20">Failed retrievals@20</a></dt><dd>हर query का एक सही chunk हो, तो कितने % queries में वो top-20 में नहीं आया। छोटा बेहतर। जैसे 1,000 queries में 29 fail हों, तो 2.9%।</dd>
+    <dt><a href="13-metrics.html#w-failedk">Failed@k</a></dt><dd>1 − Hit@k, यानी कितने हिस्से queries में top-k में एक भी सही passage नहीं। जैसे Failed@3 = 1 − 0.667 = 0.333।</dd>
+    <dt><a href="12-dpr-dense.html#w-faiss">FAISS</a></dt><dd>Vectors में तेज़ search की open-source library। जैसे DPR ने इसमें 2.1 करोड़ vectors का HNSW index बनाया, जिसमें करीब 8.5 घंटे लगे।</dd>
+    <dt><a href="12-dpr.html#w-finetuning">Fine-tuning</a></dt><dd>पहले से trained model को अपने काम के data पर और train करना। जैसे DPR, BERT को सवाल-passage जोड़ों पर train करता है।</dd>
+    <dt><a href="07-chunking.html#w-fixed">Fixed-size chunking</a></dt><dd>तय गिनती के tokens पर काटना, चाहे बात बीच में टूटे। जैसे हर 50 tokens पर।</dd>
+    <dt><a href="15-colbert.html#w-flops">FLOPs</a></dt><dd>कितने गुणा और जोड़ लगे, यानी computer का काम। जैसे 3 numbers वाले dot product में 6 FLOPs, और 768 numbers वाले में 1,536।</dd>
+    <dt><a href="06-rag-pipeline.html#w-frozen">Frozen LLM</a></dt><dd>जिसके parameters आप नहीं बदल सकते, सिर्फ़ prompt भेज सकते हैं। जैसे GPT या Gemini, जो आप API से लेते हैं।</dd>
+    <dt><a href="06-rag-pipeline.html#w-fusion">Fusion</a></dt><dd>कई ranked lists को मिलाकर एक list बनाना। जैसे पहली list queue log, forum post, office hours page है, और दूसरी office hours page, queue log। जो दोनों में हैं, वो ऊपर आते हैं।</dd>
+    <dt><a href="17-search-r1-dense.html#w-gae">GAE</a></dt><dd>Generalized advantage estimation: हर कदम पर δ = reward + अगला अंदाज़ा − यह अंदाज़ा, और आगे के सारे δ का जोड़। γ = λ = 1 पर advantage = reward − V, जैसे 1 − 0.3 = 0.7।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-gmm">Gaussian mixture model (GMM)</a></dt><dd>Bell curves का weighted जोड़: P(x) = ∑ π<sub>k</sub> 𝒩<sub>k</sub>(x)। ये हर passage को हर cluster की membership देता है। जैसे [0.6, 0.4] को office hours 0.904 और deadlines 0.096।</dd>
+    <dt><a href="05-rag-model.html#w-generator">Generator</a></dt><dd>सवाल और एक passage पढ़कर जवाब लिखने वाला model, p<sub>θ</sub>(y|x, z)। RAG में ये BART है। जैसे queue log के साथ <q>Thursday 9am</q> को 0.9।</dd>
+    <dt><a href="15-colbert-dense.html#w-gib">GiB</a></dt><dd>2<sup>30</sup> = 1,07,37,41,824 bytes, यानी GB से करीब 7% बड़ा। जैसे MS MARCO पर ColBERT का index 286 GiB है।</dd>
+    <dt><a href="04-probability-tools.html#w-gradient">Gradient</a></dt><dd>हर parameter को किस दिशा में और कितना बदलें कि loss घटे, उसका हिसाब। जैसे lesson 1 में training ने parameters को उस दिशा में बदला, जिसमें Thursday की probability 0.10 से 0.12 हुई और loss 2.303 से 2.120।</dd>
+    <dt><a href="07-chunking.html#w-graphemb">Graph embedding</a></dt><dd>किसी network के node या relation का vector। जैसे node2vec। Course के graph में TA, office hours, और उनके बीच का runs वाला relation।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-graphrag">GraphRAG</a></dt><dd>Knowledge graph, उसकी communities और उनके सारों से global सवालों का जवाब। जैसे सारी deadlines वाला जवाब, जो Project और Homework 1 वाली communities से बनता है।</dd>
+    <dt><a href="01-how-llms-answer-dense.html#w-decoding">Greedy decoding और sampling</a></dt><dd>हर step पर सबसे ऊँची probability वाला token लेना greedy decoding है, और probability के हिसाब से random चुनना sampling। जैसे greedy हर बार Wednesday afternoon लिखता है, और sampling 100 में से करीब 21 बार Thursday से शुरू करता है।</dd>
+    <dt><a href="10-vector-search.html#w-greedy">Greedy search</a></dt><dd>हर कदम पर query के सबसे पास वाले neighbor पर जाना, अटकने तक। जैसे query 73 के लिए 70 से 75 पर जाना।</dd>
+    <dt><a href="17-search-r1.html#w-grpo">GRPO</a></dt><dd>Group के rewards के औसत और standard deviation से advantage। Value model नहीं चाहिए। जैसे 0, 0, 0, 1 पर औसत 0.25 और standard deviation 0.433।</dd>
+    <dt><a href="01-how-llms-answer.html#w-hallucination">Hallucination</a></dt><dd>भरोसे वाला, लेकिन गलत या बिना source वाला जवाब। जैसे log देखे बिना लिखा Wednesday afternoon।</dd>
+    <dt><a href="12-dpr.html#w-hardneg">Hard negative</a></dt><dd>सवाल से मिलता-जुलता, लेकिन गलत passage। DPR इन्हें BM25 के ऊपर वाले passages से लेता है। जैसे इस सवाल पर forum post।</dd>
+    <dt><a href="13-metrics-dense.html#w-harmonic">Harmonic series</a></dt><dd>1 + 1/2 + 1/3 + …, यानी 1 ÷ rank वाले numbers, जो MRR में आते हैं। इनका जोड़ धीरे बढ़ता है, करीब ln n + 0.577, जैसे पहले 1,000 numbers का जोड़ 7.485।</dd>
+    <dt><a href="13-metrics.html#w-hitk">Hit@k</a></dt><dd>कितने हिस्से queries में top-k में कम से कम एक सही passage है। जैसे k = 3 पर 3 में से 2 queries, यानी 0.667।</dd>
+    <dt><a href="10-vector-search.html#w-hnsw">HNSW</a></dt><dd>Layers वाला proximity graph: ऊपर से greedy चाल, और अटकने पर एक layer नीचे। जैसे query 73 पर 4 कदम।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-hybrid">Hybrid search</a></dt><dd>दोनों retrievers, शब्दों वाला और dense, चलाकर उनकी lists मिलाना। जैसे BM25 की E1, E3, E2 और dense की E2, E1, E3 से एक list बनाना।</dd>
+    <dt><a href="11-bm25-dense.html#w-hyperparam">Hyperparameter</a></dt><dd>Formula या model का ऐसा number, जिसे training नहीं बदलती, और जिसे dev set पर आज़माकर चुनते हैं। जैसे BM25 के k1 और b, जिन्हें DPR paper ने 0.9 और 0.4 चुना।</dd>
+    <dt><a href="08-contextual-retrieval-dense.html#w-iid">i.i.d. और conditional embeddings</a></dt><dd>i.i.d.: हर chunk का vector दूसरे chunks से बिल्कुल अलग बनना, जैसे naive chunking में। Conditional: हर chunk का vector पूरे document को देखकर बनना, जैसे late chunking में <q>It</q> का [0.9, 0.1]।</dd>
+    <dt><a href="11-bm25.html#w-idf">IDF</a></dt><dd>ln((N − n + 0.5) ÷ (n + 0.5)), rare term का बड़ा वज़न। जैसे milestone का 1.299, और office का 0.588।</dd>
+    <dt><a href="12-dpr.html#w-inbatch">In-batch negatives</a></dt><dd>Batch के बाकी सवालों के positives को negatives की तरह इस्तेमाल करना। जैसे 128 के batch में हर सवाल को 127 negatives मिलते हैं।</dd>
+    <dt><a href="04-probability-tools-dense.html#w-increasing">Increasing function</a></dt><dd>ऐसा function, जिसमें बड़ा input हमेशा बड़ा output देता है, इसलिए क्रम नहीं बदलता। exp और ln ऐसे हैं। जैसे scores 1.56 और 0.74 से वज़न 0.499 और 0.220, उसी क्रम में।</dd>
+    <dt><a href="18-failure-modes-dense.html#w-incremental">Incremental re-indexing</a></dt><dd>पूरा index दोबारा बनाने की जगह सिर्फ़ नए और बदले passages के embeddings बनाना, और बदले document के पुराने passages हटाना। जैसे 60,000 की जगह 500 + 30 = 530 embeddings।</dd>
+    <dt><a href="03-vectors.html#w-index">Index</a></dt><dd>Passages के पहले से बनाकर रखे embeddings की list। जैसे 60,000 passages के 60,000 vectors।</dd>
+    <dt><a href="01-how-llms-answer-dense.html#w-hotswap">Index hot-swapping</a></dt><dd>Parameters छुए बिना documents का index बदलना, ताकि model की जानकारी बदले। जैसे 2018 के index से 2018 के leaders पर 68% सही जवाब, और 2016 के index से सिर्फ़ 4%।</dd>
+    <dt><a href="06-rag-pipeline.html#w-indexing">Indexing time और query time</a></dt><dd>एक बार चलने वाले steps, और हर query पर चलने वाले steps। जैसे 60,000 passages के embeddings एक बार बनते हैं, और query का embedding हर बार।</dd>
+    <dt><a href="15-colbert-dense.html#w-intmatrix">Interaction matrix</a></dt><dd>Query के हर token और passage के हर token की similarity की table। जैसे FAQ वाली table में 6 × 2 = 12 dot products।</dd>
+    <dt><a href="11-bm25.html#w-inverted">Inverted index</a></dt><dd>हर term के documents की list। जैसे office → office hours page, queue log।</dd>
+    <dt><a href="06-rag-pipeline-dense.html#w-iterretgen">ITER-RETGEN</a></dt><dd>Retrieval और generation बारी-बारी, जिसमें पिछला जवाब और सवाल मिलकर अगली query बनते हैं। 2023 में Shao और साथियों ने बनाया। जैसे Thursday 9am जोड़ने से office hours page का score 1 से 3 होता है।</dd>
+    <dt><a href="06-rag-pipeline-dense.html#w-iterative">Iterative, recursive और adaptive retrieval</a></dt><dd>एक से ज़्यादा बार ढूँढने के तीन तरीके। Iterative में तय गिनती तक बारी-बारी, recursive में सवाल को छोटे सवालों में तोड़कर, और adaptive में model खुद तय करता है। जैसे ITER-RETGEN iterative है, और Search-R1 का trace adaptive।</dd>
+    <dt><a href="10-vector-search.html#w-ivf">IVF</a></dt><dd>Inverted file index: vectors को clusters में बाँटकर query के पास वाले clusters ही देखना। जैसे 10 लाख vectors पर 11,000 तुलनाएँ।</dd>
+    <dt><a href="10-vector-search-dense.html#w-kmeans">k-means</a></dt><dd>Vectors को k clusters में बाँटने का तरीका: हर vector को सबसे पास वाले centroid को देना, फिर हर centroid को औसत बनाना। जैसे 6 passages पर 3 rounds में A = [0.817, 0.2] और B = [0.2, 0.8]।</dd>
+    <dt><a href="17-search-r1-dense.html#w-kldiv">KL divergence</a></dt><dd>ln(नई probability ÷ reference की probability) का औसत, नए model की probabilities से तौला हुआ। जैसे 0.2 और 0.8 से 0.9 और 0.1 पर 1.146, और 0.25 और 0.75 पर 0.007।</dd>
+    <dt><a href="01-how-llms-answer.html#w-cutoff">Knowledge cutoff</a></dt><dd>वो तारीख, जिस पर training रुकी। उसके बाद की बातें, और आपका private data, model में नहीं हैं। जैसे March 2026 की cutoff हो, तो Oct 2026 की announcement model में नहीं है।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-kg">Knowledge graph और edge</a></dt><dd>Entities (nodes) और relations (edges) का network। जैसे milestone और Week 6 के बीच एक edge, जिस पर “due” लिखा है।</dd>
+    <dt><a href="16-agentic-rag.html#w-refine">Knowledge refinement</a></dt><dd>Documents को strips में तोड़ना, बेकार strips हटाना, और बाकी को क्रम से जोड़ना। जैसे milestone वाले सवाल पर syllabus की 3 में से 2 strips रहती हैं।</dd>
+    <dt><a href="08-contextual-retrieval.html#w-latechunk">Late chunking</a></dt><dd>पहले पूरा document encode करना, फिर हर chunk के token vectors पर mean pooling। तब <q>It is due Week 6</q> का vector [0.9, 0.1] बनता है।</dd>
+    <dt><a href="15-colbert.html#w-late">Late interaction</a></dt><dd>Query और passage के token vectors अलग-अलग बनें, और सिर्फ़ scoring पर मिलें। जैसे ColBERT में passage के vectors offline बनते हैं, और dot products query आने पर।</dd>
+    <dt><a href="15-colbert.html#w-latency">Latency</a></dt><dd>Query भेजने से जवाब आने तक का समय, ms में। जैसे cross-encoder की latency 1,000 passages पर 10,700 ms है, और ColBERT rerank की 61 ms।</dd>
+    <dt><a href="05-rag-model.html#w-latent">Latent variable</a></dt><dd>छिपा हुआ choice, जो data में नहीं लिखा। RAG में ये choice है कि जवाब किस passage से आया। जैसे सवाल-जवाब के जोड़े में ये नहीं लिखा कि जवाब queue log से आया।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-leiden">Leiden और degree</a></dt><dd>Leiden graph को ऐसी communities में बाँटता है, जिनके अंदर edges ज़्यादा हों। Degree किसी node के edges की गिनती है। जैसे Project की degree 3 है।</dd>
+    <dt><a href="03-vectors.html#w-length">Length</a></dt><dd>तीर की लंबाई: हर number का square, उनका जोड़, फिर square root। जैसे [0.8, 0.2] की length √(0.64 + 0.04) = 0.82।</dd>
+    <dt><a href="11-bm25.html#w-lengthnorm">Length normalization, b और avgdl</a></dt><dd>औसत से लंबे documents का TF हिस्सा घटाना, b जितना असर। जैसे avgdl = 16.17 और b = 0.75 पर दोगुने लंबे document का हिस्सा 0.710।</dd>
+    <dt><a href="04-probability-tools.html#w-likelihood">Likelihood</a></dt><dd>Model ने सही data को जो probability दी। जैसे सही जवाब को 0.12 दिया, तो likelihood 0.12।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-literal">Literal</a></dt><dd>ऐसा text, जो हूबहू मिलना चाहिए, जैसे error code E-4012 या order ID A77-310। Dense retriever इसे चूक सकता है, और BM25 इसे rare शब्द मानकर पकड़ता है।</dd>
+    <dt><a href="01-how-llms-answer.html#w-llm">LLM</a></dt><dd>Large language model: text पढ़कर आगे का text, एक बार में एक token, लिखने वाला model। जैसे Wednesday afternoon लिखने वाला model।</dd>
+    <dt><a href="13-metrics.html#w-log2">log<sub>2</sub></a></dt><dd>2 को किस power तक उठाएँ कि number मिले। जैसे log<sub>2</sub> 4 = 2, और log<sub>2</sub> 3 = 1.585।</dd>
+    <dt><a href="08-contextual-retrieval-dense.html#w-longlate">Long late chunking</a></dt><dd>Encoder की limit से लंबे document को overlap वाली बड़ी windows में पढ़कर late chunking करना। जैसे 20,000 tokens को 8,192 tokens की windows में, हर नई window 1,000 tokens पीछे से शुरू।</dd>
+    <dt><a href="08-contextual-retrieval.html#w-longctx">Long-context encoder</a></dt><dd>ऐसा encoder, जो एक बार में बहुत लंबा text पढ़ सके। जैसे 8,192 tokens, यानी करीब 10 pages।</dd>
+    <dt><a href="10-vector-search-dense.html#w-adc">Lookup table (ADC)</a></dt><dd>Query के हर टुकड़े का हर codeword से score पहले निकालकर table में रखना। तब हर passage का score बस table के numbers का जोड़ है। जैसे code (0, 1) का score 1 + 1 = 2.0।</dd>
+    <dt><a href="04-probability-tools.html#w-loss">Loss</a></dt><dd>Model कितना गलत है, उसका number। Training इसे छोटा करती है। जैसे सही जवाब की probability 0.5 हो, तो loss −ln 0.5 = 0.693।</dd>
+    <dt><a href="18-failure-modes.html#w-lostmiddle">Lost in the middle</a></dt><dd>LLM लंबे prompt के बीच की बात कम इस्तेमाल करता है (position bias)। जैसे 20 passages में पहली जगह पर 75.8% सही, और 10वीं पर 53.8%।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-mapreduce">Map-reduce</a></dt><dd>हर टुकड़े पर अलग से एक ही काम (map), फिर नतीजे जोड़ना (reduce)। जैसे हर community से हिस्सा-जवाब और score, फिर score के क्रम में आख़िरी जवाब।</dd>
+    <dt><a href="04-probability-tools.html#w-marginal">Marginalization</a></dt><dd>हर case का वज़न गुणा उस case में probability, फिर सारे cases का जोड़। जैसे 0.5 × 0.8 + 0.5 × 0.1 = 0.45।</dd>
+    <dt><a href="03-vectors-dense.html#w-matrix">Matrix और matrix-vector गुणा</a></dt><dd>Rows और columns वाली numbers की table, और उसकी हर row का किसी vector से dot product। जैसे हमारा 4 × 2 index गुणा query [0.8, 0.2] = [0.74, 0.26, 0.32, 1.56]।</dd>
+    <dt><a href="15-colbert.html#w-maxsim">MaxSim</a></dt><dd>Query के हर token का passage के tokens से सबसे बड़ा dot product, फिर सबका जोड़। जैसे course FAQ पर 0.9 + 0.95 = 1.85।</dd>
+    <dt><a href="07-chunking.html#w-pooling">Mean pooling</a></dt><dd>कई token vectors का औसत लेकर एक vector बनाना। जैसे [0.9, 0.1], [0.7, 0.3] और [0.8, 0.2] का औसत [0.8, 0.2]।</dd>
+    <dt><a href="07-chunking.html#w-metadata">Metadata</a></dt><dd>Data के बारे में data: नाम, section, तारीख। जैसे <q>CS 329Z syllabus, Grading, 30 Sep 2026</q>।</dd>
+    <dt><a href="14-hybrid-rerank-dense.html#w-minmax">Min-max normalisation</a></dt><dd>हर list के scores को (x − min) ÷ (max − min) से 0 से 1 पर लाना। जैसे BM25 के 7.2, 3.1 और 1.0 से 1, 0.339 और 0। नतीजा list के min और max पर टिका है।</dd>
+    <dt><a href="05-rag-model.html#w-mips">MIPS</a></dt><dd>Maximum inner product search: index में सबसे बड़े dot product वाले K passages ढूँढना। जैसे 2.1 करोड़ passages में से सबसे ऊँचे 5 scores वाले passages।</dd>
+    <dt><a href="06-rag-pipeline.html#w-modular">Modular RAG</a></dt><dd>Pipeline को modules में बाँटकर, उन्हें अलग-अलग क्रम में जोड़ना। जैसे Retrieve, Read, Retrieve, Read।</dd>
+    <dt><a href="13-metrics.html#w-mrr">MRR@k</a></dt><dd>पहले सही passage के rank का उल्टा (1 ÷ rank), queries का औसत, और top-k में न हो तो 0। जैसे ranks 1, 2 और कोई नहीं, तो (1 + 0.5 + 0) ÷ 3 = 0.5।</dd>
+    <dt><a href="06-rag-pipeline.html#w-multihop">Multi-hop question</a></dt><dd>ऐसा सवाल, जिसके लिए कई बार ढूँढना पड़े, क्योंकि जवाब के हिस्से अलग passages में हैं। जैसे least crowded office hour कहाँ है: पहले queue log, फिर office hours page।</dd>
+    <dt><a href="07-chunking.html#w-multimodal">Multimodal embedding</a></dt><dd>Text और image, दोनों के vectors एक ही space में। जैसे CLIP। Whiteboard पर लिखे office hours की photo और text <q>office hours schedule</q> के vectors पास आ सकते हैं।</dd>
+    <dt><a href="08-contextual-retrieval.html#w-naivechunk">Naive chunking</a></dt><dd>पहले काटना, फिर हर chunk को अकेले encode करना। तब <q>It is due Week 6</q> का vector [0.5, 0.5] रहता है।</dd>
+    <dt><a href="06-rag-pipeline.html#w-naive">Naive RAG</a></dt><dd>सबसे सीधी pipeline: index, फिर हर query पर Retrieve और Read। बीच में कोई extra step नहीं।</dd>
+    <dt><a href="04-probability-tools.html#w-ln">Natural log, ln</a></dt><dd>e को किस power तक उठाएँ कि x मिले। ln(e<sup>x</sup>) = x, और ln(a × b) = ln a + ln b। जैसे ln(0.1) = −2.303।</dd>
+    <dt><a href="13-metrics.html#w-ndcg">nDCG@k</a></dt><dd>DCG ÷ IDCG, 0 से 1 के बीच, जो grade और क्रम दोनों देखता है। जैसे q1 के उलटे क्रम पर 2.5 ÷ 3.631 = 0.689।</dd>
+    <dt><a href="10-vector-search.html#w-nn">Nearest neighbors</a></dt><dd>Query के सबसे पास वाले vectors। जैसे query 73 के पास वालों में 75 पहले आता है।</dd>
+    <dt><a href="04-probability-tools.html#w-nll">Negative log-likelihood</a></dt><dd>−ln p(सही जवाब)। सबसे आम loss। जैसे p = 0.12 पर −ln 0.12 = 2.120।</dd>
+    <dt><a href="04-probability-tools-dense.html#w-nmll">Negative marginal log-likelihood</a></dt><dd>सही जवाब की probability का −ln, जब वो probability passages पर marginalization से बनी हो, और सारे examples पर उसका जोड़। RAG का training loss। जैसे दो examples पर 0.378 + 0.693 = 1.071।</dd>
+    <dt><a href="10-vector-search-dense.html#w-heuristic">Neighbors चुनने का नियम (heuristic)</a></dt><dd>Candidate तभी जुड़ता है, जब वो पहले से जुड़े हर node की तुलना में नए node के ज़्यादा पास हो। जैसे X के लिए A और E2 जुड़ते हैं, और B और C छूटते हैं।</dd>
+    <dt><a href="01-how-llms-answer.html#w-ntp">Next-token prediction</a></dt><dd>अब तक का text देखकर हर token को probability देना, एक चुनना, जोड़ना, और दोहराना। जैसे Wednesday, फिर afternoon, फिर full stop।</dd>
+    <dt><a href="18-failure-modes.html#w-stopping">No stopping rule</a></dt><dd>Agent को रुकने की साफ़ शर्त न पता हो। जैसे एक सवाल पर 15 searches।</dd>
+    <dt><a href="02-retrieval.html#w-nonparam">Non-parametric memory</a></dt><dd>Model के बाहर, corpus में रखी जानकारी। जैसे queue log: उसे बदलने के लिए training नहीं चाहिए।</dd>
+    <dt><a href="03-vectors.html#w-normalize">Normalize</a></dt><dd>Vector के हर number को उसकी length से भाग देकर length 1 बनाना। दिशा वही रहती है। जैसे [0.8, 0.2] ÷ 0.82 = [0.97, 0.24]।</dd>
+    <dt><a href="04-probability-tools-dense.html#w-normalizer">Normalizer, Z</a></dt><dd>Softmax में सारे exps का जोड़, जिससे भाग देने पर वज़नों का जोड़ 1 होता है। ∝ के पीछे यही भाग छिपा है। जैसे exps 2.718 और 1 पर Z = 3.718।</dd>
+    <dt><a href="10-vector-search.html#w-nprobe">nprobe</a></dt><dd>IVF में कितने clusters देखने हैं। जैसे 1,000 clusters में nprobe = 10 हो, तो सिर्फ़ 10 clusters के vectors देखना।</dd>
+    <dt><a href="16-agentic-rag.html#w-observation">Observation</a></dt><dd>Action का नतीजा, जो agent अगले कदम से पहले पढ़ता है। जैसे पहली search का नतीजा: हर passage का score 0।</dd>
+    <dt><a href="03-vectors.html#w-offline">Offline और online</a></dt><dd>Offline: query आने से पहले, एक बार, जैसे passages के embeddings बनाना। Online: हर query पर, जैसे query का embedding।</dd>
+    <dt><a href="02-retrieval-dense.html#w-opendomain">Open-domain QA</a></dt><dd>किसी भी विषय का सवाल, जिसका paragraph साथ नहीं मिलता, इसलिए system उसे पूरे corpus में खुद ढूँढता है। जैसे DrQA में Warsaw वाला सवाल, पूरे Wikipedia पर।</dd>
+    <dt><a href="12-dpr-dense.html#w-orqa">ORQA</a></dt><dd>2019 का dense retriever, जिसने retriever को extra pretraining से सिखाया। जैसे NQ पर पूरे system का Exact Match ORQA के साथ 33.3, और DPR के साथ 41.5।</dd>
+    <dt><a href="07-chunking.html#w-chunkoverlap">Overlap</a></dt><dd>नया chunk पिछले chunk के आख़िरी कुछ tokens दोहराकर शुरू हो। L tokens की बात बचाने के लिए कम से कम L − 1। जैसे 7 शब्दों की तारीख के लिए 6।</dd>
+    <dt><a href="01-how-llms-answer.html#w-parameters">Parameters (weights)</a></dt><dd>Model के अंदर के numbers, जिनसे हर अगले token की probability निकलती है। जैसे T5-11B में करीब 11 billion parameters हैं।</dd>
+    <dt><a href="01-how-llms-answer.html#w-parametric">Parametric knowledge</a></dt><dd>Parameters में बँटी हुई जानकारी। Model इसका source नहीं बता सकता, और नई बात के लिए फिर से training चाहिए।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-paraphrase">Paraphrase</a></dt><dd>वही बात अलग शब्दों में। जैसे upload failed और upload keeps failing। BM25 इसे चूकता है, क्योंकि वो एक जैसे शब्द गिनता है।</dd>
+    <dt><a href="02-retrieval.html#w-passage">Passage</a></dt><dd>Document का छोटा टुकड़ा, जो retriever लौटाता है। जैसे syllabus का वो paragraph, जिसमें milestone की तारीख है।</dd>
+    <dt><a href="07-chunking.html#w-passageemb">Passage embedding</a></dt><dd>पूरे chunk का एक vector, जिसे retrieval का index रखता है। जैसे Sentence-BERT, DPR और E5 के vectors।</dd>
+    <dt><a href="06-rag-pipeline.html#w-pattern">Pattern</a></dt><dd>Modules का एक तय क्रम, जैसे Retrieve, Read।</dd>
+    <dt><a href="18-failure-modes.html#w-permleak">Permission leak</a></dt><dd>Retriever ऐसा passage लाए, जिसे इस user को देखने की इजाज़त नहीं। जैसे student को दूसरों के grades।</dd>
+    <dt><a href="06-rag-pipeline.html#w-pipeline">Pipeline</a></dt><dd>Steps की line, जिसमें हर step का output अगले का input है। जैसे Retrieve का output top-K passages हैं, और वही Read का input।</dd>
+    <dt><a href="13-metrics-dense.html#w-points">Points (absolute फ़र्क)</a></dt><dd>दो % numbers का सीधा फ़र्क। जैसे 52.2 से 54.0 = 1.8 points, जबकि 52.2 के हिसाब से ये करीब 3.45% की बढ़त है।</dd>
+    <dt><a href="17-search-r1.html#w-policy">Policy</a></dt><dd>जो हर कदम पर फ़ैसला लेता है। यहाँ LLM, जो हर बार अगला token चुनता है: सोचना, &lt;search&gt; या &lt;answer&gt;।</dd>
+    <dt><a href="12-dpr.html#w-positive">Positive और negative passage</a></dt><dd>सवाल का सही passage (p<sub>i</sub><sup>+</sup>), और गलत passages (p<sub>i,j</sub><sup>−</sup>)। जैसे least crowded सवाल का positive queue log है, और negatives forum post और Homework।</dd>
+    <dt><a href="06-rag-pipeline.html#w-post">Post-retrieval</a></dt><dd>Retrieval के बाद लौटी list सुधारने वाले steps: rerank, summary और fusion।</dd>
+    <dt><a href="05-rag-model-dense.html#w-posterior">Posterior और prior</a></dt><dd>Prior p<sub>η</sub>(z|x) जवाब देखने से पहले passage का वज़न है। Posterior p(z|x, y) जवाब देखने के बाद का वज़न है, यानी कुल chance में उस passage का हिस्सा। जैसे queue log का prior 0.602 है, और posterior 0.773।</dd>
+    <dt><a href="17-search-r1.html#w-ppo">PPO और value model</a></dt><dd>RL का आम तरीका, जो आगे के reward का अंदाज़ा लगाने वाला अलग model (value model) train करता है। जैसे अंदाज़ा 0.25 और reward 1 हो, तो advantage +0.75।</dd>
+    <dt><a href="18-failure-modes-dense.html#w-prefilter">Pre-filter और post-filter</a></dt><dd>Pre-filter मना वाले passages ranking से पहले हटाता है, और post-filter top-K निकालने के बाद। जैसे top-14 में 5 मना वाले हों, तो post-filter के बाद 9 बचते हैं।</dd>
+    <dt><a href="06-rag-pipeline.html#w-pre">Pre-retrieval</a></dt><dd>Retrieval से पहले query सुधारने वाले steps: routing, rewriting और expansion।</dd>
+    <dt><a href="06-rag-pipeline-dense.html#w-precision">Precision</a></dt><dd>लौटे passages में से कितना हिस्सा सही है। जैसे K = 2 पर queue log सही और forum post गलत, तो precision = 1 ÷ 2 = 0.5।</dd>
+    <dt><a href="12-dpr.html#w-pretraining">Pretraining</a></dt><dd>बहुत सारे आम text पर model की पहली, बड़ी training। जैसे BERT पहले आम text पर train होता है।</dd>
+    <dt><a href="18-failure-modes-dense.html#w-primacy">Primacy और recency bias</a></dt><dd>LLM का prompt की शुरुआत (primacy) और आख़िर (recency) की बातें ज़्यादा इस्तेमाल करना। जैसे 20 passages में पहली जगह पर 75.8%, आख़िरी पर 63.2%, और 10वीं पर 53.8%।</dd>
+    <dt><a href="01-how-llms-answer.html#w-probability">Probability</a></dt><dd>0 से 1 के बीच का number, जो किसी बात का chance बताता है। सारे options का जोड़ 1 होता है। जैसे 20 में से 5 lectures में quiz हुआ, तो 5 ÷ 20 = 0.25।</dd>
+    <dt><a href="17-search-r1-dense.html#w-ratio">Probability ratio</a></dt><dd>π<sub>θ</sub>(token) ÷ π<sub>old</sub>(token), यानी token की probability rollout बनाने वाले model के मुकाबले कितने गुना है। जैसे 0.55 ÷ 0.5 = 1.1।</dd>
+    <dt><a href="10-vector-search.html#w-pq">Product quantization (PQ)</a></dt><dd>Vector को टुकड़ों में काटकर हर टुकड़े की जगह codeword का number रखना। जैसे [0.9, 0.1, 0.2, 0.8] बनता है code (0, 1)।</dd>
+    <dt><a href="01-how-llms-answer.html#w-prompt">Prompt</a></dt><dd>वो text, जो आप model को अभी देते हैं: सवाल, instructions, और साथ के documents। जैसे queue log की line, जिससे Thursday 0.21 से 0.81 हुआ।</dd>
+    <dt><a href="08-contextual-retrieval-dense.html#w-promptcache">Prompt caching</a></dt><dd>LLM service prompt का बार-बार आने वाला हिस्सा पहली call के बाद याद रखती है, जैसे पूरा document। इसलिए अगली calls में वो हिस्सा सस्ता पड़ता है। Blog के मुताबिक तब contextual retrieval का खर्च हर 10 लाख document tokens पर $1.02 है।</dd>
+    <dt><a href="18-failure-modes.html#w-injection">Prompt injection</a></dt><dd>ढूँढे गए text में लिखी बात agent के लिए हुक्म बन जाए। जैसे post में छिपा <q>Ignore previous instructions</q>।</dd>
+    <dt><a href="10-vector-search.html#w-proxgraph">Proximity graph</a></dt><dd>ऐसा graph, जिसमें हर vector अपने पास वाले vectors से जुड़ा हो। जैसे 70 अपने पड़ोसी 65 और 75 से जुड़ा है।</dd>
+    <dt><a href="13-metrics-dense.html#w-qrels">QRels</a></dt><dd>Relevance labels की file: हर query के लिए सही documents के IDs। जैसे late chunking paper ने nDCG@10 इसी file से निकाला।</dd>
+    <dt><a href="02-retrieval.html#w-query">Query</a></dt><dd>वो सवाल, जिसके लिए ढूँढना है। जैसे “which office hour is least crowded”।</dd>
+    <dt><a href="15-colbert-dense.html#w-queryaug">Query augmentation</a></dt><dd>Query को [mask] tokens से 32 tokens तक भरना। BERT इनके भी vectors बनाता है, और वो MaxSim में extra query tokens की तरह जुड़ते हैं।</dd>
+    <dt><a href="06-rag-pipeline.html#w-expansion">Query expansion</a></dt><dd>Query में जुड़े हुए शब्द या दूसरे रूप जोड़ना। जैसे “help ta” में “office hours” जोड़ने से office hours page का score 0 से 2 होता है।</dd>
+    <dt><a href="06-rag-pipeline.html#w-rewriting">Query rewriting</a></dt><dd>LLM से query को साफ़ search query में बदलवाना। जैसे “OH timings?” से “CS 329Z office hours schedule”।</dd>
+    <dt><a href="06-rag-pipeline.html#w-routing">Query routing</a></dt><dd>तय करना कि किस index या source में ढूँढना है। जैसे “when is the project milestone due” syllabus वाले index में जाए।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-qfs">Query-focused summarization</a></dt><dd>सवाल को ध्यान में रखकर सार लिखना। जैसे “सारी deadlines” पूछने पर Project community के सार से सिर्फ़ तारीखें आएँ।</dd>
+    <dt><a href="05-rag-model.html#w-rag">RAG</a></dt><dd>Retrieval-Augmented Generation: retriever और generator को एक model में जोड़कर एक ही loss से साथ train करना। जैसे queue log लाकर उससे <q>Thursday 9am</q> लिखना।</dd>
+    <dt><a href="05-rag-model.html#w-ragseq">RAG-Sequence</a></dt><dd>हर passage के साथ पूरा जवाब, फिर वज़न वाला जोड़। जैसे 0.6 × 0.18 + 0.4 × 0.45 = 0.288।</dd>
+    <dt><a href="05-rag-model.html#w-ragtok">RAG-Token</a></dt><dd>हर token पर वज़न वाला जोड़, फिर tokens का गुणा। जैसे 0.74 × 0.48 = 0.355।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-raptor">RAPTOR</a></dt><dd>Clusters के सारों से नीचे से ऊपर tree बनाना, और हर level पर ढूँढना। जैसे सारी deadlines वाला सवाल सार A से मिलता है।</dd>
+    <dt><a href="02-retrieval.html#w-reader">Reader</a></dt><dd>Query और top-K passages पढ़कर जवाब लिखने वाला हिस्सा। आज अक्सर एक LLM। जैसे queue log पढ़कर “Thursday 9am” लिखना।</dd>
+    <dt><a href="02-retrieval-dense.html#w-readcomp">Reading comprehension</a></dt><dd>दिया हुआ text पढ़कर उसी पर पूछे सवाल का जवाब देना। Retriever के बाद reader का काम यही है। जैसे Ottoman empire वाला paragraph पढ़कर 32 बताना।</dd>
+    <dt><a href="02-retrieval.html#w-recall">Recall</a></dt><dd>Retriever कितनी बार ज़रूरी passage ढूँढ पाता है। जैसे 100 सवालों में 60 पर, तो recall 60%।</dd>
+    <dt><a href="02-retrieval.html#w-ceiling">Recall ceiling</a></dt><dd>Retriever का recall पूरे system की ऊपरी हद बन जाता है। Recall 60% है, तो reader कितना भी अच्छा हो, 100 में से 60 से ज़्यादा जवाब passages के दम पर नहीं आते।</dd>
+    <dt><a href="13-metrics.html#w-recallk">Recall@k</a></dt><dd>Top-k में मिले सही passages ÷ कुल सही passages, queries का औसत। जैसे k = 1 पर q1 में 2 में से 1 मिला, तो 0.5।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-rrf">Reciprocal rank fusion (RRF)</a></dt><dd>हर list में passage के rank से 1 ÷ (k + rank), फिर सारी lists का जोड़, जहाँ k = 60। जैसे E1: 1 ÷ 61 + 1 ÷ 62 = 0.03252।</dd>
+    <dt><a href="07-chunking-dense.html#w-recursive">Recursive chunking</a></dt><dd>Separators की सीढ़ी पर काटना: पहले paragraph, फिर line, फिर sentence, फिर space। जो टुकड़ा chunk size से बड़ा रहे, वही अगले separator पर कटता है। जैसे size 20 पर Grading section 19 और 7 शब्दों के दो chunks बनता है।</dd>
+    <dt><a href="17-search-r1.html#w-kl">Reference LLM और KL penalty</a></dt><dd>Training से पहले वाले model की जमी हुई copy, और नए model को उससे दूर जाने से रोकने वाली penalty। जैसे &lt;search&gt; की probability 0.2 से 0.9 हो जाए, तो penalty बड़ी है।</dd>
+    <dt><a href="16-agentic-rag.html#w-reflection">Reflection tokens</a></dt><dd>Vocabulary में जोड़े गए खास tokens, जिन्हें model बाकी text की तरह लिखता है। जैसे Retrieve, Relevant या Irrelevant, और Supported या Partially।</dd>
+    <dt><a href="17-search-r1.html#w-rl">Reinforcement learning (RL)</a></dt><dd>कोशिशें करके, हर कोशिश के reward से सीखना। जैसे 4 rollouts में 2 का reward 1 है, तो उन दोनों के tokens की probability बढ़ती है।</dd>
+    <dt><a href="17-search-r1-dense.html#w-rejsamp">Rejection sampling</a></dt><dd>हर सवाल पर कई rollouts बनाना, और सिर्फ़ सही जवाब वालों पर fine-tune करना। जैसे paper में हर सवाल पर 5 rollouts, और 7 datasets का औसत 0.348।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-relation">Relation</a></dt><dd>दो entities का रिश्ता। जैसे (Project milestone, due, Week 6)।</dd>
+    <dt><a href="06-rag-pipeline-dense.html#w-relgain">Relative gain</a></dt><dd>फ़र्क को पुराने number से भाग देकर % में लिखना। जैसे (51.4 − 36.9) ÷ 36.9 = 0.393, यानी करीब 39%। सीधा फ़र्क, 14.5, percentage points कहलाता है।</dd>
+    <dt><a href="13-metrics.html#w-labels">Relevance labels</a></dt><dd>हर query के लिए पहले से तय सही passages, कभी grades के साथ। जैसे q1 के लिए queue log (grade 3) और office hours page (grade 1)।</dd>
+    <dt><a href="06-rag-pipeline.html#w-rerank">Rerank और reranker</a></dt><dd>धीमा लेकिन सटीक model, जो लौटाए गए passages को दोबारा sort करता है। जैसे queue log और forum post के बराबर score में से forum post को नीचे भेजना।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-reranking">Reranking</a></dt><dd>तेज़ retriever की shortlist को सटीक model से दोबारा score देकर sort करना। जैसे MS MARCO पर MRR@10 BM25 अकेले 16.7, और BERT-base से rerank के बाद 34.7।</dd>
+    <dt><a href="10-vector-search-dense.html#w-residual">Residual</a></dt><dd>Vector में से उसके cluster का centroid घटाने पर बचा फ़र्क। IVFADC इसी का code बनाता है। जैसे queue log [0.85, 0.2] − [0.817, 0.2] = [0.033, 0]।</dd>
+    <dt><a href="02-retrieval.html#w-retrieval">Retrieval</a></dt><dd>Query के लिए काम के passages ढूँढकर prompt में रखना। जैसे queue log का passage सवाल के साथ prompt में जाए।</dd>
+    <dt><a href="05-rag-model-dense.html#w-collapse">Retrieval collapse</a></dt><dd>Training में retriever का हर सवाल पर वही passages लाने लगना, जिसके बाद generator उन्हें अनदेखा करना सीख लेता है। जैसे paper में कहानी लिखने वाले काम पर।</dd>
+    <dt><a href="16-agentic-rag.html#w-evaluator">Retrieval evaluator</a></dt><dd>सवाल और एक document पढ़कर confidence देने वाला हल्का model। जैसे K = 1 पर forum post को 0.4।</dd>
+    <dt><a href="17-search-r1-dense.html#w-mask">Retrieved token masking</a></dt><dd>Training का हिसाब सिर्फ़ model के लिखे tokens पर, और &lt;information&gt; के tokens बाहर। जैसे slide के trace में 430 में से 114 शब्द। Mask हटाने पर औसत 0.431 से 0.343।</dd>
+    <dt><a href="02-retrieval.html#w-retriever">Retriever</a></dt><dd>हर passage को score देकर top-K लौटाने वाला हिस्सा। जैसे इस lesson का word overlap वाला retriever।</dd>
+    <dt><a href="17-search-r1.html#w-reward">Reward</a></dt><dd>Rollout के आख़िर में मिला number। जैसे जवाब हूबहू सही हो तो 1, नहीं तो 0।</dd>
+    <dt><a href="17-search-r1.html#w-rollout">Rollout (trajectory)</a></dt><dd>एक सवाल पर शुरू से आख़िरी जवाब तक की एक पूरी कोशिश। जैसे Hoyer वाले सवाल पर o<sub>1</sub>: दोनों तारीखें search कीं, फिर जवाब दिया।</dd>
+    <dt><a href="01-how-llms-answer-dense.html#w-ssm">Salient span masking (SSM)</a></dt><dd>Pretraining का extra दौर, जिसमें model Wikipedia के sentences में नाम और तारीखों की खाली जगह भरता है। जैसे इससे T5-11B का TriviaQA score 50.1 से 60.5 हुआ।</dd>
+    <dt><a href="11-bm25.html#w-saturation">Saturation और k1</a></dt><dd>गिनती बढ़ने पर फ़ायदा धीरे-धीरे भरता है, k1 + 1 की छत तक। जैसे k1 = 1.2 पर f = 1, 2, 10 का हिस्सा 1.000, 1.375, 1.964।</dd>
+    <dt><a href="02-retrieval.html#w-score">Score</a></dt><dd>Passage query के लिए कितना काम का है, उसका number। जैसे word overlap में queue log का score 2।</dd>
+    <dt><a href="17-search-r1.html#w-searchr1">Search-R1</a></dt><dd>LLM को RL से search के फ़ैसले सिखाने वाला तरीका, think, search, information और answer tags के साथ। Reward सिर्फ़ आख़िरी जवाब पर लगता है।</dd>
+    <dt><a href="16-agentic-rag-dense.html#w-segscore">Segment score (Self-RAG)</a></dt><dd>हर हिस्से के critique हिस्सों का वज़न वाला जोड़: S = 1.0 × s<sub>IsRel</sub> + 1.0 × s<sub>IsSup</sub> + 0.5 × s<sub>IsUse</sub>। जैसे queue log वाले हिस्से का S = 0.9 + 0.875 + 0.5 × 0.75 = 2.15।</dd>
+    <dt><a href="16-agentic-rag.html#w-selfrag">Self-RAG</a></dt><dd>Generator खुद reflection tokens लिखकर तय करता है कि कब ढूँढना है, और कौन सा हिस्सा रखना है। जैसे forum post वाले हिस्से पर Relevant और Partially।</dd>
+    <dt><a href="07-chunking.html#w-semantic">Semantic chunking</a></dt><dd>Sentence या section जैसी logical boundaries पर काटना। जैसे syllabus को Grading, Office hours और Project वाली headings पर।</dd>
+    <dt><a href="13-metrics.html#w-set">Set, ∩, ∅, |A|</a></dt><dd>चीज़ों का group, दो sets की common चीज़ें, खाली set, और set में कितनी चीज़ें हैं। जैसे |{queue log, office hours page}| = 2, और q3 पर R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) = ∅।</dd>
+    <dt><a href="14-hybrid-rerank.html#w-shortlist">Shortlist</a></dt><dd>Retriever के ऊपर के कुछ passages, जिन पर reranker चलता है। जैसे 60,000 passages में से top-100, जिन पर cross-encoder 1,070 ms लेता है।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-softclust">Soft clustering</a></dt><dd>एक passage को एक से ज़्यादा clusters में रखना। जैसे FAQ page, जिसका cosine दोनों centroids से ऊँचा है (0.86 और 0.78)।</dd>
+    <dt><a href="04-probability-tools.html#w-softmax">Softmax</a></dt><dd>हर score का exp, फिर सबके जोड़ से भाग। Scores को probabilities बनाता है। जैसे 2.0, 1.0, 0.1 से 0.659, 0.242, 0.099।</dd>
+    <dt><a href="11-bm25.html#w-sparse">Sparse और dense vector</a></dt><dd>ज़्यादातर 0 वाला लंबा vector, और लगभग पूरा भरा छोटा vector। जैसे forum post के vector की 69 में से 55 जगहें 0 हैं।</dd>
+    <dt><a href="02-retrieval-dense.html#w-squad">SQuAD</a></dt><dd>Stanford Question Answering Dataset: Wikipedia के paragraphs पर लोगों के लिखे सवाल, और जवाब हमेशा paragraph का एक span। जैसे training में 87,599 सवाल।</dd>
+    <dt><a href="18-failure-modes.html#w-stale">Stale index</a></dt><dd>Document बदल गया, लेकिन index में पुराना passage और embedding पड़ा है। जैसे index में Tuesday 4pm, जबकि office hour Wednesday 2pm पर जा चुका।</dd>
+    <dt><a href="17-search-r1.html#w-std">Standard deviation</a></dt><dd>Numbers के फैलाव का नाप: औसत से फ़र्कों के squares का औसत, फिर square root। जैसे 0, 0, 0, 1 पर औसत 0.25, squares 0.5625, 0.0625, 0.0625, 0.0625, उनका औसत 0.1875, और square root 0.433।</dd>
+    <dt><a href="07-chunking.html#w-static">Static word embedding</a></dt><dd>हर word type का एक ही vector, context कुछ भी हो। जैसे word2vec और GloVe। Late का vector दोनों sentences में [0.5, 0.5] रहता है। <span class="mine">मेरे numbers</span></dd>
+    <dt><a href="02-retrieval.html#w-stopwords">Stopwords</a></dt><dd>is, the, which जैसे बहुत आम शब्द, जिन्हें गिनती में नहीं लेते। “which office hour is least crowded” से which और is हटते हैं।</dd>
+    <dt><a href="07-chunking.html#w-stride">Stride</a></dt><dd>दो लगातार chunks की शुरुआत के बीच की दूरी: chunk size − overlap। जैसे 9 − 6 = 3।</dd>
+    <dt><a href="06-rag-pipeline.html#w-summary">Summary</a></dt><dd>Passages को prompt से पहले छोटा करना। जैसे 500 tokens का passage 100 का हो, तो 14 passages 7,000 की जगह 1,400 tokens लेते हैं। खतरा: Room 104 जैसी detail छूट सकती है।</dd>
+    <dt><a href="11-bm25.html#w-term">Term</a></dt><dd>Search में query का एक शब्द। जैसे <q>which office hour</q> में office और hour।</dd>
+    <dt><a href="11-bm25.html#w-tf">Term frequency, f(q, D)</a></dt><dd>Term q document D में कितनी बार है। जैसे queue log में office की f = 2।</dd>
+    <dt><a href="11-bm25.html#w-tfidf">TF-IDF</a></dt><dd>Term की गिनती × ln(N ÷ n), BM25 से पुराना तरीका। जैसे N = 6, n = 2, f = 2 पर 2 × ln 3 = 2.20।</dd>
+    <dt><a href="05-rag-model-dense.html#w-thorough">Thorough और Fast decoding</a></dt><dd>RAG-Sequence से जवाब लिखने के दो तरीके। हर passage के साथ एक उम्मीदवार बनता है। Thorough हर उम्मीदवार को हर passage के साथ जाँचता है, और Fast सिर्फ़ वहीं, जहाँ वो बना। जैसे NQ पर 50 passages के साथ Thorough में करीब 2,500 generator runs तक।</dd>
+    <dt><a href="16-agentic-rag.html#w-threshold">Threshold</a></dt><dd>पहले से तय limit, जिसके ऊपर या नीचे होने पर अलग action चलता है। जैसे CRAG में 0.6 से ऊपर Correct, और 0.2 से नीचे Incorrect।</dd>
+    <dt><a href="01-how-llms-answer.html#w-token">Token</a></dt><dd>Text का छोटा टुकड़ा: शब्द, शब्द का हिस्सा, या punctuation। Model इन्हीं को पढ़ता और लिखता है। जैसे crowded के दो tokens: crowd और ed।</dd>
+    <dt><a href="01-how-llms-answer.html#w-tokenizer">Tokenizer</a></dt><dd>Text को vocabulary के tokens में तोड़ने वाला program। जैसे Wednesdayy को Wednesday और y में।</dd>
+    <dt><a href="02-retrieval.html#w-topk">Top-K</a></dt><dd>सबसे ज़्यादा score वाले K passages। जैसे K = 2 पर queue log और पुराना forum post।</dd>
+    <dt><a href="12-dpr.html#w-topkacc">Top-k retrieval accuracy</a></dt><dd>कितने % सवालों में top-k में जवाब वाला passage है। जैसे NQ पर top-20 में DPR की 78.4%।</dd>
+    <dt><a href="01-how-llms-answer.html#w-training">Training</a></dt><dd>Parameters को थोड़ा-थोड़ा बदलना, ताकि text के असली अगले token की probability बढ़े। जैसे Office hours are on के बाद Thursday 0.10 से 0.12।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-collapsed">Tree traversal और collapsed tree</a></dt><dd>ऊपर से नीचे हर level पर top-k चुनना, या सारे nodes एक list में sort करके token limit तक लेना। जैसे deadlines वाले सवाल पर collapsed tree 100 tokens में 5 nodes लेता है, और A सबसे पहले।</dd>
+    <dt><a href="09-raptor-graphrag.html#w-tree">Tree, node, leaf, root</a></dt><dd>Levels वाला ढाँचा: node एक box, leaf सबसे नीचे का node, और root सबसे ऊपर का। जैसे 6 chunks (leaves) के ऊपर 2 सार, और उनके ऊपर 1 root।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-umap">UMAP</a></dt><dd>Vectors को कम numbers में बदलना, ताकि पास वाले points पास रहें। जैसे RAPTOR के code में हर vector 10 numbers का बनता है।</dd>
+    <dt><a href="03-vectors.html#w-vector">Vector</a></dt><dd>तय लंबाई वाली numbers की list, जैसे [0.9, 0.1]। 2 numbers हों, तो plane पर एक तीर।</dd>
+    <dt><a href="01-how-llms-answer.html#w-vocabulary">Vocabulary</a></dt><dd>Model के सारे tokens की तय list, जिसमें हर token का एक ID number है। जैसे उसमें Wednesday है, लेकिन Wednesdayy नहीं।</dd>
+    <dt><a href="09-raptor-graphrag-dense.html#w-winrate">Win rate</a></dt><dd>दो systems की तुलना में कितने % फ़ैसले एक के पक्ष में गए, और 50% का मतलब बराबरी। जैसे 625 में से करीब 450 फ़ैसले, यानी 72%।</dd>
+    <dt><a href="02-retrieval.html#w-overlap">Word overlap</a></dt><dd>Query के कितने शब्द passage में भी हैं। सबसे आसान score। जैसे queue log में office और hour हैं, तो score 2।</dd>
+    <dt><a href="07-chunking.html#w-wordtype">Word type और token in context</a></dt><dd>Dictionary का एक शब्द, और किसी sentence में उसका एक इस्तेमाल। जैसे late एक word type है, और <q>Late days may not be applied</q> में उसका इस्तेमाल एक token in context।</dd>
+    <dt><a href="02-retrieval.html#w-zeroshot">Zero-shot</a></dt><dd>उस खास काम पर training के बिना, सिर्फ़ instruction पढ़कर काम करना। जैसे prompt में लिखा “Answer the question using the passage below”।</dd>
+    <!-- GLOSSARY END -->
+  </dl>
+</section>
+
+<footer>
+  Source: CS 329Z “Engineering AI Agents”, Lecture 3 “RAG + Agents”, Diyi Yang। Lessons पहली बार 8 Oct 2026 को बने, और उसी दिन कहानी वाले तरीके में दोबारा लिखे। 13 Oct 2026 से हर lesson आसान और गहरे versions में है, Hindi और English दोनों में।
+  “मेरे बनाए” लिखे examples lessons के हैं, slides के नहीं।
+</footer>
+</main>
+<script>
+(function () {
+  // prerequisites, copied from each lesson's "पहले से क्या चाहिए" line
+  var PRE = { 2: [1], 3: [2], 4: [1, 3], 5: [2, 3, 4], 6: [2, 3, 5], 7: [1, 3, 6], 8: [3, 7], 9: [3, 6, 7], 10: [3, 9],
+    11: [2, 4], 12: [4, 5, 11], 13: [2, 4], 14: [6, 11, 12], 15: [7, 13, 14], 16: [1, 6, 14], 17: [1, 4, 6, 16],
+    18: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] };
+  var KIND = { base: "नींव", core: "मुख्य रास्ता", deep: "गहराई" };
+  var ids = [], i;
+  for (i = 1; i <= 18; i++) ids.push(i);
+
+  var anc = {}, layer = {};
+  function ancestors(v) {
+    if (anc[v]) return anc[v];
+    var s = {};
+    (PRE[v] || []).forEach(function (u) { s[u] = true; Object.keys(ancestors(u)).forEach(function (w) { s[w] = true; }); });
+    return (anc[v] = s);
+  }
+  function depth(v) {
+    if (layer[v] !== undefined) return layer[v];
+    var d = 0;
+    (PRE[v] || []).forEach(function (u) { d = Math.max(d, depth(u) + 1); });
+    return (layer[v] = d);
+  }
+  ids.forEach(function (v) { ancestors(v); depth(v); });
+  function desc(v) { return ids.filter(function (w) { return anc[w][v]; }); }
+
+  // draw an edge only when no longer path already implies it
+  var edges = [];
+  ids.forEach(function (v) {
+    (PRE[v] || []).forEach(function (u) {
+      var implied = PRE[v].some(function (w) { return w !== u && anc[w][u]; });
+      if (!implied) edges.push([u, v]);
+    });
+  });
+
+  var info = {};
+  document.querySelectorAll("ol.lessons li").forEach(function (li) {
+    var n = Number(li.querySelector(".n").textContent), a = li.querySelector("a.ttl");
+    info[n] = { title: a.textContent, href: a.getAttribute("href") };
+  });
+
+  var box = document.getElementById("lmap"), svg = document.getElementById("lmap-edges");
+  var out = document.getElementById("mapinfo");
+  var nodes = {};
+  box.querySelectorAll(".mnode").forEach(function (b) { nodes[b.dataset.id] = b; });
+  var paths = [], sel = null;
+
+  function draw() {
+    var r0 = box.getBoundingClientRect();
+    svg.setAttribute("viewBox", "0 0 " + r0.width + " " + r0.height);
+    svg.innerHTML = "";
+    paths = edges.map(function (e) {
+      var a = nodes[e[0]].getBoundingClientRect(), b = nodes[e[1]].getBoundingClientRect();
+      var x1 = a.left + a.width / 2 - r0.left, y1 = a.bottom - r0.top;
+      var x2 = b.left + b.width / 2 - r0.left, y2 = b.top - r0.top;
+      var dy = (y2 - y1) / 2;
+      var p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d", "M" + x1 + " " + y1 + " C" + x1 + " " + (y1 + dy) + " " + x2 + " " + (y2 - dy) + " " + x2 + " " + y2);
+      svg.appendChild(p);
+      return { el: p, u: e[0], v: e[1] };
+    });
+    paint();
+  }
+
+  function chips(arr) {
+    return arr.map(function (n) { return '<button type="button" class="chip" data-go="' + n + '">' + n + "</button>"; }).join(" ");
+  }
+  // same layer = no path between them, so any order works inside a group
+  function ordered(arr) {
+    var groups = {};
+    arr.forEach(function (n) { (groups[layer[n]] = groups[layer[n]] || []).push(n); });
+    return Object.keys(groups).sort(function (a, b) { return a - b; }).map(function (k) {
+      var g = groups[k];
+      return g.length > 1 ? '<span class="grp">' + chips(g) + '<span class="any">किसी भी क्रम में</span></span>' : chips(g);
+    }).join(' <span class="arr">→</span> ');
+  }
+  function setState(n, state) {
+    var b = nodes[n];
+    b.classList.remove("is-sel", "is-anc", "is-desc", "is-free");
+    if (state) b.classList.add(state);
+    b.setAttribute("aria-pressed", state === "is-sel" ? "true" : "false");
+  }
+
+  function paint() {
+    box.classList.toggle("has-sel", sel !== null);
+    if (sel === null) {
+      ids.forEach(function (n) { setState(n, null); });
+      paths.forEach(function (p) { p.el.removeAttribute("class"); });
+      out.innerHTML = '<p class="mi-h">किसी lesson से शुरू कीजिए</p><p>नक्शे में किसी lesson पर click कीजिए। जैसे <button type="button" class="chip" data-go="13">13</button> चुनिए। वो सिर्फ़ lessons 1 से 4 माँगता है, यानी lesson 4 के बाद उसे कभी भी पढ़ सकते हैं।</p>';
+      return;
+    }
+    var A = anc[sel], D = {};
+    var d = desc(sel);
+    d.forEach(function (n) { D[n] = true; });
+    ids.forEach(function (n) {
+      setState(n, n === sel ? "is-sel" : A[n] ? "is-anc" : D[n] ? "is-desc" : "is-free");
+    });
+    paths.forEach(function (p) {
+      var cls = "off";
+      if ((A[p.u] || p.u === sel) && (A[p.v] || p.v === sel)) cls = "in";
+      else if ((D[p.u] || p.u === sel) && D[p.v]) cls = "out";
+      p.el.setAttribute("class", cls);
+    });
+    var a = ids.filter(function (n) { return A[n]; });
+    var free = ids.filter(function (n) { return n !== sel && !A[n] && !D[n]; });
+    var kind = nodes[sel].classList.contains("base") ? "base" : nodes[sel].classList.contains("deep") ? "deep" : "core";
+    var h = '<p class="mi-h">Lesson ' + sel + ": " + info[sel].title + ' <span class="tag ' + kind + '">' + KIND[kind] + "</span></p>";
+    h += '<dl class="mi">';
+    h += "<dt>पहले ये पढ़िए</dt><dd>" + (a.length ? ordered(a) : "कुछ नहीं। यहीं से शुरू कीजिए।") + "</dd>";
+    h += "<dt>ये आगे खोलता है</dt><dd>" + (d.length ? ordered(d) + '<span class="cnt">' + d.length + " lessons इस पर टिके हैं।</span>" : "कुछ नहीं। आगे का कोई lesson इस पर नहीं टिका।") + "</dd>";
+    h += "<dt>इससे आज़ाद</dt><dd>" + (free.length ? chips(free) + '<span class="cnt">इन्हें इससे पहले या बाद, कभी भी पढ़िए।</span>' : "कोई नहीं।") + "</dd>";
+    h += "</dl>";
+    h += '<p class="mi-go"><a href="' + info[sel].href + '">Lesson ' + sel + ' खोलिए</a><button type="button" class="chip clear" data-go="0">नक्शा साफ़ कीजिए</button></p>';
+    out.innerHTML = h;
+  }
+  function pick(n) { sel = (n === 0 || n === sel) ? null : n; paint(); }
+
+  ids.forEach(function (n) { nodes[n].addEventListener("click", function () { pick(n); }); });
+  out.addEventListener("click", function (ev) {
+    var t = ev.target.closest("[data-go]");
+    if (t) pick(Number(t.dataset.go));
+  });
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(box);
+  else window.addEventListener("resize", draw);
+  draw();
+})();
+</script>
+</body>
+</html>

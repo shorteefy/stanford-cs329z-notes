@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="The query “when can I get help from a TA” shares no word with the office hours page that answers it, so word overlap gave every passage 0. Text has to be turned into vectors that can be compared.">
+<title>Lesson 3: Vectors and similarity</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .plane { display: block; width: 100%; max-width: 380px; margin: 0 auto 12px; touch-action: none; cursor: crosshair; user-select: none; }
+  .plane .grid { stroke: var(--rule); stroke-width: 1; }
+  .plane .axis { stroke: var(--muted); stroke-width: 1.2; }
+  .plane .pv { stroke: var(--muted); stroke-width: 2; }
+  .plane .pd { fill: var(--muted); }
+  .plane .qv { stroke: var(--accent); stroke-width: 3; }
+  .plane .qd { fill: var(--accent); }
+  .plane text { fill: var(--ink); font: 12px "Segoe UI", "Nirmala UI", sans-serif; }
+  .plane text.ax { fill: var(--muted); }
+  .plane text.q { fill: var(--accent); font-weight: 700; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 3 / 18 · <b>Easy</b> · <a href="03-vectors-dense-en.html">Dense</a> · <a href="03-vectors.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 3 · Easy version</p>
+  <h1>Turning text into numbers: vectors and similarity</h1>
+  <p class="lede"><b>A vector is a list of numbers with a fixed length. A retriever turns every text into a vector, then scores each passage by comparing the query's vector with the passage's vector.</b> There are two common ways to make this comparison, the dot product and cosine similarity, and in this lesson you compute both by hand.</p>
+  <p class="lede">The need for this showed up at the end of <a href="02-retrieval-en.html#retriever">lesson 2</a>. For the query <q>when can I get help from a TA</q>, <button class="def" data-w="w-overlap">word overlap</button> gave every passage 0. The answer was on the office hours page: <q>Office hours… run by the TAs</q>. The two say the same thing, but they share not a single word.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 4 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#vector">A list of numbers for a text</a><span class="can">Build a passage's vector by hand, and say what dimension means.</span></li>
+      <li><a href="#dot">Dot product: the long vector wins</a><span class="can">Compute a dot product by hand, and explain why the long FAQ page comes out on top.</span></li>
+      <li><a href="#cosine">Cosine similarity: comparing direction only</a><span class="can">Compute a length and a cosine by hand, and say what normalizing changes.</span></li>
+      <li><a href="#embedding">Embedding model: a vector for any text, automatically</a><span class="can">Describe the offline and online parts of an embedding retriever, and read Stanford's DPR slide.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="02-retrieval-en.html#retriever">Lesson 2</a> (query, passage, score, top-K, word overlap). If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="vector">
+  <h3><span class="cn">1</span>A list of numbers for a text</h3>
+
+  <p><b>A vector is a list of numbers with a fixed length, such as [0.9, 0.1].</b> How many numbers the list holds is called the vector's <b class="term">dimension</b>. [0.9, 0.1] has dimension 2, and [3, 0, 1, 2] has dimension 4. A retriever needs one score per passage, and numbers are easy to compare, so it turns every text into a vector.</p>
+
+  <p>A vector with 2 numbers can be drawn on a plane as an arrow: the first number goes on the x-axis and the second on the y-axis. The arrow from the origin (0, 0) to that point is the vector, and the arrow's direction is the vector's direction.</p>
+
+  <p>Now rate each passage by hand on two questions, giving each answer a value between 0 and 2. The first number says how much the passage is about help or office hours. The second number says how much it is about deadlines. Take three passages from lesson 2's corpus. Then add a new one: the course's long FAQ page, which says a lot about both office hours and deadlines. <span class="mine">my vectors</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Text</th><th class="mono">Vector</th></tr></thead>
+    <tbody>
+      <tr><td>Office hours page</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>Syllabus: the milestone date</td><td class="mono">[0.1, 0.9]</td></tr>
+      <tr><td>Project page: the proposal date</td><td class="mono">[0.2, 0.8]</td></tr>
+      <tr><td>Course FAQ, a long page</td><td class="mono">[1.6, 1.4]</td></tr>
+      <tr class="hi"><td>Query: when can I get help from a TA</td><td class="mono">[0.8, 0.2]</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The query and the office hours page share no word, yet their vectors are close together: [0.8, 0.2] and [0.9, 0.1]. These numbers are the answers to the two questions, and the two texts got almost the same answers. <b>So a vector can capture a match that counting words misses.</b></p>
+
+  <p>In real systems the dimensions have no such names, and there are hundreds of them, for example 768 in BERT-base vectors. <span class="mine">from the paper</span> Here there are 2, so that you can see the vectors on a plane. Every calculation below works the same way with 768 numbers.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Rate the passage <q>Extra office hours on Zoom this Friday</q> on the same two questions. Roughly what vector do you get, and which passage in the table is it close to?</p>
+    <details><summary>Show the answer</summary>
+      <p>This passage is entirely about office hours and mentions no deadline. So you get a vector of about [0.9, 0.0], which sits right next to the office hours page at [0.9, 0.1].</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="dot">
+  <h3><span class="cn">2</span>Dot product: the long vector wins</h3>
+
+  <p><b>The dot product turns two vectors into one number: multiply the numbers in the same position, then add up all the products.</b> For the query [0.8, 0.2] and the office hours page [0.9, 0.1], it is 0.8 × 0.9 + 0.2 × 0.1 = 0.72 + 0.02 = 0.74. Another name for the dot product is the <b class="term">inner product</b>, and Stanford's slides use that name.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The FAQ page [1.6, 1.4] does not point in the query's direction as closely as the office hours page does. Will its dot product be smaller or larger than 0.74?</p>
+    <details><summary>Show the answer</summary>
+      <p>Larger: 0.8 × 1.6 + 0.2 × 1.4 = 1.28 + 0.28 = 1.56. The table below has the other passages too.</p>
+    </details>
+  </div>
+
+  <div class="tscroll"><table class="t" style="margin-top:22px">
+    <thead><tr><th>Passage</th><th>Arithmetic</th><th class="numh">Dot product</th></tr></thead>
+    <tbody>
+      <tr><td>Office hours page<span class="sub mono">[0.9, 0.1]</span></td><td>0.8 × 0.9 + 0.2 × 0.1 = 0.72 + 0.02</td><td class="num">0.74</td></tr>
+      <tr><td>Syllabus<span class="sub mono">[0.1, 0.9]</span></td><td>0.8 × 0.1 + 0.2 × 0.9 = 0.08 + 0.18</td><td class="num">0.26</td></tr>
+      <tr><td>Project page<span class="sub mono">[0.2, 0.8]</span></td><td>0.8 × 0.2 + 0.2 × 0.8 = 0.16 + 0.16</td><td class="num">0.32</td></tr>
+      <tr class="hi"><td>FAQ page<span class="sub mono">[1.6, 1.4]</span></td><td>0.8 × 1.6 + 0.2 × 1.4 = 1.28 + 0.28</td><td class="num">1.56</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The FAQ page comes out on top because both of its numbers are large. Its vector is exactly twice [0.8, 0.7]. The query's dot product with [0.8, 0.7] is 0.64 + 0.14 = 0.78, and with the FAQ page it is 1.56 = 2 × 0.78.</p>
+
+  <p>Doubling a vector always does this. Every multiplication in a dot product takes one number from that vector. When that number doubles, every product doubles, and so does their sum. <b>So the dot product measures the arrow's length along with its direction, and a long vector can come out on top just because it is long.</b></p>
+
+  <p>In symbols, the same arithmetic is written like this:</p>
+  <div class="formula"><i>a</i> · <i>b</i> = <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i> = 1 … <i>d</i></span></span> <i>a</i><sub><i>i</i></sub> <i>b</i><sub><i>i</i></sub></div>
+  <p><b class="term">∑</b> (sigma) means: keep adding for every i in the range written below it, here from i = 1 up to the dimension d = 2. a<sub>i</sub> is the query's i-th number, and b<sub>i</sub> is the office hours page's. So a · b = a<sub>1</sub>b<sub>1</sub> + a<sub>2</sub>b<sub>2</sub> = 0.8 × 0.9 + 0.2 × 0.1 = 0.74.</p>
+
+  <p>The dot product is fast, only d multiplications and d additions, and the retrievers in <a href="05-rag-model-en.html#parts">lesson 5</a> and <a href="12-dpr-en.html#biencoder">lesson 12</a> use it as their score. Its limit showed up above: a passage with a long vector can come out on top even when its direction matches less well.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="cosine">
+  <h3><span class="cn">3</span>Cosine similarity: comparing direction only</h3>
+
+  <p><b>Cosine similarity compares only the direction of two vectors, not their length.</b> To do this, it divides the dot product by the product of the two vectors' lengths. So first, learn to find a length.</p>
+
+  <h4 class="sub" id="len">A vector's length</h4>
+
+  <p>A vector's <b class="term">length</b> is the length of its arrow. On the plane, the query's arrow is the longest side of a right triangle whose other two sides are 0.8 and 0.2 long. So by Pythagoras, the length is √(0.8² + 0.2²). In other words, square each number, add the squares, then take the square root:</p>
+  <ol class="plain">
+    <li>Squares: 0.8 × 0.8 = 0.64, and 0.2 × 0.2 = 0.04.</li>
+    <li>Sum: 0.64 + 0.04 = 0.68.</li>
+    <li>Square root: √0.68 = 0.82. The square root is the number that gives the inside number when you multiply it by itself. Check: 0.8246 × 0.8246 = 0.680.</li>
+  </ol>
+  <div class="formula">|<i>a</i>| = √( <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i></span></span> <i>a</i><sub><i>i</i></sub><sup>2</sup> )</div>
+  <p>In the same way, the office hours page has length √(0.81 + 0.01) = √0.82 = 0.91.</p>
+
+  <h4 class="sub" id="cos">The dot product divided by both lengths</h4>
+
+  <p>Now divide the dot product by the product of the two lengths. For the query and the office hours page that is 0.74 ÷ (0.82 × 0.91) = 0.99. This number is called the <b class="term">cosine similarity</b>.</p>
+  <div class="formula">cos(<i>a</i>, <i>b</i>) = <span class="frac"><span><i>a</i> · <i>b</i></span><span>|<i>a</i>| × |<i>b</i>|</span></span></div>
+
+  <p>It is called cosine because this number is the cosine of the angle between the two arrows. For arrows pointing the same way it is 1, at 90° it is 0, and for opposite directions it is −1. The query and the office hours page are about 8° apart, and cos 8° = 0.99.</p>
+
+  <p>Here is the same query, with length 0.82, against every passage:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Dot product</th><th class="numh">Length</th><th class="numh">Cosine</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page<span class="sub mono">[0.9, 0.1]</span></td><td class="num">0.74</td><td class="num">0.91</td><td class="num">0.99<span class="sub mono">0.74 ÷ (0.82 × 0.91)</span></td></tr>
+      <tr><td>FAQ page<span class="sub mono">[1.6, 1.4]</span></td><td class="num">1.56</td><td class="num">2.13</td><td class="num">0.89<span class="sub mono">1.56 ÷ (0.82 × 2.13)</span></td></tr>
+      <tr><td>Project page<span class="sub mono">[0.2, 0.8]</span></td><td class="num">0.32</td><td class="num">0.82</td><td class="num">0.47<span class="sub mono">0.32 ÷ (0.82 × 0.82)</span></td></tr>
+      <tr><td>Syllabus<span class="sub mono">[0.1, 0.9]</span></td><td class="num">0.26</td><td class="num">?</td><td class="num">?</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">The lengths are rounded to 2 decimals. Each cosine comes from the unrounded numbers, so the last digit of a hand calculation can differ slightly.</p>
+
+  <div class="recall">
+    <p class="rl">Work out the syllabus row</p>
+    <p>Syllabus = [0.1, 0.9], and its dot product with the query is 0.26. What are the syllabus's length and cosine?</p>
+    <details><summary>Show the answer</summary>
+      <p>Length = √(0.01 + 0.81) = √0.82 = 0.91. Cosine = 0.26 ÷ (0.82 × 0.91) = <b>0.35</b>. It is at the bottom, because the syllabus is about deadlines and the query is about getting help.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">With cosine, the office hours page comes first and the FAQ page drops to second place. The FAQ page's vector is twice [0.8, 0.7], so its length is twice as large too: 2.126 instead of 1.063. Its dot product had also doubled, and in the division the 2 cancels. <b>So a vector's length has no effect on cosine, and the long page loses its advantage.</b></p>
+
+  <h4 class="sub" id="unit">Normalizing: vectors of length 1</h4>
+
+  <p>There is also a shortcut. Divide every number in a vector by the vector's length, and its length becomes 1 while its direction stays the same. This is called <b class="term">normalizing</b> the vector. The normalized query is [0.8 ÷ 0.8246, 0.2 ÷ 0.8246] = [0.970, 0.243], and the normalized office hours page is [0.994, 0.110].</p>
+
+  <p>The dot product of normalized vectors is the cosine itself, because both lengths in the denominator are now 1: 0.970 × 0.994 + 0.243 × 0.110 = 0.964 + 0.027 = 0.991. <b>So if every vector in the index is normalized, the dot product and cosine give the same score.</b></p>
+
+  <div class="widget" id="vw">
+    <h4>Drag the query's arrow</h4>
+    <p class="hint">Click or drag on the plane, and the query's arrow moves there. For the milestone query, the dot product puts the FAQ page on top, and cosine puts the syllabus on top.</p>
+    <svg class="plane" id="vw-svg" viewBox="0 0 340 340" role="img" aria-label="Vectors of the query and the passages"></svg>
+    <div class="btns" id="vw-m">
+      <button type="button" data-m="cos">Sort by cosine</button>
+      <button type="button" data-m="dot">Sort by dot product</button>
+      <button type="button" data-p="0.8,0.2">Query: help from a TA</button>
+      <button type="button" data-p="0.1,0.9">Query: milestone due</button>
+    </div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Passage</th><th class="num mono hide-sm">Vector</th><th class="num">Dot product</th><th class="num">Cosine</th></tr></thead>
+      <tbody id="vw-body"></tbody>
+    </table></div>
+    <p class="out" id="vw-out"></p>
+  </div>
+
+  <p>Cosine has a limit too: it ignores length completely, and sometimes length carries useful information. A way of turning two vectors into a similarity number is called a <b class="term">similarity metric</b>. Which metric to use depends on the metric the model that makes the vectors was trained with.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="embedding">
+  <h3><span class="cn">4</span>Embedding model: a vector for any text, automatically</h3>
+
+  <p>The vectors above were made by hand, by asking two questions. That cannot be done by hand for the 60,000 passages of lesson 2's company, and two questions cannot capture everything a text says. So we need a program that gives any text a vector automatically.</p>
+
+  <p><b>An embedding is the vector a trained model produces for a text, so that texts saying similar things get vectors pointing in similar directions.</b> The model that reads a text and produces its embedding is called an <b class="term">embedding model</b> or an <b class="term">encoder</b>. An encoder is also made of the <button class="def" data-w="w-parameters">parameters</button> from lesson 1.</p>
+
+  <p>Training shows the encoder pairs of texts that say the same thing, and pairs that do not. It then changes the parameters so that the score of the first kind of pair goes up and the score of the second kind goes down. <a href="12-dpr-en.html#contrastive">Lesson 12</a> covers this training in full.</p>
+
+  <p>Now return to the TA query. Use the encoder to make the query's embedding, and compute its cosine with lesson 2's passages. The result might look like this: <span class="mine">my numbers, not from a real model</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th class="numh">Shared words</th><th class="numh">Cosine</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Office hours page<span class="sub">Office hours: Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs.</span></td><td class="num">0</td><td class="num">0.78</td></tr>
+      <tr><td>Queue log<span class="sub">… Tuesday 4pm office hour averaged 14 students waiting …</span></td><td class="num">0</td><td class="num">0.61</td></tr>
+      <tr><td>Homework 1 announcement<span class="sub">Homework 1 will be released on Oct 5.</span></td><td class="num">0</td><td class="num">0.22</td></tr>
+      <tr><td>Syllabus<span class="sub">Grading. The project milestone is due Week 6 …</span></td><td class="num">0</td><td class="num">0.15</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The query and the office hours page share no word, yet the office hours page is on top with 0.78. <b>Where lesson 2's retriever gave every passage 0, the embedding retriever brings the right passage to the top.</b></p>
+
+  <h4 class="sub" id="flow">Offline and online</h4>
+
+  <p>An embedding retriever runs in two parts. <b class="term">Offline</b>, before any query arrives, the encoder makes each passage's embedding once. This list of embeddings, built in advance, is called the <b class="term">index</b>. <b class="term">Online</b>, on every query, the encoder makes only the query's embedding. Then its cosine or dot product with every embedding in the index is computed, and the K passages with the highest scores come back.</p>
+
+  <p>Stanford's DPR slide shows these same two parts. The DPR of <a href="12-dpr-en.html#biencoder">lesson 12</a> has two separate encoders: E<sub>P</sub> for passages and E<sub>Q</sub> for the query. The E<sub>Q</sub>(q)<sup>⊤</sup> E<sub>P</sub>(p) in the slide's box is the dot product of the two vectors, and the <button class="def" data-w="w-transpose">⊤</button> is one way of writing it.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p43.png"><img src="img/slide-p43.png" alt="Stanford slide: the offline and online parts of DPR" loading="lazy"></a>
+    <figcaption>Stanford's slide: the offline part of DPR at the top, and the online part at the bottom. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>An embedding retriever has two limits that later lessons deal with. First, it can miss things that must match exactly: passages with error codes E-4012 and E-4021 can get almost the same embedding. <a href="14-hybrid-rerank-en.html#hybrid">Lesson 14</a> solves this. Second, every query is compared with every embedding in the index, so 60,000 passages mean 60,000 cosines per query. With tens of millions of passages this gets slow, and <a href="10-vector-search-en.html#ann">lesson 10</a> solves that.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>A new passage is added to the corpus. What does the embedding retriever have to do?</p>
+    <details><summary>Show the answer</summary>
+      <p>The encoder makes the embedding of that one passage, and you add it to the index. The rest of the index stays as it is. Each query still needs only one new embedding, the query's.</p>
+    </details>
+  </div>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 5 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 5: why cosine is the cosine of an angle, and why it always stays between −1 and 1.</li>
+      <li>Step 6: how the dot product, cosine and distance relate, and why the DPR paper chose the dot product.</li>
+      <li>Step 7: matrices and the transpose, so that the whole index is scored in one multiplication.</li>
+      <li>Step 8: the five kinds of embeddings in Stanford's table, and why a rare error code gets lost in a single vector.</li>
+      <li>Step 9: Stanford's three slides, which you read yourself.</li>
+    </ul>
+    <p><a href="03-vectors-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>A vector is a list of numbers with a fixed length. Two vectors are compared with the dot product or cosine similarity.</li>
+    <li>The dot product measures length along with direction, so the long FAQ page came out on top with 1.56. Cosine looks only at direction, and on normalized vectors the two give the same score.</li>
+    <li>An embedding model makes a vector for any text, so that texts saying similar things point in similar directions. Passage embeddings sit in an offline index, and each query needs only the query's embedding.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-vector">Vector</dt><dd>A list of numbers with a fixed length, such as [0.9, 0.1]. With 2 numbers, it is an arrow on a plane.</dd>
+    <dt id="w-dimension">Dimension</dt><dd>How many numbers a vector has. For example, [0.9, 0.1] has dimension 2, and BERT-base vectors have 768.</dd>
+    <dt id="w-dot">Dot product (inner product)</dt><dd>Multiply the numbers in the same position, then add them all. For example, [0.8, 0.2] and [0.9, 0.1]: 0.72 + 0.02 = 0.74.</dd>
+    <dt id="w-sigma">∑ (sigma)</dt><dd>Keep adding over the range written below it. For example, the sum of a<sub>i</sub>b<sub>i</sub> for i = 1 to 2 is a<sub>1</sub>b<sub>1</sub> + a<sub>2</sub>b<sub>2</sub>.</dd>
+    <dt id="w-length">Length</dt><dd>The length of the arrow: square each number, add the squares, take the square root. For example, [0.8, 0.2] has length √(0.64 + 0.04) = 0.82.</dd>
+    <dt id="w-cosine">Cosine similarity</dt><dd>The dot product divided by the product of both lengths. It looks only at direction and stays between −1 and 1. For example, 0.74 ÷ (0.82 × 0.91) = 0.99.</dd>
+    <dt id="w-normalize">Normalize</dt><dd>Divide every number in a vector by its length, so the length becomes 1 and the direction stays the same. For example, [0.8, 0.2] ÷ 0.82 = [0.97, 0.24].</dd>
+    <dt id="w-embedding">Embedding</dt><dd>A text's vector, produced by a trained model. Texts saying similar things point in similar directions, such as “help from a TA” and “run by the TAs”.</dd>
+    <dt id="w-encoder">Embedding model (encoder)</dt><dd>A model that reads a text and produces its fixed-length embedding. For example, turning the query into a vector like [0.8, 0.2].</dd>
+    <dt id="w-index">Index</dt><dd>The list of passage embeddings built in advance. For example, 60,000 vectors for 60,000 passages.</dd>
+    <dt id="w-offline">Offline and online</dt><dd>Offline: once, before any query arrives, such as building the passage embeddings. Online: on every query, such as making the query's embedding.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="02-retrieval-en.html">Previous: Lesson 2</a>
+    <a href="04-probability-tools-en.html">Next: Lesson 4, Probability tools</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Paper: Karpukhin et al., 2020, “Dense Passage Retrieval for Open-Domain Question Answering”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var P = [
+    { name: "Office hours page", label: "Office hours", v: [0.9, 0.1], dx: 7, dy: -7, a: "start" },
+    { name: "Syllabus", label: "Syllabus", v: [0.1, 0.9], dx: 8, dy: -8, a: "start" },
+    { name: "Project page", label: "Project", v: [0.2, 0.8], dx: 8, dy: 4, a: "start" },
+    { name: "FAQ page", label: "FAQ", v: [1.6, 1.4], dx: 7, dy: -6, a: "start" }
+  ];
+  var T = { axX: "First number: help / office hours", axY: "Second number: deadlines", len: "length", end: ".", cos: "Top by cosine", dot: "Top by dot product", top: ": " };
+  var q = [0.8, 0.2];
+  var metric = "cos";
+  var svg = document.getElementById("vw-svg");
+  var body = document.getElementById("vw-body");
+  var out = document.getElementById("vw-out");
+  var NS = "http://www.w3.org/2000/svg";
+  var OX = 56, OY = 296, S = 125, MAX = 2;
+
+  function px(v) { return [OX + v[0] * S, OY - v[1] * S]; }
+  function el(tag, attrs, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1]; }
+  function len(a) { return Math.sqrt(dot(a, a)); }
+  function r2(x) { return (Math.round(x * 100 + 1e-9) / 100).toFixed(2); }
+
+  function draw() {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    for (var g = 0; g <= MAX + 1e-9; g += 0.5) {
+      var a = px([g, 0]), b = px([g, MAX]);
+      svg.appendChild(el("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1], "class": "grid" }));
+      var c = px([0, g]), d = px([MAX, g]);
+      svg.appendChild(el("line", { x1: c[0], y1: c[1], x2: d[0], y2: d[1], "class": "grid" }));
+      svg.appendChild(el("text", { x: a[0], y: OY + 16, "text-anchor": "middle", "class": "ax" }, g.toFixed(1)));
+      svg.appendChild(el("text", { x: OX - 8, y: c[1] + 4, "text-anchor": "end", "class": "ax" }, g.toFixed(1)));
+    }
+    var o = px([0, 0]);
+    svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: px([MAX, 0])[0], y2: o[1], "class": "axis" }));
+    svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: o[0], y2: px([0, MAX])[1], "class": "axis" }));
+    svg.appendChild(el("text", { x: px([MAX, 0])[0], y: OY + 32, "text-anchor": "end", "class": "ax" }, T.axX));
+    svg.appendChild(el("text", { x: 12, y: px([0, 1])[1], "text-anchor": "middle", "class": "ax", transform: "rotate(-90 12 " + px([0, 1])[1] + ")" }, T.axY));
+    P.forEach(function (p) {
+      var t = px(p.v);
+      svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: t[0], y2: t[1], "class": "pv" }));
+      svg.appendChild(el("circle", { cx: t[0], cy: t[1], r: 4, "class": "pd" }));
+      svg.appendChild(el("text", { x: t[0] + p.dx, y: t[1] + p.dy, "text-anchor": p.a }, p.label));
+    });
+    var tq = px(q);
+    svg.appendChild(el("line", { x1: o[0], y1: o[1], x2: tq[0], y2: tq[1], "class": "qv" }));
+    svg.appendChild(el("circle", { cx: tq[0], cy: tq[1], r: 6, "class": "qd" }));
+    svg.appendChild(el("text", { x: tq[0] - 10, y: tq[1] - 10, "text-anchor": "end", "class": "q" }, "query"));
+  }
+
+  function table() {
+    var rows = P.map(function (p) {
+      var d = dot(q, p.v);
+      return { p: p, dot: d, cos: d / (len(q) * len(p.v)) };
+    });
+    rows.sort(function (a, b) { return b[metric] - a[metric]; });
+    body.innerHTML = rows.map(function (r, i) {
+      return '<tr class="' + (i === 0 ? "hi" : "") + '"><td>' + r.p.name + '</td><td class="num mono hide-sm">[' + r.p.v[0] + ", " + r.p.v[1] + ']</td><td class="num">' +
+        r2(r.dot) + '</td><td class="num">' + r2(r.cos) + "</td></tr>";
+    }).join("");
+    out.innerHTML = "Query vector: <b>[" + q[0].toFixed(2) + ", " + q[1].toFixed(2) + "]</b>, " + T.len + " " + r2(len(q)) + T.end + " " +
+      (metric === "cos" ? T.cos : T.dot) + T.top + "<b>" + rows[0].p.name + "</b>" + T.end;
+    document.querySelectorAll("#vw-m button[data-m]").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.dataset.m === metric ? "true" : "false");
+    });
+  }
+
+  function render() { draw(); table(); }
+
+  function setFromEvent(ev) {
+    var pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    var p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    var x = (p.x - OX) / S, y = (OY - p.y) / S;
+    x = Math.min(MAX, Math.max(0.05, x));
+    y = Math.min(MAX, Math.max(0.05, y));
+    q = [Math.round(x * 20) / 20, Math.round(y * 20) / 20];
+    render();
+  }
+  var dragging = false;
+  svg.addEventListener("pointerdown", function (e) { dragging = true; svg.setPointerCapture(e.pointerId); setFromEvent(e); });
+  svg.addEventListener("pointermove", function (e) { if (dragging) setFromEvent(e); });
+  svg.addEventListener("pointerup", function () { dragging = false; });
+  svg.addEventListener("pointercancel", function () { dragging = false; });
+
+  document.querySelectorAll("#vw-m button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (b.dataset.m) metric = b.dataset.m;
+      if (b.dataset.p) q = b.dataset.p.split(",").map(Number);
+      render();
+    });
+  });
+  render();
+})();
+</script>
+</body>
+</html>

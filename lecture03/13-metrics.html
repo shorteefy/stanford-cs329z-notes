@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Retriever सुधरा, दूसरे सवाल का सही passage ऊपर आया, फिर भी top-3 वाली गिनती 0.667 पर अटकी रही। ऐसे numbers बनाने हैं, जो ये बदलाव देख सकें।">
+<title>Lesson 13: Retriever को नापना</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .rank { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
+  .rank .item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 10px; font-size: 15px; }
+  .rank .item.rel { border-color: var(--accent); }
+  .rank .item .pos { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .rank .item .g { font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .rank .item button { font: 600 13px/1 var(--sans); background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 5px 8px; cursor: pointer; color: var(--ink); }
+  .rank .item.cut { opacity: .45; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 13 / 18 · <b>आसान</b> · <a href="13-metrics-dense.html">गहरा</a> · <a href="13-metrics-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 13 · आसान version</p>
+  <h1>Retriever को नापना: Hit@k, MRR, Recall@k और nDCG</h1>
+  <p class="lede"><b>Retriever को नापने का मतलब है: कुछ queries पर उसकी lists देखना, और गिनना कि सही passages कितने आए और कितने ऊपर आए।</b> इसके लिए पहले हर query के सही passages लिखने पड़ते हैं, और फिर हर metric इन lists से एक number बनाता है।</p>
+  <p class="lede"><a href="02-retrieval.html#recall-ceiling">Lesson 2</a> में recall मोटे तौर पर गिना था। अब एक retriever को उन्हीं 3 queries पर चलाइए। पहली query पर सही passage पहले rank पर आता है, दूसरी पर दूसरे rank पर, और तीसरी पर कहीं नहीं। Top-3 में 3 में से 2 queries पर सही passage पहुँचा, यानी 0.667।</p>
+  <p class="lede">फिर आप retriever सुधारते हैं, और दूसरी query का सही passage पहले rank पर आ जाता है। Prompt में एक ही passage जाए, तो अब उस query का जवाब भी बनेगा। फिर भी top-3 वाली गिनती 0.667 पर अटकी रहती है। ये lesson ऐसे numbers बनाता है, जो ये बदलाव देख सकें।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 5 पड़ाव हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#labels">Relevance labels और sets</a><span class="can">R<sub>q</sub>, Top<sub>k</sub>(q), ∩ और |A| अपने example पर लिख पाएँगे।</span></li>
+      <li><a href="#hit">Hit@k और Failed@k</a><span class="can">Hit@3 और Failed@3 हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#mrr">MRR@k</a><span class="can">Reciprocal rank निकाल पाएँगे, और दिखा पाएँगे कि सुधार MRR में दिखता है।</span></li>
+      <li><a href="#recallk">Recall@k</a><span class="can">Recall@k निकाल पाएँगे, सही k चुन पाएँगे, और Stanford की MRR और Recall वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#ndcg">nDCG@k</a><span class="can">nDCG हाथ से निकाल पाएँगे, Stanford की दूसरी slide पढ़ पाएँगे, और सही metric चुन पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="02-retrieval.html#corpus">Lesson 2</a> (corpus के 6 passages, top-K, recall, recall ceiling), <a href="03-vectors.html">Lesson 3</a> (∑ का निशान) और <a href="04-probability-tools.html#loss">Lesson 4</a> (ln)। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="labels">
+  <h3><span class="cn">1</span>Relevance labels और sets: पहले सही passages लिखिए</h3>
+
+  <p><b>Relevance labels वो list है, जिसमें कोई इंसान हर query के आगे उसके सही passages लिखता है।</b> Retriever खुद नहीं बता सकता कि उसकी list सही है, इसलिए नापने से पहले किसी को passages पढ़कर ये list बनानी पड़ती है। हर passage को एक grade भी मिल सकता है। 3 यानी बहुत काम का, 1 यानी थोड़ा काम का, और 0 यानी काम का नहीं।</p>
+
+  <p>पूरे lesson में lesson 2 के corpus वाली यही 3 <button class="def" data-w="w-query">queries</button> चलेंगी। मान लीजिए एक <button class="def" data-w="w-retriever">retriever</button> हर query पर 5 passages लौटाता है, और bracket में हर passage का grade है। <span class="mine">ये retriever और grades मेरे बनाए हैं</span></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query</th><th>Retriever का क्रम (grade)</th><th>सही passages</th></tr></thead>
+    <tbody>
+      <tr><td>q1: Least crowded office hour?</td><td>queue log (3), पुराना forum post (0), office hours page (1), syllabus (0), project page (0)</td><td>queue log, office hours page</td></tr>
+      <tr><td>q2: When is the milestone due?</td><td>project page (0), syllabus (3), Homework 1 announcement (0), office hours page (0), queue log (0)</td><td>syllabus</td></tr>
+      <tr><td>q3: When can I get help from a TA?</td><td>syllabus (0), Homework 1 announcement (0), project page (0), पुराना forum post (0), queue log (0)</td><td>office hours page, grade 2</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>q1 के दो सही passages हैं। Queue log में भीड़ का data है, और office hours page बताता है कि Thursday 9am वाला office hour Zoom पर है। असली जवाब queue log में है, इसलिए उसे grade 3 मिला, और office hours page को 1। q3 का सही passage retriever की list में कहीं नहीं है।</p>
+
+  <h4 class="sub" id="sets">Sets: सही passages को छोटे नाम देना</h4>
+
+  <p>Metrics के formulas इन lists को छोटे नाम देते हैं, और इसके लिए sets चाहिए। <b class="term">Set</b> चीज़ों का एक group है, जिसे { } के अंदर लिखते हैं, और उसमें क्रम मायने नहीं रखता।</p>
+
+  <p>Query q के सही passages का set R<sub>q</sub> लिखते हैं, जैसे R<sub>q1</sub> = {queue log, office hours page}। Retriever के ऊपर के k passages का set Top<sub>k</sub>(q) है। ये k lesson 2 वाला <button class="def" data-w="w-topk">K</button> ही है, बस formulas में इसे छोटा लिखते हैं। तो Top<sub>3</sub>(q1) = {queue log, पुराना forum post, office hours page}। Sets के साथ तीन निशान और आते हैं:</p>
+  <ul class="plain">
+    <li><b>∩</b> दो sets की वो चीज़ें देता है, जो दोनों में हैं। R<sub>q1</sub> ∩ Top<sub>3</sub>(q1) = {queue log, office hours page}, यानी q1 के दोनों सही passages top-3 में हैं।</li>
+    <li><b>∅</b> खाली set है, जिसमें कुछ नहीं। q3 पर {office hours page} ∩ {syllabus, Homework 1 announcement, project page} में कुछ भी common नहीं, इसलिए वो ∅ है।</li>
+    <li><b>|A|</b> बताता है कि set A में कितनी चीज़ें हैं। |R<sub>q1</sub>| = 2, और सारी queries के set Q के लिए |Q| = 3।</li>
+  </ul>
+
+  <p>Labels की एक कीमत भी है। हर query के सही passages किसी इंसान को पढ़कर तय करने पड़ते हैं, और ये महँगा है। अगर वो कोई सही passage छोड़ दे, तो retriever उसे लाकर भी हर metric में हारता है।</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="hit">
+  <h3><span class="cn">2</span>Hit@k और Failed@k: सही passage पहुँचा या नहीं</h3>
+
+  <p><b>Hit@k हर query पर देखता है कि top-k में कोई सही passage है या नहीं, और फिर queries का औसत लेता है।</b> अगर है, तो उस query को 1 मिलता है, नहीं तो 0। k = 3 पर q1 के top-3 में queue log और office hours page हैं, इसलिए 1। q2 के top-3 में syllabus है, इसलिए 1। q3 के top-3 में कोई सही passage नहीं, इसलिए 0।</p>
+  <ol class="plain">
+    <li>तीनों queries के numbers जोड़िए: 1 + 1 + 0 = 2।</li>
+    <li>जोड़ को queries की गिनती से भाग दीजिए, यानी औसत लीजिए: 2 ÷ 3 = 0.667।</li>
+  </ol>
+  <p>Hit@3 = 0.667, और ये शुरू वाला number है।</p>
+
+  <p>“सच हो तो 1, झूठ हो तो 0” वाले इस नियम का एक निशान है: <button class="def" data-w="w-indicator">𝟙[शर्त]</button>। जैसे 𝟙[2 &gt; 1] = 1, और 𝟙[2 &gt; 3] = 0। Hit@k में शर्त ये है कि R<sub>q</sub> ∩ Top<sub>k</sub>(q) खाली न हो, और इसे ≠ ∅ लिखते हैं, जहाँ ≠ का मतलब है “बराबर नहीं”। q3 पर ∩ खाली है, इसलिए 𝟙[R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) ≠ ∅] = 0। Formula में ऊपर के दोनों steps यही हैं:</p>
+  <div class="formula">Hit@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> 𝟙[R<sub>q</sub> ∩ Top<sub>k</sub>(q) ≠ ∅]</div>
+  <dl class="sym">
+    <dt><button class="def" data-w="w-sigma">∑</button><sub>q ∈ Q</sub></dt><dd>Q की हर query q पर जोड़िए। ∈ का मतलब है “इस set में से एक”। यहाँ 1 + 1 + 0 = 2।</dd>
+    <dt>1 ÷ |Q|</dt><dd>Queries की गिनती से भाग, यानी औसत। यहाँ 2 ÷ 3 = 0.667।</dd>
+  </dl>
+
+  <p><b class="term">Failed@k</b> इसका उल्टा है: कितनी queries पर top-k में एक भी सही passage नहीं पहुँचा। हर query पर Hit का 1 या Failed का 1 लगता है, कभी दोनों नहीं, इसलिए Failed@k = 1 − Hit@k। यहाँ Failed@3 = 1 − 0.667 = 0.333, क्योंकि 3 में से 1 query, q3, fail हुई।</p>
+
+  <p>Hit@3 = 0.667 ही यहाँ lesson 2 की <button class="def" data-w="w-ceiling">recall ceiling</button> है, क्योंकि 3 में से 2 से ज़्यादा जवाब passages से नहीं बन सकते। यही numbers आगे दूसरे नामों से आते हैं। <a href="08-contextual-retrieval.html#contextual">Lesson 8</a> का <button class="def" data-w="w-failed20">failed retrievals@20</button> Failed@20 ही है, क्योंकि वहाँ हर query का एक सही chunk था। <a href="12-dpr.html#results">Lesson 12</a> की <button class="def" data-w="w-topkacc">top-k retrieval accuracy</button> Hit@20 है।</p>
+
+  <p>अब शुरू वाला सुधार देखिए। q2 का syllabus rank 2 से rank 1 पर आया, लेकिन दोनों बार वो top-3 के अंदर है, इसलिए q2 को दोनों बार 1 मिला। <b>Hit@k ये नहीं देखता कि top-k के अंदर सही passage कहाँ है।</b> Stanford की slide भी Hit@k के नीचे यही लिखती है: <q>Position in the top k does not matter</q>।</p>
+
+  <p>k = 1 लें, तो ये सुधार दिखता है: Hit@1 पहले 1 ÷ 3 = 0.333 था, और सुधार के बाद 2 ÷ 3 = 0.667 है। लेकिन तब Hit@1 rank 2 और rank 5 में फ़र्क नहीं करता, क्योंकि दोनों पर 0 मिलता है। मतलब हर k पर Hit@k क्रम का बस एक टुकड़ा देखता है।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="mrr">
+  <h3><span class="cn">3</span>MRR@k: पहला सही passage कितना ऊपर है</h3>
+
+  <p><b>Reciprocal rank पहले सही passage के rank का उल्टा है, यानी 1 ÷ rank, और MRR इसी का queries पर औसत है।</b> किसी number का उल्टा, यानी 1 को उस number से भाग। पहला सही passage rank 1 पर हो, तो 1 ÷ 1 = 1। Rank 2 पर हो, तो 1 ÷ 2 = 0.5, और rank 3 पर 1 ÷ 3 = 0.333। Top-k में कोई सही passage न हो, तो 0।</p>
+
+  <p>अब k = 3 पर तीनों queries देखिए। q1 का पहला सही passage queue log rank 1 पर है, तो 1। q2 का syllabus rank 2 पर है, तो 0.5। q3 के top-3 में कोई सही passage नहीं, तो 0।</p>
+  <ol class="plain">
+    <li>तीनों reciprocal ranks जोड़िए: 1 + 0.5 + 0 = 1.5।</li>
+    <li>3 queries से भाग दीजिए: 1.5 ÷ 3 = 0.5।</li>
+  </ol>
+  <p>इस औसत को <b class="term">MRR</b> कहते हैं, यानी mean reciprocal rank, और यहाँ MRR@3 = 0.5। Formula में यही दो steps हैं:</p>
+  <div class="formula">MRR@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> <span class="frac"><span>1</span><span>rank<sub>q</sub></span></span></div>
+  <dl class="sym">
+    <dt>rank<sub>q</sub></dt><dd>Query q का पहला सही passage किस rank पर है: q1 पर 1, और q2 पर 2। q3 पर top-3 में कोई नहीं, इसलिए 0।</dd>
+  </dl>
+
+  <p>अब शुरू वाला सुधार देखिए। q2 का syllabus rank 1 पर आया, तो q2 का reciprocal rank 0.5 से 1 हो गया, और MRR@3 = (1 + 1 + 0) ÷ 3 = 0.667। <b>Hit@3 नहीं हिला था, लेकिन MRR@3 0.5 से 0.667 पर गया।</b> <span class="mine">ये सुधार मेरा बनाया example है</span></p>
+
+  <p>MRR तब सबसे काम का है, जब एक सही passage काफ़ी हो, जैसे q2 पर, जिसकी पूरी तारीख syllabus में है। <a href="14-hybrid-rerank.html">Lesson 14</a> और <a href="15-colbert.html">15</a> के retrievers की तुलना भी MRR@10 से होती है।</p>
+
+  <p>लेकिन MRR सिर्फ़ पहला सही passage देखता है। q1 में office hours page rank 3 पर हो या top-3 से बाहर, q1 का reciprocal rank 1 ही रहता है। जबकि q1 के पूरे जवाब को दोनों passages चाहिए: queue log से समय, और office hours page से ये कि वो Zoom पर है।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="recallk">
+  <h3><span class="cn">4</span>Recall@k: सारे सही passages में से कितने पहुँचे</h3>
+
+  <p><b>Recall@k हर query पर गिनता है कि उसके सारे सही passages में से कितना हिस्सा top-k में आया, और फिर queries का औसत लेता है।</b> q1 जैसी query पर एक सही passage काफ़ी नहीं है, क्योंकि reader को queue log से समय मिलता है और office hours page से जगह।</p>
+
+  <p>k = 3 पर q1 के 2 में से 2 सही passages मिले, q2 का 1 में से 1, और q3 का 1 में से 0।</p>
+  <ol class="plain">
+    <li>हर query का हिस्सा: q1 पर 2 ÷ 2 = 1, q2 पर 1 ÷ 1 = 1, और q3 पर 0 ÷ 1 = 0।</li>
+    <li>औसत: (1 + 1 + 0) ÷ 3 = 0.667।</li>
+  </ol>
+  <p>इस number को <b class="term">Recall@k</b> कहते हैं। Lesson 2 में <button class="def" data-w="w-recall">recall</button> मोटे तौर पर आया था, जैसे 100 में से 60 सवालों पर सही passage मिला, तो 0.6। ये उसका पक्का रूप है।</p>
+
+  <p>k = 1 पर Recall और Hit का फ़र्क दिखता है। q1 के top-1 में सिर्फ़ queue log है, यानी 2 में से 1, तो 0.5। q2 और q3 पर 0। Recall@1 = (0.5 + 0 + 0) ÷ 3 = 0.167, जबकि Hit@1 = 0.333। Hit@1 ने q1 को पूरा 1 दिया, और Recall@1 ने सिर्फ़ आधा, क्योंकि office hours page छूट गया।</p>
+
+  <div class="formula">Recall@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> <span class="frac"><span>|R<sub>q</sub> ∩ Top<sub>k</sub>(q)|</span><span>|R<sub>q</sub>|</span></span></div>
+  <dl class="sym">
+    <dt>|R<sub>q</sub> ∩ Top<sub>k</sub>(q)|</dt><dd>Top-k में मिले सही passages की गिनती। k = 1 पर q1 के लिए |{queue log}| = 1।</dd>
+    <dt>|R<sub>q</sub>|</dt><dd>उस query के कुल सही passages। q1 के लिए 2, तो q1 का हिस्सा 1 ÷ 2 = 0.5।</dd>
+  </dl>
+
+  <p>Recall@k की एक कमज़ोरी है: k बढ़ाने पर वो कभी नहीं घटता, क्योंकि top-k में passages सिर्फ़ जुड़ते हैं, निकलते नहीं। k = 1,000 पर recall बहुत ऊँचा दिखेगा, लेकिन lesson 2 के हिसाब से <button class="def" data-w="w-prompt">prompt</button> में करीब 14 passages ही समाते हैं। <b>इसलिए Recall@k उसी k पर देखिए, जितने passages आप सच में prompt में डालते हैं।</b> Recall@k भी top-k के अंदर का क्रम नहीं देखता: q1 पर queue log rank 1 पर हो या rank 3 पर, Recall@3 वही रहता है।</p>
+
+  <p><a href="10-vector-search.html">Lesson 10</a> में <button class="def" data-w="w-ann">ANN</button> का recall exact search की list से तुलना करता है: exact top-10 में से 9 मिले, तो 0.9। Recall@k की तुलना इंसान के लिखे relevance labels से होती है।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p46.png"><img src="img/slide-p46.png" alt="Stanford slide: MRR@k और Recall@k के formulas" loading="lazy"></a>
+    <figcaption>Stanford की slide: MRR@k और Recall@k के formulas। अब आप इसकी हर line पढ़ सकते हैं। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="ndcg">
+  <h3><span class="cn">5</span>nDCG@k: ज़्यादा काम का passage ऊपर है या नहीं</h3>
+
+  <p><b>nDCG@k हर grade को उसके rank के हिसाब से घटाकर जोड़ता है, फिर उस जोड़ को सबसे अच्छे क्रम वाले जोड़ से भाग देता है।</b> इसलिए वो दो चीज़ें साथ देखता है: passage कितना काम का है, और कितना ऊपर है। अब तक के तीनों metrics में passage या तो सही था या गलत।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>q1 का क्रम उलट दीजिए: office hours page (1), पुराना forum post (0), queue log (3)। Hit@3, reciprocal rank और Recall@3 में से q1 पर कौन सा number बदलेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>एक भी नहीं। Hit 1 है, reciprocal rank भी 1 है, क्योंकि office hours page भी सही है, और Recall 2 में से 2 है। लेकिन reader के लिए ये list बदतर है, क्योंकि भीड़ का data अब तीसरे rank पर है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">पहली कोशिश ये हो सकती है कि top-k के grades जोड़ दें। लेकिन पुराने क्रम में 3 + 0 + 1 = 4 है, और उलटे क्रम में 1 + 0 + 3 = 4, यानी जोड़ grade देखता है, क्रम नहीं। इसलिए हर grade को उसके rank के हिसाब से घटाते हैं, ताकि नीचे वाला passage कम गिने।</p>
+
+  <h4 class="sub" id="discount">log<sub>2</sub>(rank + 1) से भाग</h4>
+
+  <p>घटाने के लिए grade को <button class="def" data-w="w-log2">log<sub>2</sub></button>(rank + 1) से भाग देते हैं। log<sub>2</sub> x का मतलब है: 2 को किस power तक उठाएँ, कि x मिले। 2<sup>1</sup> = 2, 2<sup>2</sup> = 4 और 2<sup>3</sup> = 8, इसलिए log<sub>2</sub> 2 = 1, log<sub>2</sub> 4 = 2 और log<sub>2</sub> 8 = 3। 3 का log<sub>2</sub> 1 और 2 के बीच है, क्योंकि 3 भी 2 और 4 के बीच है: log<sub>2</sub> 3 = 1.585। जाँच: 2<sup>1.585</sup> = 3.000।</p>
+
+  <p>ये lesson 4 वाले <button class="def" data-w="w-ln">ln</button> जैसा ही है। वहाँ base e था, जो करीब 2.718 है, और यहाँ base 2 है। Rank में 1 इसलिए जोड़ते हैं, ताकि rank 1 पर भाजक log<sub>2</sub> 2 = 1 हो, और सबसे ऊपर वाला passage अपना पूरा grade रखे:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Rank</th><th class="numh">log<sub>2</sub>(rank + 1)</th><th class="numh">Grade का कितना हिस्सा गिनता है</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="num">log<sub>2</sub> 2 = 1</td><td class="num">1 ÷ 1 = 1</td></tr>
+      <tr><td>2</td><td class="num">log<sub>2</sub> 3 = 1.585</td><td class="num">1 ÷ 1.585 = 0.631</td></tr>
+      <tr><td>3</td><td class="num">log<sub>2</sub> 4 = 2</td><td class="num">1 ÷ 2 = 0.5</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>अब q1 के पुराने क्रम का जोड़ निकालिए:</p>
+  <ol class="plain">
+    <li>Rank 1, queue log: 3 ÷ 1 = 3।</li>
+    <li>Rank 2, पुराना forum post: 0 ÷ 1.585 = 0।</li>
+    <li>Rank 3, office hours page: 1 ÷ 2 = 0.5।</li>
+    <li>जोड़: 3 + 0 + 0.5 = 3.5।</li>
+  </ol>
+  <p>उलटे क्रम में office hours page rank 1 पर है और queue log rank 3 पर: 1 ÷ 1 + 0 + 3 ÷ 2 = 1 + 1.5 = 2.5। अब क्रम दिखता है, क्योंकि 3.5 और 2.5 अलग हैं। इस जोड़ को <button class="def" data-w="w-dcg">DCG</button> कहते हैं, यानी discounted cumulative gain। Gain यानी grade, cumulative यानी जोड़, और discounted यानी rank के हिसाब से घटाया हुआ।</p>
+
+  <h4 class="sub" id="idcg">IDCG से भाग: हर query को 0 से 1 के बीच लाना</h4>
+
+  <p>एक दिक्कत बाकी है: DCG कितना बड़ा हो सकता है, ये query पर टिका है। q1 के दो सही passages हैं, grade 3 और 1, इसलिए उसका DCG 3.631 तक जा सकता है। q3 का एक ही सही passage है, grade 2, इसलिए उसका DCG 2 से ऊपर नहीं जा सकता। सीधा औसत लें, तो ज़्यादा सही passages वाली queries का वज़न ज़्यादा रहेगा।</p>
+
+  <p>इसलिए हर query का DCG उसी query के सबसे अच्छे possible क्रम के DCG से भाग देते हैं, जिसे IDCG, यानी ideal DCG कहते हैं। q1 का सबसे अच्छा क्रम queue log (3), office hours page (1) है, इसलिए IDCG = 3 ÷ 1 + 1 ÷ 1.585 = 3.631। ये क्रम सारे labels से बनता है, retriever की list से नहीं, इसलिए q3 का IDCG 2 है।</p>
+
+  <p>अब पुराने क्रम का 3.5 ÷ 3.631 = 0.964 है, और उलटे क्रम का 2.5 ÷ 3.631 = 0.689। इस भाग को <b class="term">nDCG</b> कहते हैं, जहाँ n का मतलब normalized है। ये 0 से 1 के बीच रहता है, और 1 का मतलब है कि इससे अच्छा क्रम हो ही नहीं सकता।</p>
+
+  <p><b>Hit, reciprocal rank और Recall ने उलटा क्रम नहीं पकड़ा, लेकिन nDCG 0.964 से 0.689 पर गिरा।</b> Formula में यही हिसाब है, और फिर हर query के nDCG का औसत:</p>
+  <div class="formula">DCG<sub>q</sub>@k = <span class="sum"><span class="op">∑</span><span class="lim">i = 1 … k</span></span> <span class="frac"><span>rel<sub>q,i</sub></span><span>log<sub>2</sub>(i + 1)</span></span>, &nbsp; nDCG@k = <span class="frac"><span>1</span><span>|Q|</span></span> <span class="sum"><span class="op">∑</span><span class="lim">q ∈ Q</span></span> <span class="frac"><span>DCG<sub>q</sub>@k</span><span>IDCG<sub>q</sub>@k</span></span></div>
+  <p>यहाँ rel<sub>q,i</sub> rank i वाले passage का grade है, जो q1 के पुराने क्रम में 3, 0 और 1 है। बाकी दो queries पर भी यही हिसाब चलता है। q3 का सही passage top-3 में नहीं है, इसलिए उसका DCG 0 है, और nDCG भी 0।</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query, k = 3</th><th class="numh">DCG</th><th class="numh">IDCG</th><th class="numh">nDCG</th></tr></thead>
+    <tbody>
+      <tr><td>q1<span class="sub">queue log (3), forum post (0), office hours page (1)</span></td><td class="num">3.5</td><td class="num">3.631</td><td class="num">0.964</td></tr>
+      <tr class="hi"><td>q2<span class="sub">project page (0), syllabus (3), Homework 1 (0)</span></td><td class="num">?</td><td class="num">3</td><td class="num">?</td></tr>
+      <tr><td>q3<span class="sub">syllabus (0), Homework 1 (0), project page (0)</span></td><td class="num">0</td><td class="num">2</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">दूसरी row आप निकालिए</p>
+    <p>q2 का सही passage syllabus (grade 3) rank 2 पर है। उसका DCG और nDCG कितना है? फिर तीनों queries का nDCG@3 निकालिए।</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>DCG = 3 ÷ log<sub>2</sub> 3 = 3 ÷ 1.585 = 1.893। IDCG = 3 ÷ 1 = 3, क्योंकि सबसे अच्छे क्रम में syllabus rank 1 पर होता। nDCG = 1.893 ÷ 3 = <b>0.631</b>।</p>
+      <p>nDCG@3 = (0.964 + 0.631 + 0) ÷ 3 = <b>0.532</b>।</p>
+    </details>
+  </div>
+
+  <div class="widget" id="mw">
+    <h4>q1 का क्रम बदलिए</h4>
+    <p class="hint">“ऊपर” दबाकर passage को एक rank ऊपर कीजिए, और k बदलिए। सही passages पर रंगीन border है। उलटा क्रम बनाइए, और nDCG 0.689 देखिए।</p>
+    <div class="ctl"><label for="mw-k">k</label><input id="mw-k" type="range" min="1" max="5" step="1" value="3"><output id="mw-ko">3</output></div>
+    <div class="btns">
+      <button type="button" data-o="0,1,2,3,4">शुरू वाला क्रम</button>
+      <button type="button" data-o="2,1,0,3,4">उलटा क्रम</button>
+    </div>
+    <div class="rank" id="mw-list"></div>
+    <div class="tscroll"><table class="t">
+      <thead><tr><th>Metric (सिर्फ़ q1)</th><th class="numh">Value</th></tr></thead>
+      <tbody id="mw-body"></tbody>
+    </table></div>
+  </div>
+
+  <figure class="slide">
+    <a href="img/slide-p45.png"><img src="img/slide-p45.png" alt="Stanford slide: Hit@k, Failed@k और nDCG@k के formulas" loading="lazy"></a>
+    <figcaption>Stanford की slide: Hit@k, Failed@k और nDCG@k के formulas। अब आप इसकी हर line पढ़ सकते हैं।</figcaption>
+  </figure>
+
+  <h4 class="sub" id="together">एक retriever, चार numbers</h4>
+
+  <p>अब शुरू वाले retriever के चारों numbers एक साथ रखिए। List वही है और k = 3 है, फिर भी चार अलग numbers आते हैं:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Query</th><th class="numh">Hit@3</th><th class="numh">Reciprocal rank</th><th class="numh">Recall@3</th><th class="numh">nDCG@3</th></tr></thead>
+    <tbody>
+      <tr><td>q1</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">0.964</td></tr>
+      <tr><td>q2</td><td class="num">1</td><td class="num">0.5</td><td class="num">1</td><td class="num">0.631</td></tr>
+      <tr><td>q3</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+      <tr class="total"><td>औसत</td><td class="num">0.667</td><td class="num">0.5<span class="sub">MRR@3</span></td><td class="num">0.667</td><td class="num">0.532</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>शुरू वाला सुधार अब फिर देखिए। q2 का syllabus rank 1 पर आए, तो उसका nDCG 3 ÷ 3 = 1 हो जाता है, और nDCG@3 = (0.964 + 1 + 0) ÷ 3 = 0.655। MRR@3 भी 0.667 होता है, जबकि Hit@3 और Recall@3 0.667 पर ही रहते हैं।</p>
+
+  <p>nDCG की कीमत ये है कि उसे grades चाहिए, जो सही-गलत वाले labels से भी महँगे हैं। <a href="08-contextual-retrieval.html#late">Lesson 8</a> के late chunking वाले scores यही nDCG@10 थे, % में। हर metric अलग सवाल का जवाब देता है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Metric</th><th>किस सवाल का जवाब देता है</th><th>कब लें</th></tr></thead>
+    <tbody>
+      <tr><td>Hit@k, Failed@k</td><td>Reader को कम से कम एक सही passage मिला?</td><td>Recall ceiling नापने के लिए</td></tr>
+      <tr><td>MRR@k</td><td>पहला सही passage कितना ऊपर है?</td><td>जब एक सही passage काफ़ी हो</td></tr>
+      <tr><td>Recall@k</td><td>सारे सही passages में से कितने मिले?</td><td>जब जवाब कई passages में बँटा हो</td></tr>
+      <tr><td>nDCG@k</td><td>ज़्यादा काम के passages ऊपर हैं?</td><td>जब grades हों, और क्रम मायने रखता हो</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>एक support bot के prompt में top-5 passages जाते हैं, और ज़्यादातर जवाब एक passage में हैं। Retriever A का पहला सही passage हर query पर rank 2 पर है। Retriever B का आधी queries पर rank 1 पर है, और आधी पर top-5 में नहीं। दोनों का MRR@5 और Hit@5 निकालिए। आप कौन सा लेंगे?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>MRR@5: A = 0.5, और B = (1 + 0) ÷ 2 = 0.5, यानी <b>बराबर</b>। Hit@5: A = 1.0, और B = 0.5।</p>
+      <p><b>A लीजिए।</b> A हर query पर reader तक सही passage पहुँचाता है, और B आधी queries पर कुछ नहीं देता। सिर्फ़ MRR देखते, तो ये फ़र्क दिखता ही नहीं।</p>
+    </details>
+  </div>
+
+  <div class="deeper">
+    <h2>गहरे version में और क्या है</h2>
+    <p>गहरे version में ये पूरा lesson है, और उसके बाद 5 पड़ाव और, जो Stanford की slides के level तक ले जाते हैं:</p>
+    <ul class="plain">
+      <li>पड़ाव 6: slides के symbols, और sets और 𝟙 के नियम, जिनसे Failed@k = 1 − Hit@k निकलता है।</li>
+      <li>पड़ाव 7: discount का गणित: 1 ÷ rank और 1 ÷ log<sub>2</sub>(rank + 1) की table, harmonic series, और ideal DCG।</li>
+      <li>पड़ाव 8: queries का औसत, % और points, और Stanford का nDCG@10 वाला chart।</li>
+      <li>पड़ाव 9: papers में ये metrics: DPR का Hit@20, MS MARCO का MRR@10 और ColBERT का Recall@1000।</li>
+      <li>पड़ाव 10: Stanford की तीनों slides, जिन्हें आप खुद पढ़ते हैं।</li>
+    </ul>
+    <p><a href="13-metrics-dense.html">गहरा version खोलिए</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>हर metric के लिए relevance labels चाहिए: हर query के सही passages R<sub>q</sub>, और कभी उनके grades।</li>
+    <li>Hit@k पूछता है कि सही passage पहुँचा या नहीं, और MRR कि पहला सही passage कितना ऊपर है। Recall@k पूछता है कि सारे सही passages में से कितने पहुँचे, और nDCG कि ज़्यादा काम का passage ऊपर है या नहीं।</li>
+    <li>एक number से पूरी बात नहीं दिखती। Hit@k या Recall@k उसी k पर देखिए, जितने passages prompt में जाते हैं, और क्रम के लिए MRR या nDCG देखिए।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-labels">Relevance labels</dt><dd>हर query के लिए पहले से तय सही passages, कभी grades के साथ। जैसे q1 के लिए queue log (grade 3) और office hours page (grade 1)।</dd>
+    <dt id="w-set">Set, ∩, ∅, |A|</dt><dd>चीज़ों का group, दो sets की common चीज़ें, खाली set, और set में कितनी चीज़ें हैं। जैसे |{queue log, office hours page}| = 2, और q3 पर R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) = ∅।</dd>
+    <dt id="w-indicator">𝟙[शर्त]</dt><dd>शर्त सच हो तो 1, नहीं तो 0। जैसे q3 के top-3 में कोई सही passage नहीं है, तो 𝟙[R<sub>q3</sub> ∩ Top<sub>3</sub>(q3) ≠ ∅] = 0।</dd>
+    <dt id="w-hitk">Hit@k</dt><dd>कितने हिस्से queries में top-k में कम से कम एक सही passage है। जैसे k = 3 पर 3 में से 2 queries, यानी 0.667।</dd>
+    <dt id="w-failedk">Failed@k</dt><dd>1 − Hit@k, यानी कितने हिस्से queries में top-k में एक भी सही passage नहीं। जैसे Failed@3 = 1 − 0.667 = 0.333।</dd>
+    <dt id="w-mrr">MRR@k</dt><dd>पहले सही passage के rank का उल्टा (1 ÷ rank), queries का औसत, और top-k में न हो तो 0। जैसे ranks 1, 2 और कोई नहीं, तो (1 + 0.5 + 0) ÷ 3 = 0.5।</dd>
+    <dt id="w-recallk">Recall@k</dt><dd>Top-k में मिले सही passages ÷ कुल सही passages, queries का औसत। जैसे k = 1 पर q1 में 2 में से 1 मिला, तो 0.5।</dd>
+    <dt id="w-log2">log<sub>2</sub></dt><dd>2 को किस power तक उठाएँ कि number मिले। जैसे log<sub>2</sub> 4 = 2, और log<sub>2</sub> 3 = 1.585।</dd>
+    <dt id="w-dcg">DCG और IDCG</dt><dd>हर rank का grade ÷ log<sub>2</sub>(rank + 1), फिर जोड़। IDCG सबसे अच्छे क्रम का DCG। जैसे q1 का क्रम queue log (3), forum post (0), office hours page (1): DCG 3.5, IDCG 3.631।</dd>
+    <dt id="w-ndcg">nDCG@k</dt><dd>DCG ÷ IDCG, 0 से 1 के बीच, जो grade और क्रम दोनों देखता है। जैसे q1 के उलटे क्रम पर 2.5 ÷ 3.631 = 0.689।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="12-dpr.html">पिछला: Lesson 12</a>
+    <a href="14-hybrid-rerank.html">अगला: Lesson 14, Hybrid search और reranking</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। “मेरे बनाए” वाले examples और numbers इस lesson के हैं, slides के नहीं।
+</footer>
+</main>
+
+<script src="glossary.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var START = [
+    { name: "Queue log", g: 3 },
+    { name: "पुराना forum post", g: 0 },
+    { name: "Office hours page", g: 1 },
+    { name: "Syllabus", g: 0 },
+    { name: "Project page", g: 0 }
+  ];
+  var T = { up: "ऊपर", grade: "grade ", rr: "Reciprocal rank (MRR@" };
+  var items = START.slice();
+  var R = START.filter(function (x) { return x.g > 0; }).length;
+  var IDEAL = START.map(function (x) { return x.g; }).sort(function (a, b) { return b - a; });
+  var kIn = document.getElementById("mw-k"), list = document.getElementById("mw-list"), body = document.getElementById("mw-body");
+  var btns = document.querySelectorAll("#mw .btns button");
+  function dcg(gs) { return gs.reduce(function (s, g, i) { return s + g / (Math.log(i + 2) / Math.log(2)); }, 0); }
+  function render() {
+    var k = Number(kIn.value);
+    document.getElementById("mw-ko").textContent = k;
+    list.innerHTML = items.map(function (x, i) {
+      return '<div class="item' + (x.g > 0 ? " rel" : "") + (i >= k ? " cut" : "") + '"><span class="pos">' + (i + 1) + "</span><span>" + x.name +
+        '</span><span class="g">' + T.grade + x.g + "</span>" + (i > 0 ? '<button type="button" data-i="' + i + '">' + T.up + "</button>" : "<span></span>") + "</div>";
+    }).join("");
+    list.querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { var i = Number(b.dataset.i); var t = items[i]; items[i] = items[i - 1]; items[i - 1] = t; render(); });
+    });
+    var top = items.slice(0, k);
+    var hit = top.some(function (x) { return x.g > 0; }) ? 1 : 0;
+    var first = -1;
+    top.forEach(function (x, i) { if (first < 0 && x.g > 0) first = i + 1; });
+    var rr = first > 0 ? 1 / first : 0;
+    var rec = top.filter(function (x) { return x.g > 0; }).length / R;
+    var d = dcg(top.map(function (x) { return x.g; })), id = dcg(IDEAL.slice(0, k));
+    body.innerHTML = [
+      ["Hit@" + k, hit.toFixed(0)],
+      [T.rr + k + ")", rr.toFixed(3)],
+      ["Recall@" + k, rec.toFixed(3)],
+      ["DCG@" + k, d.toFixed(3)],
+      ["IDCG@" + k, id.toFixed(3)],
+      ["nDCG@" + k, (id ? d / id : 0).toFixed(3)]
+    ].map(function (r) { return "<tr><td>" + r[0] + '</td><td class="num">' + r[1] + "</td></tr>"; }).join("");
+    var key = items.map(function (x) { return START.indexOf(x); }).join(",");
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.o === key ? "true" : "false"); });
+  }
+  btns.forEach(function (b) { b.addEventListener("click", function () { items = b.dataset.o.split(",").map(function (i) { return START[Number(i)]; }); render(); }); });
+  kIn.addEventListener("input", render);
+  render();
+})();
+</script>
+</body>
+</html>

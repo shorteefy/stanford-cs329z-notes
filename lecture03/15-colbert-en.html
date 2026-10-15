@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="For the query error 4012, a one-vector bi-encoder ranked a short, wrong upload note above the long FAQ that has the answer. Keeping one vector per token, and adding up each query token's best match, brings the right passage to the top.">
+<title>Lesson 15: ColBERT</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  table.t td.max { background: var(--accent-soft); font-weight: 700; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 15 / 18 · <b>Easy</b> · <a href="15-colbert-dense-en.html">Dense</a> · <a href="15-colbert.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 15 · Easy version</p>
+  <h1>ColBERT: a vector for every token</h1>
+  <p class="lede"><b>ColBERT is a retriever that keeps a separate vector for every token of a passage. For each token of the query it finds the best match in the passage, and it adds up the scores of these matches to get the passage's score.</b> All the passages' token vectors are built before any question arrives, so ColBERT stays fast. Khattab and Zaharia built it in 2020.</p>
+  <p class="lede">The need for it showed up at the end of <a href="12-dpr-en.html#limits">lesson 12</a>: a rare code like error 4012 gets lost in a passage's single vector. For the query <q>error 4012</q>, the answer is in a long FAQ, but a one-vector bi-encoder ranks a short, wrong passage above it. The cross-encoder from <a href="14-hybrid-rerank-en.html#cross">lesson 14</a> fixes this mistake, but it takes 10.7 ms per passage.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 4 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#blur">One vector buries 4012</a><span class="can">Compute an average vector by hand, and explain why the wrong passage came out on top.</span></li>
+      <li><a href="#maxsim">MaxSim: the best match for each query token</a><span class="can">Fill in a MaxSim table by hand, and read Stanford's two ColBERT slides.</span></li>
+      <li><a href="#cost">The cost: 100 times the vectors, but far less work</a><span class="can">Read latency and FLOPs, and compare ColBERT with a cross-encoder in numbers.</span></li>
+      <li><a href="#table">Cascade: the cheap step first, the precise step last</a><span class="can">Line up all four retrievers, and read Stanford's comparison slide.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="03-vectors-en.html#cosine">Lesson 3</a> (dot product, cosine), <a href="07-chunking-en.html#kinds">Lesson 7</a> (token vectors, mean pooling), <a href="13-metrics-en.html#mrr">Lesson 13</a> (MRR@k, Recall@k) and <a href="14-hybrid-rerank-en.html#cross">Lesson 14</a> (cross-encoder, reranking). If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="blur">
+  <h3><span class="cn">1</span>One vector buries 4012</h3>
+
+  <p><b>A bi-encoder squeezes a whole passage into one vector, and in a long passage one important token can get lost in that vector.</b> Many bi-encoders build this vector by <button class="def" data-w="w-pooling">mean pooling</button>. In lesson 7 that meant adding up each number across all the token vectors and dividing by the number of tokens. For example, the average of [0.9, 0.1] and [0.7, 0.3] is [0.8, 0.2].</p>
+
+  <p>Now take the query <q>error 4012</q>, which has 2 tokens. Each token's vector has 3 numbers. The first says how much the token is about errors or uploads, the second how much it is about the code 4012, and the third how much it is about other topics. The query's tokens are error = [1, 0, 0] and 4012 = [0, 1, 0]. <span class="mine">my vectors</span></p>
+
+  <p>The course's long FAQ covers grading, late days and Zoom, and one line gives the fix for error 4012. A short upload note only says that upload errors happen. A real FAQ would have hundreds of tokens, but here it has 6 to keep the arithmetic small.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Text</th><th>Tokens and their vectors</th><th>Average vector</th></tr></thead>
+    <tbody>
+      <tr><td>Query</td><td>error [1, 0, 0], 4012 [0, 1, 0]</td><td class="mono">[0.5, 0.5, 0]</td></tr>
+      <tr class="hi"><td>Course FAQ<span class="sub">6 tokens, has the answer</span></td><td>grading, late, days, zoom: each [0, 0, 1]. error [0.9, 0, 0.1], 4012 [0.1, 0.95, 0]</td><td class="mono">[0.167, 0.158, 0.683]</td></tr>
+      <tr><td>Upload note<span class="sub">3 tokens, no 4012</span></td><td>upload [0.8, 0.1, 0.1], errors [0.95, 0.05, 0], happen [0.5, 0, 0.5]</td><td class="mono">[0.75, 0.05, 0.2]</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The FAQ's average comes out number by number:</p>
+  <ol class="plain">
+    <li>First number: only error and 4012 have a first number other than 0. 0.9 + 0.1 = 1.0, and 1.0 ÷ 6 = 0.167.</li>
+    <li>Second number: only 4012 has one, 0.95, and 0.95 ÷ 6 = 0.158.</li>
+    <li>Third number: 1 from each of the four filler tokens, plus 0.1 from error, gives 4.1. Then 4.1 ÷ 6 = 0.683.</li>
+  </ol>
+  <p>The third number is the largest, so the FAQ's vector points mostly towards other topics. Now take the <button class="def" data-w="w-cosine">cosine</button> from lesson 3, which is the dot product of two vectors divided by the product of their lengths. For example, the cosine of [1, 0] and [1, 1] is 1 ÷ (1 × 1.414) = 0.707. The query's average has a cosine of 0.32 with the FAQ's average, and 0.73 with the upload note's.</p>
+
+  <p><b>So the wrong upload note comes out on top, and the FAQ with the answer falls behind.</b> The FAQ did contain 4012, but in the average it was only 1 token out of 6. Lesson 14 handled this situation with <button class="def" data-w="w-hybrid">hybrid search</button>, bringing in BM25. ColBERT takes a different route: it never averages the tokens at all.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="maxsim">
+  <h3><span class="cn">2</span>MaxSim: the best match for each query token</h3>
+
+  <p><b>ColBERT keeps a separate vector for every token of a passage, and a separate vector for every token of the query.</b> These are the <button class="def" data-w="w-contextual">contextual</button> token vectors from lesson 7, where each token's vector is shaped by the words around it. The only difference is that ColBERT does not average them.</p>
+
+  <p>As with DPR in lesson 12, the document encoder builds these vectors <button class="def" data-w="w-offline">offline</button> and stores them in an <button class="def" data-w="w-index">index</button>, before any question arrives. When a question arrives, the query encoder builds vectors only for the query's tokens.</p>
+
+  <p>The score takes two steps. First, for each query token, take its <button class="def" data-w="w-dot">dot product</button> with every passage token and keep the largest. Then add up these largest numbers over all the query's tokens. This score is called <b class="term">MaxSim</b>.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>In the average, grading, late, days and zoom buried 4012. Will these four tokens also pull down the FAQ's MaxSim score?</p>
+    <details><summary>Show the answer</summary>
+      <p>No. All four have a dot product of 0 with both query tokens, and MaxSim keeps only the largest dot product for each query token. The FAQ has a match larger than 0 for both, so these four tokens never enter the sum.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">In the table below, each row is one FAQ token and each column is one query token. Each cell is their dot product, and the largest cell in each column is shaded.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>FAQ token</th><th class="numh">Query's error [1, 0, 0]</th><th class="numh">Query's 4012 [0, 1, 0]</th></tr></thead>
+    <tbody>
+      <tr><td>grading, late, days, zoom<span class="sub mono">each [0, 0, 1]</span></td><td class="num">0</td><td class="num">0</td></tr>
+      <tr><td>error<span class="sub mono">[0.9, 0, 0.1]</span></td><td class="num max">0.9</td><td class="num">0</td></tr>
+      <tr><td>4012<span class="sub mono">[0.1, 0.95, 0]</span></td><td class="num">0.1</td><td class="num max">0.95</td></tr>
+      <tr class="total"><td>Largest in the column</td><td class="num">0.9</td><td class="num">0.95</td></tr>
+    </tbody>
+  </table></div>
+  <p>For example, the dot product of the query's error and the FAQ's 4012 is 1 × 0.1 + 0 × 0.95 + 0 × 0 = 0.1. The largest number in the error column is 0.9, and in the 4012 column it is 0.95. So the FAQ's MaxSim is 0.9 + 0.95 = 1.85.</p>
+
+  <p>The upload note's table works the same way:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Upload note token</th><th class="numh">Query's error [1, 0, 0]</th><th class="numh">Query's 4012 [0, 1, 0]</th></tr></thead>
+    <tbody>
+      <tr><td>upload<span class="sub mono">[0.8, 0.1, 0.1]</span></td><td class="num">0.8</td><td class="num max">0.1</td></tr>
+      <tr><td>errors<span class="sub mono">[0.95, 0.05, 0]</span></td><td class="num max">0.95</td><td class="num">0.05</td></tr>
+      <tr><td>happen<span class="sub mono">[0.5, 0, 0.5]</span></td><td class="num">0.5</td><td class="num">0</td></tr>
+      <tr class="total"><td>Largest in the column</td><td class="num">0.95</td><td class="num">0.1</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>The upload note's MaxSim is 0.95 + 0.1 = 1.05, so now the FAQ with the answer is on top: 1.85 against 1.05.</b> The upload note has no token that matches 4012, so its best number in the 4012 column is only 0.1.</p>
+
+  <p>The formula holds the same two steps. Stanford's slide writes the passage as d, for document:</p>
+  <div class="formula">S<sub>q,d</sub> = <span class="sum"><span class="op">∑</span><span class="lim"><i>i</i> ∈ q</span></span> max<sub><i>j</i></sub> <b>q</b><sub><i>i</i></sub> · <b>d</b><sub><i>j</i></sub></div>
+  <dl class="sym">
+    <dt><b>q</b><sub><i>i</i></sub></dt><dd>The vector of query token i. For example, error = [1, 0, 0].</dd>
+    <dt><b>d</b><sub><i>j</i></sub></dt><dd>The vector of passage token j. For example, the FAQ's 4012 = [0.1, 0.95, 0].</dd>
+    <dt>max<sub><i>j</i></sub></dt><dd>The largest dot product over all passage tokens j. For the FAQ, 0.9 in the error column.</dd>
+    <dt>∑<sub><i>i</i> ∈ q</sub></dt><dd>The max for every query token i, then their <button class="def" data-w="w-sigma">sum</button>. ∈ means “belongs to”. For the FAQ, 0.9 + 0.95 = 1.85.</dd>
+  </dl>
+
+  <p>Here the query's tokens and the passage's tokens are encoded separately, and they meet only at the last step, the scoring. This is called <b class="term">late interaction</b>, and ColBERT is the retriever built on it. Stanford's slide gives the same definition:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p51.png"><img src="img/slide-p51.png" alt="Stanford slide: Late Interaction, the MaxSim formula and four designs" loading="lazy"></a>
+    <figcaption>Stanford's slide: Late Interaction. The definition is at the top, and the MaxSim formula is in the middle. Below, (d) in the red frame is ColBERT, (a) is a bi-encoder like lesson 12's, and (c) is a cross-encoder like lesson 14's.</figcaption>
+  </figure>
+
+  <figure class="slide">
+    <a href="img/slide-p52.png"><img src="img/slide-p52.png" alt="Stanford slide: ColBERT's architecture, query encoder, document encoder, MaxSim and score" loading="lazy"></a>
+    <figcaption>Stanford's slide: ColBERT's architecture. The query encoder f<sub>Q</sub> builds vectors for the query's tokens, and the document encoder f<sub>D</sub> builds the passage's, inside the Offline Indexing box. Each MaxSim box is one query token's max, and ∑ adds them up.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Add a third token to the query: upload = [1, 0, 0]. What is the upload note's MaxSim now, and the FAQ's?</p>
+    <details><summary>Show the answer</summary>
+      <p>The new token's dot products with the upload note are 0.8, 0.95 and 0.5. The largest is 0.95, from errors, not from upload. The upload note's MaxSim is 1.05 + 0.95 = <b>2.0</b>. On the FAQ the new token's max is 0.9, so the FAQ is at 1.85 + 0.9 = 2.75 and still ahead.</p>
+    </details>
+  </div>
+
+  <div class="widget" id="mx">
+    <h4>Run the MaxSim table yourself</h4>
+    <p class="hint">Choose a passage and a query. Here each row is a query token, and each column is a passage token.</p>
+    <div class="btns" id="mx-p">
+      <button type="button" data-p="A">Course FAQ (long)</button>
+      <button type="button" data-p="B">Upload note (short)</button>
+    </div>
+    <div class="btns" id="mx-q">
+      <button type="button" data-q="2">Query: error 4012</button>
+      <button type="button" data-q="3">Query: error 4012 upload</button>
+    </div>
+    <div class="tscroll"><table class="t" id="mx-t"></table></div>
+    <p class="out" id="mx-out"></p>
+  </div>
+
+  <p>ColBERT has a limit too. Its passage vectors are built without seeing the query, while in a cross-encoder the query's tokens look at the passage's tokens through <button class="def" data-w="w-attention">attention</button>. So a difference that only shows when both are read together, like an old opinion against real data, is something a cross-encoder can catch better.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="cost">
+  <h3><span class="cn">3</span>The cost: 100 times the vectors, but far less work</h3>
+
+  <p><b>The price of keeping a vector per token is paid in the index: the number of vectors grows with tokens, not with passages.</b> Suppose there are 60,000 passages with about 100 tokens each. A bi-encoder stores 60,000 vectors, and ColBERT stores 60,000 × 100 = 6 million, which is 100 times as many. The gap in bytes is smaller, because ColBERT's vectors are also smaller. <span class="mine">my example</span></p>
+
+  <p>What we get in return is measured in two ways. The first is <b class="term">latency</b>: the time from sending a query to getting the answer, in ms. For example, the cross-encoder from lesson 14 takes 10,700 ms for 1,000 passages, so its latency is 10,700 ms.</p>
+
+  <p>The second is the computer's work, counted in <b class="term">FLOPs</b>: how many multiplications and additions it took. Our vectors have 3 numbers, so one dot product has 3 multiplications and 3 additions, which is 6 FLOPs. The FAQ's MaxSim had 2 × 6 = 12 dot products, so it took 12 × 6 = 72 FLOPs.</p>
+
+  <p>Stanford's slide measures ColBERT on MS MARCO. As lesson 14 showed, it holds real Bing search questions and 8.8 million passages. In the rerank rows, the model re-sorts BM25's top 1,000. <button class="def" data-w="w-mrr">MRR@10</button> is from lesson 13: one over the rank of the first correct passage, so rank 2 gives 0.5. The table writes it multiplied by 100.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Method</th><th class="numh">MRR@10</th><th class="numh">Latency</th><th class="numh">FLOPs per query</th></tr></thead>
+    <tbody>
+      <tr><td>BM25 (official)</td><td class="num">16.7</td><td class="num">–</td><td class="num">–</td></tr>
+      <tr><td>BERT-base cross-encoder, rerank</td><td class="num">34.7</td><td class="num">10,700 ms</td><td class="num">97T</td></tr>
+      <tr class="hi"><td>ColBERT, rerank</td><td class="num">34.9</td><td class="num">61 ms</td><td class="num">7B</td></tr>
+      <tr class="hi"><td>ColBERT, end-to-end</td><td class="num">36.0</td><td class="num">458 ms</td><td class="num">–</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>T means trillion, 10<sup>12</sup>, and B means billion, 10<sup>9</sup>. So 97T ÷ 7B = 97,000 ÷ 7 = about 13,900. <b>So when reranking, ColBERT does about 13,900 times less work than the cross-encoder, with almost the same MRR@10: 34.9 against 34.7.</b> Its latency is 61 ms instead of 10,700 ms.</p>
+
+  <p>The gap exists because the cross-encoder runs the whole of BERT on every passage. ColBERT runs BERT once on the query, and the passages' vectors are already built, so all that is left per passage is MaxSim.</p>
+
+  <p>In the end-to-end row, ColBERT does not rely on anyone else's list. It searches all 8.8 million passages itself, in 458 ms, with an MRR@10 of 36.0. The big gain is in the shortlist. <button class="def" data-w="w-recallk">Recall@1000</button> tells you what share of the correct passages reached the top 1,000, so 1 out of 2 gives 0.5. ColBERT's Recall@1000 is 96.8, against 85.7 for BM25 (the one from a toolkit called Anserini), which is 11.1 points more.</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="table">
+  <h3><span class="cn">4</span>Cascade: the cheap step first, the precise step last</h3>
+
+  <p>You now have four retrievers: BM25, DPR, ColBERT and the cross-encoder. Stanford's slide puts all four in one table:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p54.png"><img src="img/slide-p54.png" alt="Stanford slide: Fast vs Slow Retrievers, four retrievers compared" loading="lazy"></a>
+    <figcaption>Stanford's slide: Fast vs Slow Retrievers. The columns show what is built in advance, the time per query, and where each retriever wins and breaks. You have already read ColBERT's row: a vector per token, 458 ms, and an index that grows with tokens.</figcaption>
+  </figure>
+
+  <p><b>Real systems put them in a line. The cheapest retriever pulls a long shortlist from the whole corpus, and each later step does more expensive, more precise work on fewer passages.</b> This line is called a <b class="term">cascade</b>. A cascade could look like this: <span class="mine">my example</span></p>
+
+  <figure>
+    <div class="flow">
+      <div class="node"><b>BM25 + DPR</b><span class="ex">top 1,000 out of tens of millions, with RRF</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>ColBERT rerank</b><span class="ex">top 50 out of 1,000</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node key"><b>Cross-encoder</b><span class="ex">top 5 out of 50</span></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 18 12"><path d="M0 6h15M11 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <div class="node"><b>LLM</b><span class="ex">reads 5 passages and answers</span></div>
+    </div>
+  </figure>
+
+  <p>Each step's cost depends on the size of its list. ColBERT reranks 1,000 passages in about 61 ms. The cross-encoder takes 50 × 10.7 = 535 ms for 50 passages, while all 1,000 would have taken it 10,700 ms.</p>
+
+  <p>Each step relies on the previous step's shortlist, so the first step's recall is the ceiling for the whole cascade. This is the <button class="def" data-w="w-ceiling">recall ceiling</button> from lesson 14. If the right passage is not in the first step's list of 1,000, no later step can bring it back. That is why the first step uses both BM25 and DPR, with <button class="def" data-w="w-rrf">RRF</button> merging their lists.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Your corpus is product manuals, and users often search by model number, like <q>XR-2209</q>. What happens if you drop BM25 from the cascade's first step?</p>
+    <details><summary>Show the answer</summary>
+      <p>Only DPR is left in the first step, and it misses rare literals. Passages with <q>XR-2209</q> never make the shortlist, and no later reranker can bring them back.</p>
+    </details>
+  </div>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 6 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 5: the full maths of MaxSim, and why taking an average instead of the max brings the wrong passage back.</li>
+      <li>Step 6: four ways to bring query and passage together, and the paper's experiments.</li>
+      <li>Step 7: inside ColBERT's encoders, and the training loss.</li>
+      <li>Step 8: the index in bytes, FLOPs counted out, and where the 61 ms go.</li>
+      <li>Step 9: the two stages of end-to-end search: candidate passages first, then full MaxSim on them.</li>
+      <li>Step 10: Stanford's four ColBERT slides, which you read yourself.</li>
+    </ul>
+    <p><a href="15-colbert-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>A one-vector bi-encoder can bury an important token of a long passage in the average. For error 4012, the FAQ's cosine was 0.32, and the wrong upload note's was 0.73.</li>
+    <li>ColBERT keeps a vector per token, and MaxSim adds up each query token's largest dot product. The FAQ got 1.85, and the upload note got 1.05.</li>
+    <li>When reranking, ColBERT is as precise as a cross-encoder, 34.9 against 34.7, with about 13,900 times fewer FLOPs. The price is 100 times the vectors. In a cascade the cheap step comes first, and the precise step comes last.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-late">Late interaction</dt><dd>The query's and the passage's token vectors are built separately, and meet only at scoring. For example, ColBERT builds passage vectors offline, and computes the dot products when the query arrives.</dd>
+    <dt id="w-maxsim">MaxSim</dt><dd>Each query token's largest dot product with the passage's tokens, then the sum of these. For example, 0.9 + 0.95 = 1.85 for the course FAQ.</dd>
+    <dt id="w-colbert">ColBERT</dt><dd>A late-interaction retriever that keeps a vector per token and scores with MaxSim. Built by Khattab and Zaharia in 2020. For example, its Recall@1000 on MS MARCO is 96.8.</dd>
+    <dt id="w-latency">Latency</dt><dd>The time from sending a query to getting the answer, in ms. For example, the cross-encoder's latency is 10,700 ms for 1,000 passages, and ColBERT's reranking latency is 61 ms.</dd>
+    <dt id="w-flops">FLOPs</dt><dd>How many multiplications and additions it took, that is, the computer's work. For example, a dot product of 3 numbers takes 6 FLOPs, and one of 768 numbers takes 1,536.</dd>
+    <dt id="w-cascade">Cascade</dt><dd>A line of retrievers in which each later step does more precise, more expensive work on fewer passages. For example, from tens of millions to 1,000, then 50, then 5.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="14-hybrid-rerank-en.html">Previous: Lesson 14</a>
+    <a href="16-agentic-rag-en.html">Next: Lesson 16, Agentic RAG</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Paper: Khattab and Zaharia, 2020, “ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var Q3 = [["error", [1, 0, 0]], ["4012", [0, 1, 0]], ["upload", [1, 0, 0]]];
+  var P = {
+    A: [["grading", [0, 0, 1]], ["late", [0, 0, 1]], ["days", [0, 0, 1]], ["error", [0.9, 0, 0.1]], ["4012", [0.1, 0.95, 0]], ["zoom", [0, 0, 1]]],
+    B: [["upload", [0.8, 0.1, 0.1]], ["errors", [0.95, 0.05, 0]], ["happen", [0.5, 0, 0.5]]]
+  };
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function mean(list) { var m = [0, 0, 0]; list.forEach(function (t) { for (var i = 0; i < 3; i++) m[i] += t[1][i] / list.length; }); return m; }
+  function cos(a, b) { return dot(a, b) / Math.sqrt(dot(a, a) * dot(b, b)); }
+  var cur = "A", nq = 2;
+  function render() {
+    var D = P[cur], Q = Q3.slice(0, nq), total = 0;
+    var head = "<thead><tr><th>Query token ↓</th>" + D.map(function (t) { return '<th class="numh">' + t[0] + "</th>"; }).join("") + '<th class="numh">Max</th></tr></thead>';
+    var rows = Q.map(function (q) {
+      var ds = D.map(function (t) { return dot(q[1], t[1]); }), mx = Math.max.apply(null, ds);
+      total += mx;
+      return "<tr><td><b>" + q[0] + "</b></td>" + ds.map(function (v) { return '<td class="num' + (v === mx ? " max" : "") + '">' + v.toFixed(2) + "</td>"; }).join("") + '<td class="num">' + mx.toFixed(2) + "</td></tr>";
+    }).join("");
+    document.getElementById("mx-t").innerHTML = head + "<tbody>" + rows + "</tbody>";
+    var c = cos(mean(Q), mean(D));
+    document.getElementById("mx-out").innerHTML = "MaxSim = <b>" + total.toFixed(2) + "</b>. For comparison, the cosine of the average vectors = " + c.toFixed(2) + ".";
+    document.querySelectorAll("#mx-p button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.p === cur ? "true" : "false"); });
+    document.querySelectorAll("#mx-q button").forEach(function (b) { b.setAttribute("aria-pressed", Number(b.dataset.q) === nq ? "true" : "false"); });
+  }
+  document.querySelectorAll("#mx-p button").forEach(function (b) { b.addEventListener("click", function () { cur = b.dataset.p; render(); }); });
+  document.querySelectorAll("#mx-q button").forEach(function (b) { b.addEventListener("click", function () { nq = Number(b.dataset.q); render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

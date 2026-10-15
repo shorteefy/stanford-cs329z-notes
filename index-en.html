@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Agents, from first principles</title>
+<meta name="description" content="Self-study lessons on the lectures of Stanford CS 329Z “Engineering AI Agents”, in Hindi and English, with an easy and a dense version of each lesson.">
+<link rel="stylesheet" href="lecture03/study.css">
+<style>
+  .topbar .switch b { color: var(--ink); }
+  .lecture { border: 1px solid var(--rule); border-radius: 10px; padding: 18px 22px 8px; margin: 0 0 14px; background: var(--card); }
+  .lecture h3 { font-size: 22px; margin: 2px 0 8px; }
+  .lecture h3 a { color: var(--ink); text-decoration: none; }
+  .lecture .go a { font-weight: 600; }
+  section { margin: 0 0 44px; }
+  section > h2 { font-size: 24px; margin: 0 0 12px; }
+  table.t th:first-child { width: 22%; }
+</style>
+</head>
+<body>
+<main>
+
+<nav class="topbar">
+  <span>AI Agents, from first principles</span>
+  <span class="switch"><a href="index.html">हिन्दी</a> · <b>English</b></span>
+</nav>
+
+<header style="margin-bottom:40px">
+  <p class="kicker">Stanford CS 329Z · Engineering AI Agents</p>
+  <h1>AI Agents, from first principles</h1>
+  <p class="lede">These are self-study lessons built on the lectures of the Stanford course CS 329Z “Engineering AI Agents”. Every lesson starts from first principles. Each new term is explained where it first appears, and each formula is first worked by hand on small numbers.</p>
+  <p class="callout"><b>Note:</b> This is not an official Stanford site. These are personal notes made while studying the course. The slides and ideas belong to the course, and each lesson credits them at the bottom.</p>
+</header>
+
+<section>
+  <h2>What you can read now</h2>
+  <div class="lecture">
+    <p class="kicker">Lecture 3 · 18 lessons</p>
+    <h3><a href="lecture03/index-en.html">RAG + Agents</a></h3>
+    <p>How to give an LLM the right information at the right time, and where that approach breaks. The lessons build these ideas one at a time: retrieval, vectors, probability, the RAG model, chunking, BM25, DPR, measuring a retriever, hybrid search, ColBERT, agentic RAG, Search-R1, and the ways RAG fails.</p>
+    <p class="go"><a href="lecture03/index-en.html">Open Lecture 3</a> · <a href="lecture03/index.html">in Hindi</a></p>
+  </div>
+  <p class="note">Lessons for the other lectures will be added later.</p>
+</section>
+
+<section>
+  <h2>Four versions of every lesson</h2>
+  <p>Every lesson is written at two levels, and both exist in Hindi and English. A switch at the top of each lesson changes the level or the language at any time.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>Easy</th><th>Dense</th></tr></thead>
+    <tbody>
+      <tr><td>What it is</td><td>The core idea, step by step, with small numbers</td><td>The whole easy lesson, followed by steps that reach the level of the Stanford slides</td></tr>
+      <tr><td>For whom</td><td>A first reading</td><td>When you want every line and symbol on the slides</td></tr>
+      <tr><td>Maths</td><td>As much as the core calculation needs</td><td>All the maths on the slides, explained from school level</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Who these lessons are for</h2>
+  <p>The lessons assume you read code and know school maths, but that ML and statistics terms are new to you. There are no analogies. Each idea is explained on a small version of the real system, such as 3 passages and vectors of 4 numbers, so the arithmetic can be done by hand.</p>
+</section>
+
+<section>
+  <h2>How to read</h2>
+  <ul class="plain">
+    <li>Open the lecture's index. Its map shows what to read before each lesson.</li>
+    <li>Each lesson starts with a ladder. If you already know a step, skip to the next one.</li>
+    <li>Work out the “Think first” questions yourself before opening the answer.</li>
+    <li>Click any word with a dotted underline and ▾. Its definition opens right there.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>How these lessons were written</h2>
+  <p>The lessons follow a fixed set of rules, and each rule rests on research about teaching and writing. Every number was recomputed by a script. <a href="method-en.html">Read the full method</a>: the teaching rules, their sources, and how each lesson was checked.</p>
+</section>
+
+<footer>
+  Course: CS 329Z “Engineering AI Agents”, Stanford University, Diyi Yang. The slides and the papers they cite belong to their authors. Notes: October 2026.
+</footer>
+</main>
+</body>
+</html>

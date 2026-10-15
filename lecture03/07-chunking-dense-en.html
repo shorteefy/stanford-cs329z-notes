@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Cut the 40-page syllabus every 50 tokens and the milestone date breaks, and do not cut it at all and it dissolves into one vector. Chunk size, overlap and the way of cutting have to be decided with arithmetic, and at the end you read Stanford's chunking slides yourself.">
+<title>Lesson 7: Chunking (dense)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .chunks { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 18px; }
+  .chunk { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 12px; font-family: var(--mono); font-size: 14.5px; line-height: 1.6; overflow-wrap: anywhere; }
+  .chunk.ok { border-color: var(--accent); }
+  .chunk .cid { font-family: var(--sans); font-size: 12.5px; color: var(--muted); display: block; }
+  .chunk .ov { background: var(--panel); border-radius: 3px; }
+  .chunk .fact { text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  .widget .chunks { margin-bottom: 0; }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 7 / 18 · <a href="07-chunking-en.html">Easy</a> · <b>Dense</b> · <a href="07-chunking-dense.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 7 · Dense version</p>
+  <h1>Chunking: cutting documents into pieces for retrieval</h1>
+  <p class="lede"><b>Chunking means cutting a long document into small pieces, so that the retriever can make one vector per piece and store it in the index.</b> These pieces are called chunks. The retriever searches for chunks and returns chunks, which is why Stanford's slide calls the chunk the basic unit of retrieval.</p>
+  <p class="lede">In <a href="02-retrieval-dense-en.html">lesson 2</a>, the answer to <q>when is the project milestone due</q> was in the syllabus passage: Week 6, Thursday 11:59pm. That passage came to us already cut, but the real syllabus is 40 pages long. In the pipeline of <a href="06-rag-pipeline-dense-en.html#naive">lesson 6</a>, cutting it is the first step of building the index. Cut it every 50 tokens, and one chunk ends at <q>…due Week 6, Thursday</q> while <q>11:59pm.</q> lands in the next chunk. Do not cut it at all, and the milestone's 2 lines dissolve into a single vector for 40 pages.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 8 steps. The first 4 are the same as in the easy version, and steps 5 to 8 take you to the level of the Stanford slides. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#kinds">A chunk's vector: the average of its token vectors</a><span class="can">Compute a chunk's vector by hand with mean pooling.</span></li>
+      <li><a href="#size">Chunk size: small loses context, large gets averaged away</a><span class="can">Show why a large chunk falls behind even though it holds the right fact.</span></li>
+      <li><a href="#overlap">Overlap and stride: saving a fact cut at a boundary</a><span class="can">Work out the smallest overlap that keeps a fact whole.</span></li>
+      <li><a href="#strategies">Cutting by meaning: headings, metadata and LLMs</a><span class="can">Read both of Stanford's chunking slides.</span></li>
+      <li class="lvl">From here: the Stanford level</li>
+      <li value="5"><a href="#pooling">The maths of mean pooling: how much a fact gets diluted</a><span class="can">Compute the cosine for k topics and for a fact with a small share.</span></li>
+      <li><a href="#overlapmath">The full arithmetic of overlap: the chance a fact survives, and the chunk count</a><span class="can">Work out the chance a fact survives too little overlap, and how many chunks you get.</span></li>
+      <li><a href="#methods">The methods from the inside: the Databricks guide</a><span class="can">Work through recursive splitting and finding boundaries with sentence vectors by hand.</span></li>
+      <li><a href="#slides">Read Stanford's slides yourself</a><span class="can">Explain every line of Stanford's three chunking slides.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: <a href="01-how-llms-answer-dense-en.html#token">Lesson 1</a> (token), <a href="03-vectors-dense-en.html#cosine">Lesson 3</a> (vector, embedding, cosine) and <a href="06-rag-pipeline-dense-en.html#naive">Lesson 6</a> (indexing time). From step 5 on, <a href="13-metrics-dense-en.html">Lesson 13</a> (recall) also helps. If you already know a step, skip to the next one. A word with a dotted underline and ▾ opens its definition when you click it.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="kinds">
+  <h3><span class="cn">1</span>A chunk's vector: the average of its token vectors</h3>
+
+  <p><b>Retrieval needs one vector per chunk, and that vector is often the average of the vectors of all the chunk's tokens.</b> The index stores this one vector for each chunk. When a question arrives, the retriever computes the <button class="def" data-w="w-cosine">cosine</button> between the question's vector and every chunk's vector, and returns the chunks with the largest cosines. The six passages of lesson 2 were really chunks too.</p>
+
+  <p>First, look at where the token vectors come from. An <button class="def" data-w="w-encoder">encoder</button> makes a separate vector for every <button class="def" data-w="w-token">token</button>, and the surrounding words affect that vector too. This is called a <b class="term">contextual embedding</b>.</p>
+
+  <p>Take the word late, which appears in two sentences: <q>Late days may not be applied</q> and <q>late afternoon office hours</q>. Suppose the first number of a vector stands for office hours and the second for deadlines. A contextual embedding then gives late two different vectors. Older <b class="term">static word embeddings</b>, such as word2vec, kept one vector per <b class="term">word type</b>. A word type is a word as it appears in the dictionary, whatever sentence it is in. <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Sentence</th><th>Static: vector for late</th><th>Contextual: vector for late</th></tr></thead>
+    <tbody>
+      <tr><td>Late days may not be applied</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.1, 0.9]</td></tr>
+      <tr><td>late afternoon office hours</td><td class="mono">[0.5, 0.5]</td><td class="mono">[0.9, 0.1]</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Now we need one vector for the whole chunk, which is called a <b class="term">passage embedding</b>. The most common way is to average all the chunk's token vectors: add up the numbers in each column and divide by the number of tokens. This is called <b class="term">mean pooling</b>. Take a small chunk of three tokens: <span class="mine">my example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th>Vector</th></tr></thead>
+    <tbody>
+      <tr><td>Office</td><td class="mono">[0.9, 0.1]</td></tr>
+      <tr><td>hours</td><td class="mono">[0.7, 0.3]</td></tr>
+      <tr><td>Tuesday</td><td class="mono">[0.8, 0.2]</td></tr>
+      <tr class="total"><td>Mean pooling: the average of each column</td><td class="mono">[0.8, 0.2]</td></tr>
+    </tbody>
+  </table></div>
+  <ol class="plain">
+    <li>First column: 0.9 + 0.7 + 0.8 = 2.4, and 2.4 ÷ 3 = 0.8.</li>
+    <li>Second column: 0.1 + 0.3 + 0.2 = 0.6, and 0.6 ÷ 3 = 0.2.</li>
+  </ol>
+  <p>All three tokens leaned towards office hours, so the chunk's vector [0.8, 0.2] leans the same way. Mean pooling gives every token the same weight, and in step 2 this is exactly what hurts a large chunk.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Add one more token to the chunk: 4pm, with the vector [0.8, 0.2]. What is the chunk's vector now, and how many numbers does it have?</p>
+    <details><summary>Show the answer</summary>
+      <p>[0.8, 0.2], and it still has 2 numbers. First column: (0.9 + 0.7 + 0.8 + 0.8) ÷ 4 = 3.2 ÷ 4 = 0.8. Second: (0.1 + 0.3 + 0.2 + 0.2) ÷ 4 = 0.8 ÷ 4 = 0.2. Whether a chunk has 3 tokens or 300, the average has as many numbers as each token vector. So every chunk's vector has the same count of numbers, and the index can compare them all.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Stanford's embeddings slide makes the same point. Its table lists five kinds of embeddings, and you have just met the top three: static word, contextual and passage. The other two, <button class="def" data-w="w-multimodal">multimodal</button> and <button class="def" data-w="w-graphemb">graph</button>, are vectors for images and for networks. The slide's last line names two things retrieval needs. The first is one vector per chunk, with a fixed <button class="def" data-w="w-dimension">dimension</button>. The second is a way to compare vectors, cosine or inner product.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p23.png"><img src="img/slide-p23.png" alt="Stanford slide: What Makes A Good Retriever? Embeddings, a table of five kinds of embeddings" loading="lazy"></a>
+    <figcaption>Stanford's slide: What Makes A Good Retriever? Embeddings. In the passage row, one vector covers one chunk, and this lesson is about that chunk. Click the image to open it at full size.</figcaption>
+  </figure>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="size">
+  <h3><span class="cn">2</span>Chunk size: small loses context, large gets averaged away</h3>
+
+  <p><b>A large chunk becomes the average of many topics, and a small chunk loses its context.</b> So choosing a chunk size means choosing between two opposite problems, and Stanford's slide lists both.</p>
+
+  <h4 class="sub" id="big">A large chunk: topics get averaged together</h4>
+
+  <p>Suppose the office hours topic has the vector [1, 0] and the deadline topic has [0, 1]. If a large chunk holds both topics in equal parts, mean pooling gives [0.5, 0.5]. The query <q>office hours</q> has the vector [1, 0]. <span class="mine">my example</span></p>
+
+  <p>The cosine from lesson 3 is the dot product of two vectors divided by the product of their <button class="def" data-w="w-length">lengths</button>. A small chunk about office hours only, [1, 0], has cosine 1 with the query, because the two point in the same direction. The large chunk's cosine takes three steps:</p>
+  <ol class="plain">
+    <li>Dot product: 1 × 0.5 + 0 × 0.5 = 0.5.</li>
+    <li>Lengths: the query's length is 1, and the length of [0.5, 0.5] is √(0.5² + 0.5²) = √0.5 = 0.707. The square root √ is the number that gives the number inside when multiplied by itself. Check: 0.707 × 0.707 = 0.5.</li>
+    <li>Cosine: 0.5 ÷ (1 × 0.707) = 0.71.</li>
+  </ol>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Chunk</th><th>Vector</th><th class="numh">Cosine with the query</th></tr></thead>
+    <tbody>
+      <tr><td>Small chunk, office hours only</td><td class="mono">[1, 0]</td><td class="num">1.00</td></tr>
+      <tr class="hi"><td>Large chunk, office hours and deadlines</td><td class="mono">[0.5, 0.5]</td><td class="num">0.71</td></tr>
+    </tbody>
+  </table></div>
+  <p>The large chunk does contain the right fact, yet its cosine fell from 1.00 to 0.71, because the deadline topic was mixed into the average. Any other chunk with a cosine of 0.8 now ranks above it. The 40-page syllabus covers office hours, deadlines, grading and the project, so there the cosine falls even further.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>A chunk holds three topics in equal parts: [1, 0, 0], [0, 1, 0] and [0, 0, 1]. What vector does mean pooling give, and what is its cosine with the query [1, 0, 0]?</p>
+    <details><summary>Show the answer</summary>
+      <p>The average is [1/3, 1/3, 1/3], and its dot product with the query is 1/3. Its length is √(3 × 1/9) = √(1/3) = 0.577. Cosine = (1/3) ÷ (1 × 0.577) = <b>0.58</b>. Two topics gave 0.71 and three give 0.58, so the more topics, the lower the cosine.</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="small" style="margin-top:28px">A small chunk: the context is left behind</h4>
+
+  <p>Now go the other way and make very small chunks. The queue log has 19 words, and cutting it into chunks of 5 words gives these 4 chunks:</p>
+  <div class="chunks">
+    <div class="chunk"><span class="cid">Chunk 1 · 5 words</span><div>Queue log, last 3 weeks:</div></div>
+    <div class="chunk"><span class="cid">Chunk 2 · 5 words</span><div>Tuesday 4pm office hour averaged</div></div>
+    <div class="chunk"><span class="cid">Chunk 3 · 5 words</span><div>14 students waiting; Thursday 9am</div></div>
+    <div class="chunk"><span class="cid">Chunk 4 · 4 words</span><div>office hour averaged 3.</div></div>
+  </div>
+  <p>The fourth chunk has the 3, but it does not say which day's office hour that is. Thursday 9am went into the third chunk, so the fourth chunk's vector does not know it either. The answer to lesson 2's question, <q>which office hour is least crowded</q>, is no longer complete in any single chunk.</p>
+
+  <p><b class="term">Fixed-size chunking</b> takes the middle road: every chunk gets a fixed number of tokens. Stanford's slide gives 100 to 500 tokens as an example.</p>
+
+  <p><b>Small chunks are good for precise questions, but they lose their context.</b> Large chunks get more context, but their one vector becomes the average of many topics. <a href="08-contextual-retrieval-dense-en.html">Lesson 8</a> gives a small chunk its lost context back, and <a href="09-raptor-graphrag-dense-en.html">lesson 9</a> builds a layer of summaries above the chunks for broad questions.</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="overlap">
+  <h3><span class="cn">3</span>Overlap and stride: saving a fact cut at a boundary</h3>
+
+  <p><b>With overlap, every new chunk starts by repeating the last few tokens of the previous chunk, so that a fact cut at a boundary survives whole.</b> You need it because whatever size you choose, some fact will fall on a boundary. That is exactly how the milestone date was cut at 50 tokens. Stanford's slide recommends an overlap of 10 to 20%.</p>
+
+  <p>The distance between the starts of two neighbouring chunks is called the <b class="term">stride</b>: stride = chunk size − overlap. With chunk size 9 and overlap 6 the stride is 3, so chunks start at words 0, 3, 6, 9, ….</p>
+
+  <p>Now cut the beginning of the syllabus in the widget below. Treat every word as one token, and count from 0. The milestone fact, <q>milestone is due Week 6, Thursday 11:59pm.</q>, is 7 words long and sits at words 3 to 9 of the syllabus. With chunk size 9 and overlap 0, the first chunk covers words 0 to 8, so 11:59pm. falls outside it.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Keep the chunk size at 9 and raise the overlap from 0 to 6. At what overlap does the date first appear whole in a single chunk? Guess first, then check in the widget.</p>
+    <details><summary>Show the answer</summary>
+      <p>Only at overlap 6. The stride is then 3, and the second chunk runs from word 3 to word 11, which holds the whole date. With overlap 1 to 5, no chunk starts at word 3 or earlier and still reaches word 9.</p>
+    </details>
+  </div>
+
+  <div class="widget" id="cw">
+    <h4>Cut the syllabus into chunks</h4>
+    <p class="hint">The underlined fact, the milestone date, should be whole inside one chunk. Words with a light background are overlap.</p>
+    <div class="btns" id="cw-mode">
+      <button type="button" data-m="fixed">Fixed-size</button>
+      <button type="button" data-m="head">Split on headings</button>
+    </div>
+    <div class="btns" id="cw-pre">
+      <button type="button" data-p="9,0">Size 9, overlap 0</button>
+      <button type="button" data-p="9,6">Size 9, overlap 6</button>
+      <button type="button" data-p="10,0">Size 10, overlap 0</button>
+      <button type="button" data-p="20,0">Size 20, overlap 0</button>
+    </div>
+    <div class="ctl" id="cw-ctl">
+      <label for="cw-size">Chunk size (words)</label><input id="cw-size" type="range" min="7" max="20" step="1" value="9"><output id="cw-so">9</output>
+      <label for="cw-ov">Overlap (words)</label><input id="cw-ov" type="range" min="0" max="6" step="1" value="0"><output id="cw-oo">0</output>
+    </div>
+    <p class="out" id="cw-out" style="margin-top:0"></p>
+    <div class="chunks" id="cw-chunks"></div>
+  </div>
+
+  <h4 class="sub" id="rule">How much overlap is enough</h4>
+
+  <p>You can count out why it has to be 6. A chunk of 9 words holds the fact at words 3 to 9 only if it starts at word 1, 2 or 3. Chunks start at 0, stride, 2 × stride, …, and a start is certain to land on one of those 3 positions only if the stride is 3 or less. With stride 4 the starts are 0, 4, 8, which miss 1, 2 and 3 altogether. The stride is 9 − overlap, so the overlap must be at least 6.</p>
+
+  <p>The same count works for any size. With chunk size C and a fact of L words, there are C − L + 1 good starting positions for a chunk. Here that was 9 − 7 + 1 = 3. If the stride, which is C − overlap, is no larger than that, you get this rule: <span class="mine">this rule is not on the slide, it follows from counting</span></p>
+  <div class="formula">overlap ≥ L − 1, and chunk size ≥ L</div>
+  <p>Here L = 7, so the overlap must be at least 6. If the chunk is shorter than the fact, no overlap can bring the fact into one chunk.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Set the widget to chunk size 10 and overlap 0. The date shows up whole. Is that a reliable defence?</p>
+    <details><summary>Show the answer</summary>
+      <p>No, that is luck. The first chunk covers words 0 to 9, and the date ends exactly at word 9. With one more word at the start of the syllabus, 11:59pm. would sit at word 10 and fall into the next chunk. An overlap of L − 1 protects the fact wherever it sits.</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="cost" style="margin-top:28px">What overlap costs</h4>
+
+  <p>Overlap is not free, because the repeated tokens go into two chunks. Cut a document of 1,000 tokens into chunks of 50 tokens, and without overlap you get 1,000 ÷ 50 = 20 chunks. With an overlap of 10 tokens, which is 20%, the stride is 40. Chunks then start at tokens 0, 40, …, 960, because the chunk starting at 960 already reaches the end of the document. That makes 960 ÷ 40 + 1 = 25 chunks.</p>
+  <p><b>So 20% overlap means 25% more embeddings to compute and store in the index.</b></p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="strategies">
+  <h3><span class="cn">4</span>Cutting by meaning: headings, metadata and LLMs</h3>
+
+  <p><b>Semantic chunking cuts the text where the text already divides itself, such as at the end of a sentence or a section.</b> You need it because fixed-size chunking cuts by count and ignores the text's structure. Set the widget to chunk size 20 and overlap 0. The second chunk starts with <q>final report is due Week 10.</q> and runs on into the office hours part, so one chunk holds two topics.</p>
+
+  <p>Each part of the syllabus has its own heading: Grading, Office hours and Project. Splitting on headings is the simplest form of semantic chunking. Press <q>Split on headings</q> in the widget. The syllabus splits into 3 chunks of 26, 16 and 12 words, and each chunk is about one topic. The chunks are no longer the same size, and that is the price of this method.</p>
+
+  <p>A small chunk can still lose its context. <q>Late days may not be applied to the milestone.</q> does not say on its own which course it belongs to. <b class="term">Context-enriched chunking</b> handles this by storing extra information with every chunk, such as metadata or a short summary.</p>
+
+  <p><b class="term">Metadata</b> is data about data: the document's name, the section and the date. A context-enriched chunk could look like this: <span class="mine">my example</span></p>
+  <div class="sentence">[Source: CS 329Z syllabus, section: Grading, updated: 30 Sep 2026]<br>Late days may not be applied to the milestone.</div>
+  <p>Now even the small chunk says which course and which section it comes from. <a href="08-contextual-retrieval-dense-en.html">Lesson 8</a> shows the most effective form of this idea, where an LLM writes context for every chunk.</p>
+
+  <p>The last method is <b class="term">AI-driven dynamic chunking</b>. It asks an LLM where the topic changes in the text, and cuts there. It works even without headings. But every document has to pass through the LLM once, which costs time and money.</p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Method</th><th>Benefit</th><th>Cost</th></tr></thead>
+    <tbody>
+      <tr><td>Fixed-size</td><td>Simple, every chunk the same size</td><td>A fact can break in the middle</td></tr>
+      <tr><td>Fixed-size + overlap</td><td>A broken fact is whole in the next chunk</td><td>More chunks, repeated text</td></tr>
+      <tr><td>Semantic, such as headings</td><td>Each chunk is about one topic</td><td>Chunk sizes vary</td></tr>
+      <tr><td>Context-enriched</td><td>Even a small chunk carries its context</td><td>Metadata or summaries must be made</td></tr>
+      <tr><td>AI-driven</td><td>Meaningful boundaries even without headings</td><td>LLM calls for every document, slow and expensive</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Now go back to the opening problem. Splitting on headings puts the whole milestone date into the Grading chunk, and that chunk is about a single topic. <b>So the broken date and the averaged-away vector are both solved at once for this document.</b> Not every document has clean headings, which is why the other methods are useful too.</p>
+
+  <p style="margin-top:22px">You can now read both of Stanford's chunking slides. The first lists all four methods, and the second cuts our syllabus in three ways.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p24.png"><img src="img/slide-p24.png" alt="Stanford slide: Chunking: Basic Unit in Retrieval, four kinds of chunking" loading="lazy"></a>
+    <figcaption>Stanford's slide: Chunking: Basic Unit in Retrieval. At the top are fixed-size chunking and overlap (steps 2 and 3), and below them the other three methods (step 4).</figcaption>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p25.png"><img src="img/slide-p25.png" alt="Stanford slide: Chunking: Same Text, Three Splits" loading="lazy"></a>
+    <figcaption>Stanford's slide: Chunking: Same Text, Three Splits. Our syllabus is at the top. Below it, on the left, is the date broken at 50 tokens, in the middle the date saved by overlap, and on the right a chunk split on headings and rewritten more tidily.</figcaption>
+  </figure>
+</article>
+
+<div class="levelup">
+  <h2>From here: the Stanford level</h2>
+  <p>The 4 steps above are the same as in the easy version. The 4 steps below take you to the level of the Stanford slides: the full maths of mean pooling and overlap, then the inside story of the methods from the slide's source, the Databricks guide, and finally reading the slides yourself. Every piece of maths is explained where it first appears.</p>
+</div>
+
+<!-- 5 -->
+<article class="concept" id="pooling">
+  <h3><span class="cn">5</span>The maths of mean pooling: how much a fact gets diluted</h3>
+
+  <p><b>Mean pooling gives every token a weight of 1/N, so a fact affects the chunk's vector only as much as its share of the chunk.</b> Step 2 showed this for two topics. This step runs the same arithmetic for any number of topics and any share.</p>
+
+  <p>First, write mean pooling in symbols. The chunk has N tokens, and token t has the vector h<sub>t</sub>. Take the <button class="def" data-w="w-sigma">sum</button> of all the vectors and divide by N:</p>
+  <div class="formula">h<sub>chunk</sub> = <span class="frac"><span>1</span><span>N</span></span> ∑<sub>t=1</sub><sup>N</sup> h<sub>t</sub></div>
+  <p>In step 1, N = 3, with h<sub>1</sub> = [0.9, 0.1], h<sub>2</sub> = [0.7, 0.3] and h<sub>3</sub> = [0.8, 0.2], and the result was [0.8, 0.2]. Adding and dividing do not change how many numbers there are, so h<sub>chunk</sub> has as many numbers as each h<sub>t</sub>. BERT-base gives every token a vector of 768 numbers, so a chunk of 100 tokens and a chunk of 500 tokens both get a vector of 768 numbers.</p>
+
+  <p>Not every model takes the average. According to <a href="03-vectors-dense-en.html#kinds">lesson 3</a>, DPR uses the vector of a special token called [CLS] for the whole passage, while Sentence-BERT uses mean pooling. Both keep the vector's dimension fixed, which is the condition on the slide's last line.</p>
+
+  <h4 class="sub" id="ktopics">k equal topics: cosine 1/√k</h4>
+
+  <p>Now take a toy model in which every token's vector points exactly in its topic's direction, and the directions of different topics are at 90° to each other, so their cosine is 0 <span class="mine">my model</span>. Suppose a chunk holds 4 topics in equal shares. Each topic's share is then 1/4, and mean pooling gives [0.25, 0.25, 0.25, 0.25]. The query for the first topic is [1, 0, 0, 0].</p>
+  <ol class="plain">
+    <li>Dot product: 1 × 0.25 = 0.25, because the query's other numbers are 0.</li>
+    <li>Length: √(4 × 0.25²) = √(4 × 0.0625) = √0.25 = 0.5.</li>
+    <li>Cosine: 0.25 ÷ (1 × 0.5) = 0.5.</li>
+  </ol>
+  <p>With k topics the same steps go like this. Every number is 1/k, so the dot product is 1/k. The length is √(k × 1/k²) = √(1/k) = 1/√k. The cosine is (1/k) ÷ (1/√k), and since k = √k × √k this becomes 1/√k:</p>
+  <div class="formula">cosine = <span class="frac"><span>1</span><span>√k</span></span></div>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Equal topics in the chunk, k</th><th class="numh">Cosine with the query, 1/√k</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="num">1.00</td></tr>
+      <tr><td>2, the large chunk from step 2</td><td class="num">0.71</td></tr>
+      <tr><td>3, the question in step 2</td><td class="num">0.58</td></tr>
+      <tr><td>4</td><td class="num">0.50</td></tr>
+      <tr><td>10</td><td class="num">0.32</td></tr>
+      <tr class="hi"><td>100</td><td class="num">0.10</td></tr>
+    </tbody>
+  </table></div>
+  <p>In the table the cosine falls fast at first, then slowly. Multiplying k by 4 doubles √k, so the cosine halves: 1.00 at k = 1, and 0.50 at k = 4.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>At k = 4 the cosine is 0.50. What is it at k = 25, and at 100?</p>
+    <details><summary>Show the answer</summary>
+      <p>At k = 25 it is 1/√25 = 1/5 = 0.20, and at k = 100 it is 1/10 = 0.10. From 25 to 100, k grew 4 times, and the cosine halved from 0.20 to 0.10.</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="share" style="margin-top:28px">A fact with a small share almost disappears</h4>
+
+  <p>Real chunks do not hold topics in equal shares. Suppose a share f of the chunk is about office hours and the remaining 1 − f is about deadlines. Mean pooling then gives [f, 1 − f], and the cosine with the query [1, 0] is:</p>
+  <div class="formula">cosine = <span class="frac"><span>f</span><span>√(f² + (1 − f)²)</span></span></div>
+  <p>Look at f = 0.2. The vector is [0.2, 0.8], and its dot product with the query is 0.2. Its length is √(0.04 + 0.64) = √0.68 = 0.825, so the cosine is 0.2 ÷ 0.825 = 0.24.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Share of office hours, f</th><th class="numh">Cosine with the query</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="num">1.00</td></tr>
+      <tr><td>0.9</td><td class="num">0.99</td></tr>
+      <tr><td>0.5</td><td class="num">0.71</td></tr>
+      <tr><td>0.2</td><td class="num">0.24</td></tr>
+      <tr><td>0.1</td><td class="num">0.11</td></tr>
+      <tr class="hi"><td>0.01</td><td class="num">0.01</td></tr>
+    </tbody>
+  </table></div>
+  <p>When f is small, 1 − f is close to 1, and so is the square root underneath. The cosine is then roughly f itself. <b>So a fact that makes up 1% of a chunk gets a cosine of about 0.01.</b></p>
+
+  <p>Now go back to the 40-page syllabus from the opening. Suppose each page has 50 lines, 2,000 lines in all, and the milestone fact takes 2 lines <span class="mine">my numbers</span>. Then f = 2 ÷ 2,000 = 0.001, and in this toy model the query's cosine with a single vector for the whole syllabus is also about 0.001. Real encoder vectors are not this clean, but mean pooling always gives a small share a small weight.</p>
+
+  <p class="callout"><b>Watch out:</b> The Databricks guide that the slide cites names one more limit. Embedding models and LLMs both have a strict limit on input size, and well-sized chunks stay within it <span class="mine">from the Databricks guide</span>. So putting 40 pages into one vector is often not even possible.</p>
+</article>
+
+<!-- 6 -->
+<article class="concept" id="overlapmath">
+  <h3><span class="cn">6</span>The full arithmetic of overlap: the chance a fact survives, and the chunk count</h3>
+
+  <p><b>Even when the overlap is below L − 1, a fact sometimes survives whole, and the chance of that is (C − L + 1) ÷ stride.</b> The rule in step 3 was about a guaranteed defence. This step shows how much risk a smaller overlap carries, and what overlap costs.</p>
+
+  <h4 class="sub" id="chance">The chance a fact survives too little overlap</h4>
+
+  <p>In step 3 you saw that a chunk has C − L + 1 good starting positions. Chunks start every stride words. Now suppose the fact can start anywhere in the document, with every position equally likely <span class="mine">my model</span>. Then out of any stride consecutive positions, the fact lands whole in some chunk for C − L + 1 of them.</p>
+
+  <p>With size 9 and overlap 0 the stride is 9, and the good positions number 9 − 7 + 1 = 3. So the fact survives at 3 positions out of 9, which is 3 ÷ 9 = 33.3%, and it is cut 66.7% of the time. The syllabus date in step 3 fell into that 66.7%. With size 10 and overlap 0 the chance is (10 − 7 + 1) ÷ 10 = 40%, so the luck in step 3 was a 40% chance.</p>
+  <div class="formula">chance = min(1, <span class="frac"><span>C − L + 1</span><span>C − overlap</span></span>)</div>
+  <p>min(1, x) means the smaller of 1 and x, because a chance cannot exceed 1. If the stride, the C − overlap at the bottom, is at most C − L + 1, the chance is 1. That is exactly the rule from step 3, overlap ≥ L − 1.</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Chunk size C, overlap</th><th class="numh">Stride</th><th class="numh">7-word fact survives</th></tr></thead>
+    <tbody>
+      <tr><td>9, 0</td><td class="num">9</td><td class="num">3/9 = 33.3%</td></tr>
+      <tr><td>10, 0</td><td class="num">10</td><td class="num">4/10 = 40%</td></tr>
+      <tr><td>9, 5</td><td class="num">4</td><td class="num">3/4 = 75%</td></tr>
+      <tr class="hi"><td>9, 6</td><td class="num">3</td><td class="num">100%</td></tr>
+      <tr><td>50, 0<span class="sub">the slide's 50-token chunk</span></td><td class="num">50</td><td class="num">44/50 = 88%</td></tr>
+      <tr><td>50, 5<span class="sub">10% overlap</span></td><td class="num">45</td><td class="num">44/45 = 97.8%</td></tr>
+      <tr class="hi"><td>50, 10<span class="sub">20% overlap</span></td><td class="num">40</td><td class="num">100%</td></tr>
+    </tbody>
+  </table></div>
+  <p>With 50-token chunks and no overlap, a 7-token fact is cut 12% of the time, which is (L − 1) ÷ C = 6 ÷ 50. With 10% overlap this drops to 2.2%, and with 20% to 0.</p>
+
+  <h4 class="sub" id="slideclaim">When the slide's 10 to 20% advice is enough</h4>
+
+  <p>The slide says that with 10 to 20% overlap no sentence is lost at a chunk boundary. In tokens the overlap is r × C, where r is the overlap share, such as 0.2 for 20%. By the rule from step 3, this guarantees sentences of up to overlap + 1 tokens:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Chunk size</th><th class="numh">10% overlap protects</th><th class="numh">20% overlap protects</th></tr></thead>
+    <tbody>
+      <tr><td>100 tokens</td><td class="num">up to 11 tokens<span class="sub">overlap 10</span></td><td class="num">up to 21 tokens<span class="sub">overlap 20</span></td></tr>
+      <tr><td>200 tokens</td><td class="num">up to 21 tokens<span class="sub">overlap 20</span></td><td class="num">up to 41 tokens<span class="sub">overlap 40</span></td></tr>
+      <tr><td>500 tokens</td><td class="num">up to 51 tokens<span class="sub">overlap 50</span></td><td class="num">up to 101 tokens<span class="sub">overlap 100</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>So the slide's claim holds for large chunks, but with 100-token chunks and 10% overlap a 30-token sentence can be cut. The claim depends on the chunk size and on how long the sentences are.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Most sentences in your documents are shorter than 30 tokens, and the chunk size is 200 tokens. What is the smallest overlap that keeps every such sentence whole? What percentage of the chunk size is that?</p>
+    <details><summary>Show the answer</summary>
+      <p>L = 30, so the overlap must be at least 29 tokens. 29 ÷ 200 = 14.5%, which is inside the slide's 10 to 20% range.</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="count" style="margin-top:28px">A formula for the chunk count, and the cost of overlap</h4>
+
+  <p>In step 3, 1,000 tokens with chunk size 50 and stride 40 gave 25 chunks. The last chunk starts where 50 tokens reach the end of the document, which is at token 950 or later. Among 40, 80, 120, … the first such number is 960, and from 0 to 960 there are 960 ÷ 40 + 1 = 25 starts. The same count fits in one formula, where N is the number of tokens in the document:</p>
+  <div class="formula">chunks = ⌈<span class="frac"><span>N − C</span><span>stride</span></span>⌉ + 1</div>
+  <p>⌈x⌉ means the smallest whole number that is x or larger, such as ⌈23.75⌉ = 24 and ⌈19⌉ = 19. Check: (1,000 − 50) ÷ 40 = 23.75, so 24 + 1 = 25 chunks. Without overlap, (1,000 − 50) ÷ 50 = 19, so 19 + 1 = 20 chunks. The formula is for documents longer than one chunk.</p>
+
+  <p>For a long document the chunk count is close to N ÷ stride. So overlap multiplies the number of embeddings by about C ÷ stride. If the overlap share is r, the stride is C × (1 − r), and that factor becomes 1 ÷ (1 − r):</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Overlap share, r</th><th class="numh">Times as many embeddings, 1 ÷ (1 − r)</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td class="num">1.00</td></tr>
+      <tr><td>10%</td><td class="num">1.11</td></tr>
+      <tr class="hi"><td>20%</td><td class="num">1.25</td></tr>
+      <tr><td>25%</td><td class="num">1.33</td></tr>
+      <tr><td>50%</td><td class="num">2.00</td></tr>
+      <tr><td>75%</td><td class="num">4.00</td></tr>
+    </tbody>
+  </table></div>
+  <p>This fraction grows slowly at first and then fast, because the 1 − r at the bottom heads towards 0. The slide's 10 to 20% sits in the cheap part: 11% to 25% more embeddings.</p>
+
+  <p>Now run it on the 40-page syllabus. Suppose each page holds 500 tokens, so N = 20,000 <span class="mine">my estimate</span>. At the two ends of the slide's 100 to 500 token range, the counts are:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Chunk size, overlap</th><th class="numh">Stride</th><th class="numh">Chunks</th></tr></thead>
+    <tbody>
+      <tr><td>100, 0</td><td class="num">100</td><td class="num">200</td></tr>
+      <tr><td>100, 20 (20%)</td><td class="num">80</td><td class="num">250<span class="sub mono">⌈19,900 ÷ 80⌉ + 1 = 249 + 1</span></td></tr>
+      <tr><td>500, 0</td><td class="num">500</td><td class="num">40</td></tr>
+      <tr><td>500, 100 (20%)</td><td class="num">400</td><td class="num">50<span class="sub mono">⌈19,500 ÷ 400⌉ + 1 = 49 + 1</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>Overlap has one more cost. The overlapping tokens sit in two neighbouring chunks, so the same fact can appear twice in the top K and use up space in the prompt.</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="methods">
+  <h3><span class="cn">7</span>The methods from the inside: the Databricks guide</h3>
+
+  <p><b>The chunking slide cites a Databricks guide for its methods, and the guide explains each method with code.</b> The guide is a 2025 technical blog on the Databricks community site: <q>The Ultimate Guide to Chunking Strategies for RAG Applications with Databricks</q>. The 10 to 20% advice comes from it as well. This step runs the guide's inside details on our syllabus. Points that are in the guide but not on the slide are marked <span class="mine">from the Databricks guide</span>.</p>
+
+  <h4 class="sub" id="sizes">Size and overlap by kind of content</h4>
+
+  <p>The slide only gives 100 to 500 tokens as an example. The guide splits that up by kind of content: <span class="mine">from the Databricks guide</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Content</th><th>Chunk size</th><th>Overlap</th></tr></thead>
+    <tbody>
+      <tr><td>General text</td><td>200 to 500 tokens</td><td>10 to 20%</td></tr>
+      <tr><td>Code or very technical text</td><td>100 to 200 tokens</td><td>15 to 25%</td></tr>
+      <tr><td>Narrative text</td><td>500 to 1,000 tokens</td><td>Not in the list<span class="sub">the code uses 100 on 800, which is 12.5%</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>The guide also says to start by running fixed-size chunking at several sizes, such as 100, 200, 500 and 1,000, and to measure the results. For measuring, it names context precision and context recall: how little unneeded text the chunks carry, and how completely they capture everything a question needs. It mentions a MongoDB study in which chunks of about 100 tokens with about 15 tokens of overlap worked best for Python documentation <span class="mine">from the Databricks guide</span>. How to measure recall is the subject of <a href="13-metrics-dense-en.html">lesson 13</a>.</p>
+
+  <p class="callout"><b>Watch out:</b> The guide's advice is in tokens, but its code counts chunk_size in characters, because it uses Python's len <span class="mine">from the Databricks guide</span>. Check first whether your own splitter counts tokens, words or characters.</p>
+
+  <h4 class="sub" id="recursive">Recursive splitting: from large separators to small ones</h4>
+
+  <p><b class="term">Recursive chunking</b> cuts along a ladder of separators. It cuts at the largest separator first, and any piece that is still larger than the chunk size gets cut at the next smaller separator. In the guide's code the ladder is: a blank line, meaning a paragraph, then a new line, then <q>. </q> at the end of a sentence, then a space, and finally any character <span class="mine">from the Databricks guide</span>. For code, the guide suggests separators such as def and class.</p>
+
+  <p>Set the chunk size to 20 words on our syllabus, and suppose every section ends with a blank line <span class="mine">my example</span>. The first cuts then fall on the blank lines, which gives three sections. Office hours has 16 words and Project has 12, so each becomes one chunk. Grading has 26 words, more than 20, so it is cut into sentences:</p>
+  <ol class="plain">
+    <li>Sentences: <q>Grading.</q> (1 word), the milestone sentence (9), the late days sentence (9), and the final report sentence (7).</li>
+    <li>Join them in order until 20 would be passed: 1 + 9 + 9 = 19. Adding the next sentence would make 26, so the first chunk stops at 19 words.</li>
+    <li>The second chunk is the final report sentence, 7 words long.</li>
+  </ol>
+  <p>The milestone date is whole, and no sentence is cut in the middle. In the widget, fixed size 20 ended the first chunk at <q>The</q> and pushed <q>final report</q> into the next chunk. The guide's semantic chunking example is in fact this same recursive splitter. <span class="mine">from the Databricks guide</span></p>
+
+  <h4 class="sub" id="breakpoints">Finding boundaries with sentence vectors</h4>
+
+  <p>Even without headings you can find where the topic changes. The guide says that consecutive pieces that are highly similar can be merged into one chunk <span class="mine">from the Databricks guide</span>. The method goes like this: make a vector for every sentence, compute the cosine of each pair of neighbouring sentences, and cut where the cosine drops sharply. Take these vectors for four sentences of the syllabus: <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Sentence</th><th>Vector</th><th class="numh">Cosine with the next sentence</th></tr></thead>
+    <tbody>
+      <tr><td>The project milestone is due…</td><td class="mono">[0.1, 0.9]</td><td class="num">0.99</td></tr>
+      <tr><td>Late days may not be applied…</td><td class="mono">[0.2, 0.8]</td><td class="num">0.99</td></tr>
+      <tr class="hi"><td>The final report is due Week 10.</td><td class="mono">[0.1, 0.9]</td><td class="num">0.22</td></tr>
+      <tr><td>Tuesday 4pm in Room 104…</td><td class="mono">[0.9, 0.1]</td><td class="num">–</td></tr>
+    </tbody>
+  </table></div>
+  <ol class="plain">
+    <li>Dot product of the final report sentence and the Tuesday sentence: 0.1 × 0.9 + 0.9 × 0.1 = 0.18.</li>
+    <li>Both lengths: √(0.01 + 0.81) = √0.82 = 0.906.</li>
+    <li>Cosine: 0.18 ÷ (0.906 × 0.906) = 0.18 ÷ 0.82 = 0.22.</li>
+  </ol>
+  <p>The first two cosines are 0.99. For milestone and late days, for example, it is 0.74 ÷ (0.906 × 0.825) = 0.74 ÷ 0.747 = 0.99. With a threshold such as 0.5, the only cut falls between the third and fourth sentences, exactly at the Office hours heading. Without any headings we got the same split. The cost is one encoder call per sentence, and you have to pick the threshold yourself, because the guide gives none.</p>
+
+  <h4 class="sub" id="enrich">Metadata, summaries and filters</h4>
+
+  <p>In the guide's context-enriched example, every chunk gets a summary of its neighbouring chunks, one on each side. An LLM writes this summary, from a prompt that starts <q>Provide a brief summary of the following text</q> <span class="mine">from the Databricks guide</span>. According to the guide, metadata such as the section title, the document type and the date also helps with filtering.</p>
+
+  <p>On our corpus such a filter is easy to see. If every chunk's metadata holds a date, the retriever can drop chunks older than 2025 before ranking. The old 2024 forum post then never reaches the ranking at all. The guide also names the cost: storage and memory grow, and without care the same information repeats across many chunks <span class="mine">from the Databricks guide</span>. <a href="08-contextual-retrieval-dense-en.html">Lesson 8</a> shows the most effective form of this idea, and <a href="18-failure-modes-dense-en.html">lesson 18</a> uses metadata dates to catch stale and conflicting sources.</p>
+
+  <h4 class="sub" id="llmchunk">The cost of chunking with an LLM</h4>
+
+  <p>In the guide's AI-driven example, the whole document goes to the LLM in one prompt, along with a few instructions. Each chunk should hold a complete idea, complex sections should get smaller chunks, a heading should stay with its content, the order should not change, and there should be no more than a set number of chunks. The LLM answers with a JSON list of the chunk texts. <span class="mine">from the Databricks guide</span></p>
+
+  <p>This means the LLM reads the whole document and then writes the whole document again. For the 20,000-token syllabus that is about 20,000 input tokens and 20,000 output tokens, 40,000 tokens of work, while fixed-size chunking needs no LLM at all. The guide's code caps the answer at max_tokens = 4000, so a document longer than about 4,000 tokens cannot come back whole in one call <span class="mine">from the Databricks guide</span>. The guide's own list of drawbacks agrees: the result depends on the LLM, compute and API calls are expensive, and getting the same chunks every time is hard.</p>
+
+  <p>The guide lists two more methods that are not on the slide. Adaptive chunking gives complex parts smaller chunks and simple parts larger ones. Hierarchical chunking keeps several levels, such as section, subsection and paragraph <span class="mine">from the Databricks guide</span>. RAPTOR in <a href="09-raptor-graphrag-dense-en.html">lesson 9</a> builds levels of summaries above the chunks.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>You have a company HR policy. It has clear headings, and each section is 150 to 400 tokens long. Which method would you use, and why?</p>
+    <details><summary>Show the answer</summary>
+      <p>Splitting on headings, that is, semantic chunking. Each section is already about one topic, and its size is close to the guide's 200 to 500 tokens for general text. Also store the section title and the date as metadata, so that even a small chunk carries its context and an outdated policy can be filtered out. LLM chunking is not needed here, because the boundaries are already clear.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">8</span>Now read Stanford's slides yourself</h3>
+
+  <p>Below are this lesson's three Stanford slides, unchanged. Under each slide are a few questions. Think of the answer first, then open it. If something stops you, go back to the step named in the answer. If a slide looks small on a phone, click the image to open it at full size.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p23.png"><img src="img/slide-p23.png" alt="Stanford slide: What Makes A Good Retriever? Embeddings, a table of five kinds of embeddings" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p23-metric.png"><img src="img/slide-p23-metric.png" alt="The last line of the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's embeddings slide, and below it the last line, enlarged. Read each row of the table in the dense version of <a href="03-vectors-dense-en.html#kinds">lesson 3</a>. The questions here are about the chunk part.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the embeddings slide</p>
+    <ol class="plain">
+      <li>
+        <p>The last line asks for a fixed-dimension vector per chunk. The Grading chunk from the heading split has 26 words, and the Project chunk has 12. After mean pooling, how many numbers does each vector have?</p>
+        <details><summary>Show the answer</summary>
+          <p>The same as each token vector: 2 in our toy, and 768 in BERT-base. Averaging N vectors does not change the count of numbers, it only divides by N. (Steps 1 and 5)</p>
+        </details>
+      </li>
+      <li>
+        <p>The passage row says one vector covers one chunk. How many vectors does our syllabus put into the index when split on headings, and how many with fixed-size chunks of size 9 and overlap 6?</p>
+        <details><summary>Show the answer</summary>
+          <p>3 vectors when split on headings, and 16 with size 9 and overlap 6, because stride 3 over 54 words makes 16 chunks. The widget shows both counts. (Steps 3 and 4)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p24.png"><img src="img/slide-p24.png" alt="Stanford slide: Chunking: Basic Unit in Retrieval" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p24-fixed.png"><img src="img/slide-p24-fixed.png" alt="The fixed-size chunking part of the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p24-methods.png"><img src="img/slide-p24-methods.png" alt="The other three methods on the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: Chunking: Basic Unit in Retrieval. The picture at the top right splits a large document into sections, and each section into chunks. Below are the fixed-size part and the other three methods, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the chunking slide</p>
+    <ol class="plain">
+      <li>
+        <p><q>Too large: one vector averages many topics.</q> What is the cosine between a chunk with 10 equal topics and a query about one of them?</p>
+        <details><summary>Show the answer</summary>
+          <p>1/√10 = 0.32. A chunk with one topic would give 1.00. In the toy model of step 5, the more topics, the lower the cosine. (Steps 2 and 5)</p>
+        </details>
+      </li>
+      <li>
+        <p>The overlap line says that with 10 to 20% overlap no sentence is lost at a boundary. With 100-token chunks and 10% overlap, does a 30-token sentence survive?</p>
+        <details><summary>Show the answer</summary>
+          <p>Not for certain. 10% overlap is 10 tokens, which protects sentences of up to 11 tokens. A 30-token sentence needs an overlap of 29, which is 29%. In the model of step 6, with stride 90, such a sentence survives (100 − 30 + 1) ÷ 90 = 78.9% of the time and is cut 21.1% of the time. (Steps 3 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Both context-enriched and AI-driven chunking can use an LLM. How does the LLM's job differ between them?</p>
+        <details><summary>Show the answer</summary>
+          <p>In context-enriched chunking the boundaries stay as they were, and the LLM writes a summary that is attached to each chunk. In AI-driven chunking the LLM decides the boundaries itself, and in the guide's example it writes the whole document out again as chunks. (Steps 4 and 7)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p25.png"><img src="img/slide-p25.png" alt="Stanford slide: Chunking: Same Text, Three Splits" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p25-text.png"><img src="img/slide-p25-text.png" alt="The syllabus text from the same slide, enlarged" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p25-chunks.png"><img src="img/slide-p25-chunks.png" alt="The three methods on the same slide, enlarged" loading="lazy"></a>
+    <figcaption>Stanford's slide: Chunking: Same Text, Three Splits. Below it, the syllabus text and the three methods, enlarged.</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Read the three-splits slide</p>
+    <ol class="plain">
+      <li>
+        <p>In the middle column, which words appear in both chunks? Which chunk holds the whole milestone fact, and would this overlap always be enough?</p>
+        <details><summary>Show the answer</summary>
+          <p>On the slide, <q>due Week 6, Thursday 11:59pm.</q> appears in both chunks, so at least 5 words. More words may be hidden behind the “…”. The whole fact, <q>milestone is due Week 6, Thursday 11:59pm.</q>, is in the first chunk. To protect a 7-word fact wherever it sits, the overlap must be at least 6. So the slide shows one case in which the fact survived, not a guarantee. (Steps 3 and 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>How is the chunk in the right-hand column different from the other two?</p>
+        <details><summary>Show the answer</summary>
+          <p>It is split at the Grading heading, so it holds the whole section and a single topic. Someone has also tidied and rewritten its text: Thu instead of Thursday, and <q>Late days: not allowed on the milestone</q>. So it combines splitting on headings with rewriting the chunk. (Steps 4 and 7)</p>
+        </details>
+      </li>
+      <li>
+        <p>The text at the top of the slide has 26 words. How would the widget's fixed size 20 cut it, and how would splitting on headings cut it?</p>
+        <details><summary>Show the answer</summary>
+          <p>With size 20 the first chunk covers words 0 to 19 and ends at <q>The</q>. The second chunk is <q>final report is due Week 10.</q> The date survives, but the final report sentence is broken. Split on headings, the whole text is a single chunk, because it is the entire Grading section. (Steps 3 and 4)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>Retrieval needs one vector per chunk, and it is often the average of the contextual token vectors, which is mean pooling. However many tokens there are, the vector keeps the same dimension.</li>
+    <li>In mean pooling a fact counts only as much as its share. With k equal topics the cosine is 1/√k, and a fact that makes up 1% of a chunk gets a cosine of about 0.01.</li>
+    <li>With an overlap of L − 1 a fact of L tokens is certain to survive, and with less the chance is (C − L + 1) ÷ stride. Overlap multiplies the embeddings by about 1 ÷ (1 − r), and splitting on headings or sentence vectors does not break the fact at all.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-wordtype">Word type and token in context</dt><dd>A word as listed in the dictionary, and one use of it in a sentence. For example, late is a word type, and its use in <q>Late days may not be applied</q> is a token in context.</dd>
+    <dt id="w-static">Static word embedding</dt><dd>One vector per word type, whatever the context. For example, word2vec and GloVe. The vector for late stays [0.5, 0.5] in both sentences. <span class="mine">my numbers</span></dd>
+    <dt id="w-contextual">Contextual embedding</dt><dd>A separate vector for each token, shaped by its sentence. For example, BERT. In <q>Late days may not be applied</q> late is [0.1, 0.9], and in <q>late afternoon office hours</q> it is [0.9, 0.1]. <span class="mine">my numbers</span></dd>
+    <dt id="w-passageemb">Passage embedding</dt><dd>One vector for a whole chunk, the kind the retrieval index stores. For example, the vectors from Sentence-BERT, DPR and E5.</dd>
+    <dt id="w-multimodal">Multimodal embedding</dt><dd>Vectors for text and for images in the same space. For example, CLIP. A photo of office hours written on a whiteboard and the text <q>office hours schedule</q> can get nearby vectors.</dd>
+    <dt id="w-graphemb">Graph embedding</dt><dd>A vector for a node or a relation in a network. For example, node2vec. In a course graph: the TA, office hours, and the runs relation between them.</dd>
+    <dt id="w-pooling">Mean pooling</dt><dd>Making one vector by averaging several token vectors. For example, the average of [0.9, 0.1], [0.7, 0.3] and [0.8, 0.2] is [0.8, 0.2].</dd>
+    <dt id="w-chunk">Chunk</dt><dd>A piece of a document made for retrieval, and the basic unit of retrieval. For example, the Grading part of the 40-page syllabus.</dd>
+    <dt id="w-fixed">Fixed-size chunking</dt><dd>Cutting at a fixed number of tokens, even if a fact breaks in the middle. For example, every 50 tokens.</dd>
+    <dt id="w-chunkoverlap">Overlap</dt><dd>A new chunk starts by repeating the last few tokens of the previous one. To keep a fact of L tokens whole, it must be at least L − 1. For example, 6 for a 7-word date.</dd>
+    <dt id="w-stride">Stride</dt><dd>The distance between the starts of two neighbouring chunks: chunk size − overlap. For example, 9 − 6 = 3.</dd>
+    <dt id="w-semantic">Semantic chunking</dt><dd>Cutting at logical boundaries such as sentences or sections. For example, cutting the syllabus at its Grading, Office hours and Project headings.</dd>
+    <dt id="w-enriched">Context-enriched chunking</dt><dd>Storing metadata or a summary with every chunk. For example, <q>Source: CS 329Z syllabus, section: Grading</q> above every chunk.</dd>
+    <dt id="w-metadata">Metadata</dt><dd>Data about data: name, section, date. For example, <q>CS 329Z syllabus, Grading, 30 Sep 2026</q>.</dd>
+    <dt id="w-aichunk">AI-driven dynamic chunking</dt><dd>Asking an LLM where the topic changes in a text, and cutting there. It needs LLM calls for every document.</dd>
+    <dt id="w-recursive">Recursive chunking</dt><dd>Cutting along a ladder of separators: paragraph first, then line, then sentence, then space. Only a piece still larger than the chunk size gets cut at the next separator. For example, at size 20 the Grading section becomes two chunks of 19 and 7 words.</dd>
+    <dt id="w-ceil">⌈x⌉ (ceiling)</dt><dd>The smallest whole number that is x or larger. For example, ⌈23.75⌉ = 24, and chunks = ⌈(1,000 − 50) ÷ 40⌉ + 1 = 25.</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="06-rag-pipeline-dense-en.html">Previous: Lesson 6</a>
+    <a href="08-contextual-retrieval-dense-en.html">Next: Lesson 8, Lost context</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Source of the chunking slide: Debu Sinha, “The Ultimate Guide to Chunking Strategies for RAG Applications with Databricks”, Databricks Community technical blog, 2025. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the Databricks guide” are in that guide but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-dense-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var L = { words: " words", sep: ". ", stride: "Stride", whole: "The milestone date is <b>whole</b> in chunk {n}.", cut: "The milestone date is <b>broken</b>: no single chunk holds all of it." };
+  var TEXT = "Grading. The project milestone is due Week 6, Thursday 11:59pm. Late days may not be applied to the milestone. The final report is due Week 10. Office hours. Tuesday 4pm in Room 104 and Thursday 9am on Zoom, run by the TAs. Project. Proposal due on Oct 9. Teams of 1-3 people are recommended.";
+  var W = TEXT.split(" ");
+  var FACT_A = 3, FACT_B = 9; /* "milestone ... 11:59pm." */
+  var HEADS = [[0, 25], [26, 41], [42, W.length - 1]];
+  var mode = "fixed";
+  var sizeIn = document.getElementById("cw-size"), ovIn = document.getElementById("cw-ov");
+  var so = document.getElementById("cw-so"), oo = document.getElementById("cw-oo");
+  var box = document.getElementById("cw-chunks"), out = document.getElementById("cw-out");
+  var ctl = document.getElementById("cw-ctl");
+  var modeBtns = document.querySelectorAll("#cw-mode button"), preBtns = document.querySelectorAll("#cw-pre button");
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function spans() {
+    if (mode === "head") return HEADS.map(function (h) { return { a: h[0], b: h[1], ov: -1 }; });
+    var C = Number(sizeIn.value), O = Math.min(Number(ovIn.value), C - 1), S = C - O, res = [];
+    for (var s = 0; ; s += S) {
+      var e = Math.min(s + C - 1, W.length - 1);
+      res.push({ a: s, b: e, ov: s === 0 ? -1 : Math.min(s + O - 1, e) });
+      if (e >= W.length - 1) break;
+    }
+    return res;
+  }
+  function render() {
+    so.textContent = sizeIn.value; oo.textContent = ovIn.value;
+    ctl.style.display = mode === "head" ? "none" : "";
+    modeBtns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.m === mode ? "true" : "false"); });
+    var key = sizeIn.value + "," + ovIn.value;
+    preBtns.forEach(function (b) { b.setAttribute("aria-pressed", mode === "fixed" && b.dataset.p === key ? "true" : "false"); });
+    var sp = spans(), found = -1;
+    box.innerHTML = sp.map(function (c, i) {
+      var ok = c.a <= FACT_A && c.b >= FACT_B;
+      if (ok && found < 0) found = i;
+      var html = "";
+      for (var k = c.a; k <= c.b; k++) {
+        var cls = [];
+        if (k <= c.ov) cls.push("ov");
+        if (k >= FACT_A && k <= FACT_B) cls.push("fact");
+        html += (k > c.a ? " " : "") + (cls.length ? '<span class="' + cls.join(" ") + '">' + esc(W[k]) + "</span>" : esc(W[k]));
+      }
+      return '<div class="chunk' + (ok ? " ok" : "") + '"><span class="cid">Chunk ' + (i + 1) + " · " + (c.b - c.a + 1) + L.words + "</span>" + html + "</div>";
+    }).join("");
+    var head = mode === "fixed" ? L.stride + " = " + sizeIn.value + " − " + ovIn.value + " = " + (sizeIn.value - ovIn.value) + " · " : "";
+    out.innerHTML = head + sp.length + " chunks" + L.sep + (found >= 0 ? L.whole.replace("{n}", found + 1) : L.cut);
+  }
+  sizeIn.addEventListener("input", render); ovIn.addEventListener("input", render);
+  modeBtns.forEach(function (b) { b.addEventListener("click", function () { mode = b.dataset.m; render(); }); });
+  preBtns.forEach(function (b) { b.addEventListener("click", function () { var v = b.dataset.p.split(","); mode = "fixed"; sizeIn.value = v[0]; ovIn.value = v[1]; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

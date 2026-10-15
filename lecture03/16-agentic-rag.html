@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="BM25 ने पुराने forum post को queue log से ऊपर रखा, और pipeline ने उसे बिना परखे prompt में भेज दिया। ढूँढना एक तय step की जगह हर कदम का फ़ैसला बने, और जो मिला उसे कोई परखे।">
+<title>Lesson 16: Agentic RAG</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 16 / 18 · <b>आसान</b> · <a href="16-agentic-rag-dense.html">गहरा</a> · <a href="16-agentic-rag-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 16 · आसान version</p>
+  <h1>Agentic RAG: ढूँढना एक फ़ैसला है</h1>
+  <p class="lede"><b>Agentic RAG में ढूँढना pipeline का तय step नहीं रहता। एक LLM हर कदम पर तय करता है कि ढूँढना है या नहीं, क्या ढूँढना है, और जो मिला वो काफ़ी अच्छा है या नहीं।</b> ऐसे LLM को agent कहते हैं, और ये lesson ये फ़ैसले लेने के दो तरीके दिखाता है: Self-RAG और CRAG।</p>
+  <p class="lede">इसकी ज़रूरत <a href="11-bm25.html#bm25">lesson 11</a> में दिखी थी। सवाल <q>which office hour is least crowded</q> पर BM25 ने पुराने forum post को 2.749 दिया, और queue log को 2.473। K = 1 पर prompt में सिर्फ़ forum post जाता है, और LLM लिखता है <q>midweek afternoons [P4]</q>, जहाँ [P4] उसी post का ID है। ये lesson 1 वाला गलत जवाब है, बस अब citation के साथ। उल्टी गलती भी होती है: <q>17 × 3 कितना है?</q> पर भी pipeline 60,000 passages में ढूँढती है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 5 पड़ाव हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#agent">Agent: action, observation और loop</a><span class="can">एक agent loop को कदम-दर-कदम पढ़ पाएँगे, और उसके scores हाथ से गिन पाएँगे।</span></li>
+      <li><a href="#decisions">तीन फ़ैसले, और pipeline कहाँ चूकती है</a><span class="can">हर फ़ैसले को एक सवाल से समझा पाएँगे, और agentic RAG वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#selfrag">Self-RAG: फ़ैसले tokens में</a><span class="can">Reflection tokens से हिस्सों का क्रम निकाल पाएँगे, और Self-RAG वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#crag">CRAG: अलग evaluator और दो thresholds</a><span class="can">Confidence से CRAG का action बता पाएँगे, और CRAG वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#compare">Self-RAG और CRAG साथ-साथ, और उनकी हद</a><span class="can">बता पाएँगे कि कौन सा फ़ैसला कौन लेता है, और lesson 17 की ज़रूरत क्यों है।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="01-how-llms-answer.html#next-token">Lesson 1</a> (next-token prediction, vocabulary), <a href="06-rag-pipeline.html#pre">Lesson 6</a> (pipeline, query rewriting, ITER-RETGEN) और <a href="14-hybrid-rerank.html#rerank">Lesson 14</a> (reranker)। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="agent">
+  <h3><span class="cn">1</span>Agent: action, observation और loop</h3>
+
+  <p><b>Agent एक LLM है, जो loop में काम करता है। वो अगला काम चुनता है, वो काम होता है, और फिर वो नतीजा पढ़कर अगला काम चुनता है।</b> Agent का चुना काम <b class="term">action</b> कहलाता है, जैसे search करना या जवाब लिखना। Action को असल में एक program करता है, जैसे search engine, और उसे <b class="term">tool</b> कहते हैं। Tool जो नतीजा लौटाता है, और agent जिसे अगले कदम से पहले पढ़ता है, उसे <b class="term">observation</b> कहते हैं।</p>
+
+  <p>Loop की ज़रूरत <a href="06-rag-pipeline.html#modular">lesson 6</a> में दिखी थी। वहाँ <button class="def" data-w="w-iterretgen">ITER-RETGEN</button> दो बार ढूँढता था, और ये गिनती इंसान ने पहले से लिख दी थी। लेकिन Jed Hoyer वाले <button class="def" data-w="w-multihop">multi-hop</button> सवाल पर model ने तीन searches कीं, और 17 × 3 को एक भी नहीं चाहिए। कोई तय गिनती दोनों पर सही नहीं बैठती, इसलिए गिनती वही तय करे, जो हर search का नतीजा पढ़ रहा है।</p>
+
+  <p>अब एक छोटा loop देखिए। User छोटे रूप में पूछता है <q>OH timings?</q> Retriever lesson 6 वाला word overlap है, जो गिनता है कि query के कितने शब्द passage में भी हैं। <span class="mine">ये loop मेरा example है</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>कदम</th><th>Agent का action</th><th>Observation</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Search: <q>OH timings</q></td><td>हर passage का score 0</td></tr>
+      <tr><td>2</td><td>Search: <q>CS 329Z office hours schedule</q></td><td>Office hours page पर 2, queue log पर 1</td></tr>
+      <tr class="hi"><td>3</td><td>जवाब: <q>Tuesday 4pm, Room 104, or Thursday 9am, Zoom [P2]</q></td><td>Loop ख़त्म</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>पहली query के शब्द oh और timings किसी passage में नहीं हैं। दूसरी query के office और hours, दोनों office hours page में हैं, इसलिए उसका score 2 है। Queue log में office है, लेकिन hours की जगह hour लिखा है, इसलिए उसका score 1 है। जवाब का [P2] office hours page का ID है।</p>
+
+  <p>दूसरा कदम पहले कदम के observation से निकला: कुछ नहीं मिला, इसलिए agent ने query दोबारा लिखी। ये lesson 6 वाली <button class="def" data-w="w-rewriting">query rewriting</button> है। Lesson 6 की Advanced RAG pipeline हर query को rewrite करती है, और इसमें हर query पर एक extra LLM call लगती है। Agent के हर कदम पर भी एक LLM call लगती है, लेकिन rewrite वाला कदम यहाँ तभी आया, जब search खाली लौटी।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>मान लीजिए user ने पहली बार में ही <q>office hour timings</q> लिखा। Observation में किसका score कितना होगा, और क्या agent को query दोबारा लिखनी पड़ेगी?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Queue log में office और hour, दोनों हैं, इसलिए उसका score 2 है। Office hours page में सिर्फ़ office है, इसलिए 1। Search खाली नहीं लौटी, तो query बदलने की वजह नहीं। लेकिन queue log में समय है, जगह नहीं, इसलिए agent को अब ये तय करना है कि जो मिला वो काफ़ी है या नहीं। ये अगले पड़ाव का तीसरा फ़ैसला है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="decisions">
+  <h3><span class="cn">2</span>तीन फ़ैसले, और pipeline कहाँ चूकती है</h3>
+
+  <p><b>ढूँढने वाले agent के सामने हर कदम पर तीन फ़ैसले आते हैं।</b> पहला, ढूँढें या सीधे जवाब दें। दूसरा, कौन सी query भेजें। तीसरा, जो मिला वो काफ़ी अच्छा है या नहीं। पड़ाव 1 के loop में तीनों दिखे: agent ने ढूँढना चुना, फिर नई query लिखी, और फिर नतीजे को काफ़ी मानकर जवाब लिखा।</p>
+
+  <p>Pipeline ये फ़ैसले नहीं लेती, वो हर सवाल पर वही steps चलाती है। नीचे हर फ़ैसले के लिए एक सवाल है, जिस पर pipeline चूकती है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>फ़ैसला</th><th>सवाल</th><th>Pipeline क्या करती है</th><th>Agent क्या कर सकता है</th></tr></thead>
+    <tbody>
+      <tr><td>1. ढूँढें?</td><td><q>17 × 3 कितना है?</q></td><td>60,000 passages में ढूँढती है<span class="sub">और करीब 2,500 tokens prompt में डालती है</span></td><td>0 searches, सीधा जवाब: 51</td></tr>
+      <tr><td>2. कौन सी query?</td><td><q>OH timings?</q></td><td>वही query भेजती है, 0 passages पाती है</td><td>Search खाली आई, तो query बदलता है</td></tr>
+      <tr class="hi"><td>3. काफ़ी अच्छा?</td><td>Least crowded, K = 1</td><td>अकेला forum post भेजती है</td><td>Post 2024 की राय है, तो दोबारा ढूँढता है</td></tr>
+    </tbody>
+  </table></div>
+
+  <p><b>RAG में ढूँढना जब agent का action बन जाए, और ये तीनों फ़ैसले हर कदम पर हों, तो उसे <span class="term">agentic RAG</span> कहते हैं।</b> Stanford की slide यही कहती है:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p56.png"><img src="img/slide-p56.png" alt="Stanford slide: Agentic RAG, loop के अंदर retrieval, और तीन फ़ैसले" loading="lazy"></a>
+    <figcaption>Stanford की slide: loop के अंदर retrieval। ऊपर लिखा है कि अब तक की कोई चीज़ तय नहीं करती कि ढूँढना है या नहीं, क्या पूछना है, और कब रुकना है। नीचे वही तीन फ़ैसले हैं। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>ऊपर का <q>when to stop</q> और नीचे का तीसरा फ़ैसला एक ही बात है। नतीजा काफ़ी अच्छा है, तो agent रुककर जवाब लिखता है, और नहीं है, तो फिर से ढूँढता है।</p>
+
+  <p>अब सवाल ये है कि ये फ़ैसले कौन ले। ये lesson दो जवाब देता है। Self-RAG में जवाब लिखने वाला model खुद फ़ैसले लेता है, और CRAG में एक अलग, छोटा model नतीजा परखता है।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="selfrag">
+  <h3><span class="cn">3</span>Self-RAG: फ़ैसले tokens में</h3>
+
+  <p>सबसे सीधा तरीका ये है कि वही LLM फ़ैसले ले, जो जवाब लिख रहा है, क्योंकि वो सवाल और passages, दोनों पढ़ रहा है। दिक्कत ये है कि LLM सिर्फ़ <button class="def" data-w="w-ntp">अगला token</button> लिखता है, और अलग से कोई फ़ैसला नहीं सुनाता।</p>
+
+  <p><b>Self-RAG इसका हल ये निकालता है कि फ़ैसले भी tokens बन जाएँ।</b> वो model की <button class="def" data-w="w-vocabulary">vocabulary</button> में कुछ खास tokens जोड़ता है, जिन्हें <b class="term">reflection tokens</b> कहते हैं। Model की खास training होती है, और फिर वो इन्हें बाकी text की तरह लिखता है। Self-RAG Asai और साथियों का 2024 का तरीका है, और इसके मुख्य tokens ये हैं:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th>मतलब</th><th>फ़ैसला</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td>अभी ढूँढना है</td><td>फ़ैसला 1</td></tr>
+      <tr><td>Relevant / Irrelevant</td><td>मिला हुआ passage सवाल के काम का है या नहीं</td><td>फ़ैसला 3</td></tr>
+      <tr><td>Supported / Partially</td><td>Model का लिखा हिस्सा passage से पूरा साबित होता है, या आधा</td><td>फ़ैसला 3 की दूसरी जाँच</td></tr>
+    </tbody>
+  </table></div>
+  <p>Paper में कुछ और tokens भी हैं, जैसे No support। एक चौथी किस्म पूरे जवाब को 1 से 5 तक का score देती है, और वो गहरे version में है।</p>
+
+  <p>अब हमारा सवाल लीजिए: <q>Which office hour this week is least crowded?</q> मान लीजिए model ने Retrieve लिखा, और retriever queue log, पुराना forum post और Homework 1 की announcement लाया। Model हर passage के साथ अलग से अगला हिस्सा लिखता है, और हर हिस्से के साथ reflection tokens भी। <span class="mine">ये example और tokens मेरे हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>Reflection tokens</th><th>Model का लिखा हिस्सा</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td>Relevant, Supported</td><td><q>Thursday 9am, about 3 waiting.</q></td></tr>
+      <tr><td>पुराना forum post</td><td>Relevant, Partially</td><td><q>Wednesday afternoon is quietest.</q></td></tr>
+      <tr class="hi"><td>Homework 1 की announcement</td><td>?</td><td><q>Homework 1 will be released on Oct 5.</q></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Forum post वाला हिस्सा Partially है, क्योंकि post में midweek लिखा है, Wednesday नहीं, और साथ में usually भी। यानी Wednesday वाली बात passage में आधी ही है। Queue log वाली बात queue log में पूरी लिखी है, इसलिए वो हिस्सा Supported है।</p>
+
+  <div class="recall">
+    <p class="rl">तीसरी row आप निकालिए</p>
+    <p>Homework वाले हिस्से पर कौन सा token लगेगा? तीनों हिस्सों का क्रम क्या होगा, और जवाब में कौन सा हिस्सा जुड़ेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p><b>Irrelevant</b>। Homework की तारीख सच है, और announcement से साबित भी होती है, लेकिन सवाल office hours की भीड़ का है। क्रम है: queue log, फिर forum post, फिर Homework। Queue log वाला हिस्सा Relevant और Supported है, इसलिए जवाब में वही जुड़ता है: Thursday 9am।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>तो Self-RAG हर हिस्से को दो बातों पर परखता है: बात सवाल के काम की है या नहीं, और passage से साबित है या नहीं।</b> Stanford की slide पर paper का अपना example है, और अब आप उसे पढ़ सकते हैं:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p57.png"><img src="img/slide-p57.png" alt="Stanford slide: Self-RAG के तीन steps, US states वाले example पर" loading="lazy"></a>
+    <figcaption>Stanford की slide: Self-RAG के तीन steps। हरे box अच्छे tokens हैं, नारंगी box Partially है, और लाल box Irrelevant।</figcaption>
+  </figure>
+
+  <p>Step 1 में model पहला sentence लिखता है, फिर Retrieve, और तीन passages आते हैं। Step 2 में वो हर passage के साथ एक हिस्सा लिखता है, और step 3 में tokens से क्रम बनता है: 1 &gt; 3 &gt; 2। Texas वाली बात सच है, लेकिन उसका passage Irrelevant है, इसलिए वो सबसे नीचे है। फिर model दोबारा Retrieve लिखता है, और यही दोहराता है।</p>
+
+  <p>Self-RAG की कीमत भी है। Generator की खास training चाहिए, इसलिए API से लिया <button class="def" data-w="w-frozen">frozen LLM</button> यहाँ नहीं चलता। हर passage के साथ अलग हिस्सा लिखना पड़ता है, यानी lesson 5 के <button class="def" data-w="w-ragseq">RAG-Sequence</button> की तरह K बार generation। और Supported सिर्फ़ इतना कहता है कि बात passage में है। वो ये नहीं कहता कि passage अब भी सच है।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="crag">
+  <h3><span class="cn">4</span>CRAG: अलग evaluator और दो thresholds</h3>
+
+  <p>ज़्यादातर systems frozen LLM पर बनते हैं, इसलिए फ़ैसला 3 generator के बाहर कोई और ले। पहला idea <a href="14-hybrid-rerank.html#rerank">lesson 14</a> का <button class="def" data-w="w-rerank">reranker</button> है। लेकिन reranker सिर्फ़ क्रम बदलता है। मान लीजिए retriever सिर्फ़ Homework 1 की announcement और project page लाया, जो भीड़ वाले सवाल के लिए बेकार हैं। Reranker तब भी एक को ऊपर रखेगा, और वो prompt में जाएगा। <span class="mine">मेरा example</span></p>
+
+  <p><b>CRAG में एक हल्का model हर document को एक confidence देता है: ये document इस सवाल के लिए कितना सही है।</b> इस model को <b class="term">retrieval evaluator</b> कहते हैं। CRAG का पूरा नाम Corrective RAG है, और ये Yan और साथियों का 2024 का तरीका है। Confidence का अपना मतलब है, इसलिए उस पर एक पहले से तय limit रख सकते हैं, जिसे <b class="term">threshold</b> कहते हैं।</p>
+
+  <p>CRAG दो thresholds रखता है, ऊपर वाला और नीचे वाला। यहाँ confidence 0 से 1 के बीच है, और thresholds 0.6 और 0.2 हैं। <span class="mine">ये scale और numbers मेरे रखे हैं</span> Paper के अपने numbers गहरे version में हैं। पहले वो case लीजिए, जिसमें retriever एक ही document लाया, यानी K = 1:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>अकेला document</th><th class="numh">Confidence</th><th>फ़ैसला</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.85</td><td>Correct<span class="sub">0.6 से ऊपर</span></td></tr>
+      <tr class="hi"><td>पुराना forum post</td><td class="num">0.4</td><td>Ambiguous<span class="sub">0.2 और 0.6 के बीच</span></td></tr>
+      <tr><td>Homework 1 की announcement</td><td class="num">0.05</td><td>Incorrect<span class="sub">0.2 से नीचे</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>कई documents हों, तो एक भी document 0.6 से ऊपर होने पर फ़ैसला Correct है, और Incorrect के लिए सारे 0.2 से नीचे होने चाहिए। Reranker वाले example में Homework 0.05 पर है और project page 0.1 पर, इसलिए फ़ैसला Incorrect है। <span class="mine">project page का 0.1 मेरा</span> हर फ़ैसले पर CRAG अलग action चलाता है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>फ़ैसला</th><th>Action</th><th>Generator को क्या मिलता है</th></tr></thead>
+    <tbody>
+      <tr><td><b>Correct</b></td><td>Knowledge refinement: documents को strips में तोड़िए, बेकार strips हटाइए, बाकी जोड़िए</td><td>सवाल + साफ़ किए documents</td></tr>
+      <tr><td><b>Incorrect</b></td><td>Documents छोड़िए, query दोबारा लिखिए, web search कीजिए</td><td>सवाल + web का नतीजा</td></tr>
+      <tr><td><b>Ambiguous</b></td><td>दोनों</td><td>सवाल + साफ़ किए documents + web का नतीजा</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="widget" id="cw">
+    <h4>CRAG का फ़ैसला, K = 1 पर</h4>
+    <p class="hint">Retriever एक document लाया है। Evaluator का confidence बदलिए, और देखिए कि CRAG क्या करता है। Thresholds 0.6 और 0.2 हैं। <span class="mine">thresholds और तीनों confidence मेरे रखे हैं</span></p>
+    <div class="btns">
+      <button type="button" data-v="0.85">Queue log</button>
+      <button type="button" data-v="0.4">पुराना forum post</button>
+      <button type="button" data-v="0.05">Homework 1 की announcement</button>
+    </div>
+    <div class="ctl"><label for="cw-s">Evaluator का confidence</label><input id="cw-s" type="range" min="0" max="1" step="0.05" value="0.85"><output id="cw-so">0.85</output></div>
+    <div class="tscroll"><table class="t"><tbody id="cw-body"></tbody></table></div>
+  </div>
+
+  <p>Correct वाले रास्ते पर भी document पूरा नहीं जाता। CRAG उसे छोटे टुकड़ों में तोड़ता है, जिन्हें strips कहते हैं। फिर वो हर strip को evaluator से परखता है, और बेकार strips हटाकर बाकी को क्रम से जोड़ता है। इसे <b class="term">knowledge refinement</b> कहते हैं। सवाल <q>When is the milestone due?</q> पर syllabus के तीन sentences तीन strips बनते हैं: <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Syllabus की strip</th><th>रखें?</th></tr></thead>
+    <tbody>
+      <tr><td><q>The project milestone is due Week 6, Thursday 11:59pm.</q></td><td>हाँ, यही जवाब है</td></tr>
+      <tr><td><q>Late days may not be applied to the milestone.</q></td><td>हाँ, milestone की deadline से जुड़ी है</td></tr>
+      <tr class="hi"><td><q>The final report is due Week 10.</q></td><td>नहीं, ये final report की बात है</td></tr>
+    </tbody>
+  </table></div>
+  <p>Generator को 3 में से 2 strips मिलती हैं। Week 10 वाली line prompt में नहीं जाती, इसलिए generator उसे milestone की तारीख नहीं समझ सकता।</p>
+
+  <p>Incorrect वाले रास्ते पर CRAG अपने documents छोड़ देता है। एक LLM सवाल को search engine के लायक keywords में दोबारा लिखता है, और CRAG web पर ढूँढता है। Slide पर सवाल <q>Who was the screenwriter for Death of a Batman?</q> है, और नई query के तीन टुकड़े हैं: Death of a Batman, screenwriter और Wikipedia।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p58.png"><img src="img/slide-p58.png" alt="Stanford slide: CRAG, evaluator के तीन फ़ैसले और उनके actions" loading="lazy"></a>
+    <figcaption>Stanford की slide: CRAG। Correct पर Knowledge Refinement चलता है, Incorrect पर Knowledge Searching, और Ambiguous पर दोनों। सबसे नीचे की line दिखाती है कि हर फ़ैसले पर generator को क्या मिलता है।</figcaption>
+  </figure>
+
+  <p class="callout"><b>ध्यान दीजिए:</b> Web से आया हर text भरोसे लायक नहीं होता। उसमें गलत बातें हो सकती हैं, या agent को भटकाने वाली instructions भी, जो <a href="18-failure-modes.html">lesson 18</a> में आती हैं। इसीलिए slide पर web search के बाद भी एक Select step है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>K = 1 पर अकेला forum post आया, और evaluator ने उसे 0.4 दिया। CRAG क्या करेगा, और generator को क्या मिलेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>0.4, 0.2 और 0.6 के बीच है, इसलिए फ़ैसला <b>Ambiguous</b> है। CRAG forum post को refine करके रखेगा, और query दोबारा लिखकर web search भी करेगा। Generator को सवाल, forum post का साफ़ हिस्सा और web का नतीजा, तीनों मिलेंगे।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="compare">
+  <h3><span class="cn">5</span>Self-RAG और CRAG साथ-साथ, और उनकी हद</h3>
+
+  <p>अब शुरू के दोनों सवालों पर लौटिए। 17 × 3 पर ठीक से train हुआ Self-RAG Retrieve नहीं लिखता, और सीधे 51 लिखता है। Paper के example में भी essay वाले prompt पर model नहीं ढूँढता। <span class="mine">paper से</span> CRAG यहाँ भी ढूँढेगा, क्योंकि वो हर सवाल पर ढूँढता है, और सिर्फ़ नतीजा परखता है।</p>
+
+  <p>K = 1 पर अकेला forum post आए, तो Self-RAG का Wednesday वाला हिस्सा Partially है, और model दोबारा Retrieve लिख सकता है। CRAG का evaluator forum post को 0.4 देता है, इसलिए वो web पर भी ढूँढता है। <b>दोनों में से कोई अब forum post को बिना परखे आगे नहीं भेजता।</b></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>Self-RAG</th><th>CRAG</th></tr></thead>
+    <tbody>
+      <tr><td><b>फ़ैसला कौन लेता है</b></td><td>Generator खुद, reflection tokens से</td><td>अलग evaluator, दो thresholds से</td></tr>
+      <tr><td><b>Generator बदलना पड़ता है?</b></td><td>हाँ, खास training</td><td>नहीं, कोई भी LLM</td></tr>
+      <tr><td><b>फ़ैसला 1: ढूँढें?</b></td><td>Retrieve token से</td><td>हमेशा ढूँढता है</td></tr>
+      <tr><td><b>फ़ैसला 2: कौन सी query?</b></td><td>अलग से query नहीं लिखता<span class="sub">paper से</span></td><td>Web के लिए query दोबारा लिखता है</td></tr>
+      <tr><td><b>फ़ैसला 3: काफ़ी अच्छा?</b></td><td>Relevant और Supported tokens से</td><td>Evaluator के confidence से</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>दोनों की हद भी है। CRAG के thresholds इंसान रखता है, और evaluator भी गलती कर सकता है। Self-RAG के reflection tokens भी model ही लिखता है, इसलिए वो भी गलत हो सकते हैं। और दोनों में से किसी ने ये फ़ैसले खुद कोशिश करके नहीं सीखे।</p>
+
+  <p><a href="17-search-r1.html">Lesson 17</a> में model ये फ़ैसले कोशिश करके और नतीजा देखकर सीखता है: कब ढूँढना है, कौन सी query लिखनी है, और कब रुकना है। Loop में एक गलत फ़ैसला अगले कदमों पर असर डालता है, और ये बात <a href="18-failure-modes.html">lesson 18</a> में आती है।</p>
+
+  <div class="deeper">
+    <h2>गहरे version में और क्या है</h2>
+    <p>गहरे version में ये पूरा lesson है, और उसके बाद 4 पड़ाव और, जो Stanford की slides के level तक ले जाते हैं:</p>
+    <ul class="plain">
+      <li>पड़ाव 6: Self-RAG के चारों तरह के tokens, उनकी probabilities, Retrieve का threshold δ, और हर हिस्से का वज़न वाला score।</li>
+      <li>पड़ाव 7: Self-RAG की training और paper के नतीजे, points में पढ़े हुए।</li>
+      <li>पड़ाव 8: CRAG का असली evaluator, −1 से 1 वाला scale, paper के thresholds, documents के set पर फ़ैसले, और नतीजे।</li>
+      <li>पड़ाव 9: Stanford की तीनों agentic RAG slides, जिन्हें आप खुद पढ़ते हैं।</li>
+    </ul>
+    <p><a href="16-agentic-rag-dense.html">गहरा version खोलिए</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Agent loop में action लेता है, observation पढ़ता है, और अगला action तय करता है। Agentic RAG में ढूँढना ऐसा ही एक action है।</li>
+    <li>हर कदम पर तीन फ़ैसले हैं: ढूँढें या नहीं, कौन सी query भेजें, और नतीजा काफ़ी अच्छा है या नहीं। Pipeline ये फ़ैसले नहीं लेती।</li>
+    <li>Self-RAG ये फ़ैसले generator के अंदर reflection tokens से लेता है। CRAG एक अलग evaluator और दो thresholds से नतीजा परखता है, और गलत retrieval पर web search करता है।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-agent">Agent</dt><dd>Loop में काम करने वाला LLM, जो action चुनता है, observation पढ़ता है, और अगला action तय करता है। जैसे <q>OH timings</q> की search खाली आई, तो agent ने नई query लिखी।</dd>
+    <dt id="w-action">Action और tool</dt><dd>Agent का चुना काम, जैसे <q>OH timings</q> search करना। Tool वो program है, जो ये काम करता है, जैसे search engine।</dd>
+    <dt id="w-observation">Observation</dt><dd>Action का नतीजा, जो agent अगले कदम से पहले पढ़ता है। जैसे पहली search का नतीजा: हर passage का score 0।</dd>
+    <dt id="w-agentic">Agentic RAG</dt><dd>RAG, जिसमें ढूँढना agent का action है, pipeline का तय step नहीं। जैसे 17 × 3 पर 0 searches, और Jed Hoyer वाले सवाल पर 3।</dd>
+    <dt id="w-selfrag">Self-RAG</dt><dd>Generator खुद reflection tokens लिखकर तय करता है कि कब ढूँढना है, और कौन सा हिस्सा रखना है। जैसे forum post वाले हिस्से पर Relevant और Partially।</dd>
+    <dt id="w-reflection">Reflection tokens</dt><dd>Vocabulary में जोड़े गए खास tokens, जिन्हें model बाकी text की तरह लिखता है। जैसे Retrieve, Relevant या Irrelevant, और Supported या Partially।</dd>
+    <dt id="w-crag">CRAG</dt><dd>Corrective RAG: एक evaluator retrieval को Correct, Incorrect या Ambiguous कहता है, और उसी हिसाब से refinement, web search या दोनों चलते हैं। जैसे 0.4 वाला forum post Ambiguous है।</dd>
+    <dt id="w-evaluator">Retrieval evaluator</dt><dd>सवाल और एक document पढ़कर confidence देने वाला हल्का model। जैसे K = 1 पर forum post को 0.4।</dd>
+    <dt id="w-refine">Knowledge refinement</dt><dd>Documents को strips में तोड़ना, बेकार strips हटाना, और बाकी को क्रम से जोड़ना। जैसे milestone वाले सवाल पर syllabus की 3 में से 2 strips रहती हैं।</dd>
+    <dt id="w-threshold">Threshold</dt><dd>पहले से तय limit, जिसके ऊपर या नीचे होने पर अलग action चलता है। जैसे CRAG में 0.6 से ऊपर Correct, और 0.2 से नीचे Incorrect।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="15-colbert.html">पिछला: Lesson 15</a>
+    <a href="17-search-r1.html">अगला: Lesson 17, Search-R1</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Papers: Asai et al., 2024, “Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection”, और Yan et al., 2024, “Corrective Retrieval Augmented Generation”। “मेरा” और “मेरे” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var s = document.getElementById("cw-s"), so = document.getElementById("cw-so"), body = document.getElementById("cw-body");
+  var btns = document.querySelectorAll("#cw .btns button");
+  function render() {
+    var v = Number(s.value);
+    so.textContent = v.toFixed(2);
+    var verdict, why, action, gets;
+    if (v > 0.6) { verdict = "Correct"; why = "0.6 से ऊपर"; action = "Knowledge refinement: strips में तोड़िए, बेकार strips हटाइए"; gets = "सवाल + साफ़ किया document"; }
+    else if (v < 0.2) { verdict = "Incorrect"; why = "0.2 से नीचे"; action = "Document छोड़िए, query दोबारा लिखिए, web search कीजिए"; gets = "सवाल + web का नतीजा"; }
+    else { verdict = "Ambiguous"; why = "0.2 और 0.6 के बीच"; action = "दोनों: refinement और web search"; gets = "सवाल + साफ़ किया document + web का नतीजा"; }
+    body.innerHTML = "<tr><td><b>फ़ैसला</b></td><td><b>" + verdict + "</b>, क्योंकि " + v.toFixed(2) + " " + why + " है</td></tr><tr><td><b>Action</b></td><td>" + action + "</td></tr><tr><td><b>Generator को</b></td><td>" + gets + "</td></tr>";
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", Number(b.dataset.v) === v ? "true" : "false"); });
+  }
+  s.addEventListener("input", render);
+  btns.forEach(function (b) { b.addEventListener("click", function () { s.value = b.dataset.v; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

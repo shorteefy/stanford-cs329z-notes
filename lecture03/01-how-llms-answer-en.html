@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="Asked about office hours, an LLM on its own confidently answered Wednesday without ever seeing the queue log. This lesson shows how an LLM builds an answer token by token, and where it gets stuck when the data is missing.">
+<title>Lesson 1: How an LLM writes</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index-en.html">Lecture 3: RAG + Agents · All lessons</a>
+  <span class="switch">Lesson 1 / 18 · <b>Easy</b> · <a href="01-how-llms-answer-dense-en.html">Dense</a> · <a href="01-how-llms-answer.html">हिन्दी</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 1 · Easy version</p>
+  <h1>How an LLM writes an answer, and where it gets stuck</h1>
+  <p class="lede"><b>An LLM is a model that reads text and writes the text that comes next, one token at a time. It picks each next token by looking at probabilities, and those probabilities come from its parameters and from the text you give it.</b></p>
+  <p class="lede">The lecture opens with a question: <q>Which office hour this week is least crowded?</q> The course's TAs, senior students who help with teaching, hold office hours twice a week: Tuesday 4pm and Thursday 9am. Office hours are fixed times when any student can drop in and ask questions. Ask an LLM on its own, and it answers with confidence: <q>Try the Wednesday afternoon session - midweek hours are usually quietest.</q></p>
+  <p class="lede">The course keeps a queue log, a record of how many students were waiting in line at each office hour. Over the last 3 weeks, Tuesday 4pm averaged 14 students and Thursday 9am only 3. So the right answer is Thursday 9am, and there is no office hour on Wednesday at all. The LLM never saw this log, yet it did not hesitate for a moment. This lesson explains why.</p>
+
+  <div class="goals ladder">
+    <h2>The ladder for this lesson</h2>
+    <p class="can">The ladder has 5 steps. Under each step you can see what you will be able to do after it.</p>
+    <ol>
+      <li><a href="#token">Tokens: the model reads pieces of text</a><span class="can">Explain how 6 words can become 7 tokens.</span></li>
+      <li><a href="#next-token">Next-token prediction: one token per step</a><span class="can">Build an answer token by token in the widget.</span></li>
+      <li><a href="#parameters">Parameters and training</a><span class="can">Explain why the queue log is not inside the model.</span></li>
+      <li><a href="#prompt">The prompt and the context window</a><span class="can">Work out how many passages fit in a prompt.</span></li>
+      <li><a href="#hallucination">Hallucination: a confident answer without data</a><span class="can">Explain the Wednesday answer, and read Stanford's first slide.</span></li>
+    </ol>
+  </div>
+  <p class="pre">What you need first: nothing, school maths is enough. If you already know a step, skip to the next one.</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="token">
+  <h3><span class="cn">1</span>Tokens: the model reads pieces of text</h3>
+
+  <p><b>A token is a small piece of text: sometimes a whole word, sometimes part of a word, sometimes a punctuation mark. An LLM reads text by splitting it into tokens, and it writes its answer in tokens too.</b></p>
+
+  <p>Tokens are needed because a computer can only calculate with numbers. The model has a fixed list of tokens, and each token in it has an ID number. This list is called the <b class="term">vocabulary</b>, and the program that splits text into its tokens is called the <b class="term">tokenizer</b>.</p>
+
+  <p>A common word is often a single token, while a rarer word breaks into a few pieces. For example, <q>Office hours are crowded on Tuesday</q> has 6 words but 7 tokens: <span class="mine">my split</span></p>
+  <div class="tokens"><span class="tok">Office</span><span class="tok"> hours</span><span class="tok"> are</span><span class="tok"> crowd</span><span class="tok">ed</span><span class="tok"> on</span><span class="tok"> Tuesday</span></div>
+
+  <p>Here crowded broke into two tokens, crowd and ed. In the same way, if the vocabulary has no entry for a misspelling like Wednesdayy, the tokenizer still splits it into Wednesday and y. The real split depends on each model's own tokenizer.</p>
+
+  <p>Since the model reads and writes only tokens, this lecture measures every length in tokens, not in words.</p>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="next-token">
+  <h3><span class="cn">2</span>Next-token prediction: one token per step</h3>
+
+  <p><b>While writing an answer, an LLM gives every token a probability at each step, then picks one token and adds it to the text.</b> Then it repeats the same thing on the new text. This loop is called <b class="term">next-token prediction</b>, and the whole answer comes out of it.</p>
+
+  <p>A <b class="term">probability</b> is a number between 0 and 1 that gives the chance of something happening: 0 means never, and 1 means certain. For example, if 5 of the last 20 lectures had a quiz, the probability of a quiz in the next one is 5 ÷ 20 = 0.25. The probability of no quiz is 15 ÷ 20 = 0.75, and the probabilities of all the options always add up to 1.</p>
+
+  <p>Now the model is given this text: <q>The least crowded office hour this week is</q>. Its probabilities for the next token might look like this: <span class="mine">my numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Next token</th><th class="numh">Probability</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">" Wednesday"</td><td class="num">0.34</td></tr>
+      <tr><td class="mono">" Thursday"</td><td class="num">0.21</td></tr>
+      <tr><td class="mono">" Tuesday"</td><td class="num">0.18</td></tr>
+      <tr><td class="mono">" Friday"</td><td class="num">0.15</td></tr>
+      <tr class="hi"><td class="mono">" Monday"</td><td class="num">?</td></tr>
+      <tr class="total"><td>Sum</td><td class="num">1.00</td></tr>
+    </tbody>
+  </table></div>
+  <p>In reality, the thousands of other tokens also get very small probabilities. To keep the arithmetic small, assume there are only these 5 tokens.</p>
+
+  <div class="recall">
+    <p class="rl">Work out the Monday row</p>
+    <p>The five probabilities must add up to 1. What is Monday's probability?</p>
+    <details><summary>Show the answer</summary>
+      <p>The other four add up to 0.34 + 0.21 + 0.18 + 0.15 = 0.88. So Monday = 1 − 0.88 = <b>0.12</b>.</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Now suppose the model always takes the token with the highest probability. At the first step it takes Wednesday, and then it looks at the probabilities for the token after that. Press “Pick the highest” three times in the widget below. <span class="mine">the later steps use my numbers too</span></p>
+
+  <div class="widget" id="ntp">
+    <h4>Build an answer yourself</h4>
+    <p class="hint">Click any token, or press “Pick the highest” three times.</p>
+    <div class="sentence" id="ntp-text"></div>
+    <div class="bars" id="ntp-bars"></div>
+    <div class="btns" style="margin-top:12px">
+      <button type="button" id="ntp-greedy">Pick the highest</button>
+      <button type="button" id="ntp-reset">Start over</button>
+    </div>
+    <p class="out" id="ntp-out"></p>
+  </div>
+
+  <p>After three steps the model writes what it wrote at the start of the lesson: Wednesday afternoon. At no step did it look at the queue log. Wednesday got 0.34 because people often write things like “midweek is quiet”. <b>So a probability tells you which token is common after this text, not which one is true.</b></p>
+
+  <p class="note">Real models often choose at random according to the probabilities. Then the 0.34 token comes up about 34% of the time, and the same question can get different answers.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>In the widget you chose Thursday, morning and the full stop, the tokens at 0.21, 0.31 and 0.71. According to the queue log, Thursday 9am really is the least crowded. Did the model know the answer this time?</p>
+    <details><summary>Show the answer</summary>
+      <p><b>No.</b> The answer came out right by luck. The model never saw the log, and it gave Thursday a lower probability than Wednesday.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="parameters">
+  <h3><span class="cn">3</span>Parameters and training: where the model's knowledge lives</h3>
+
+  <p><b>Parameters are the numbers inside a model. The input tokens are combined with these numbers by a fixed calculation, and that calculation produces the probability of every next token.</b> Another name for parameters is weights, and there are a great many of them. The T5-11B model on Stanford's slides, for example, has about 11 billion parameters. <span class="mine">from the paper</span></p>
+
+  <p>The values of these parameters are set by <b class="term">training</b>. At first the parameters are random. Then the model reads a large amount of text, and at every position training checks what probability the model gave to the real next token. Then it nudges the parameters a little so that this probability goes up.</p>
+
+  <p>Here is one step. The training text contains the line <q>Office hours are on Thursday.</q> After reading <q>Office hours are on</q>, the model gives the next token Thursday a probability of 0.10. Training changes the parameters slightly, and now the same text gives Thursday 0.12. <span class="mine">my example</span> The total stays at 1, so all the other tokens together dropped from 0.90 to 0.88.</p>
+
+  <p>So whatever the model “knows” is spread across the values of its parameters, not stored in a separate file or database. Knowledge held this way is called <b class="term">parametric knowledge</b>. Training stops on some date, and after that the parameters do not change. That date is called the <b class="term">knowledge cutoff</b>.</p>
+
+  <p>The queue log is this course's own data, so it never went into any model's training. Its 14 and 3 are not in any parameter. This shows the two problems with parametric knowledge:</p>
+  <ul class="plain">
+    <li>New facts do not get in. To add something from after the knowledge cutoff, or your private data, the model has to be trained again.</li>
+    <li>The model cannot name a source. The knowledge is mixed into billions of numbers, so the model cannot tell which document a fact came from.</li>
+  </ul>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="prompt">
+  <h3><span class="cn">4</span>The prompt and the context window</h3>
+
+  <p><b>The prompt is the text you give the model right now: the question, instructions, and any document that comes with them.</b> At every step, next-token prediction looks at all the text so far, and that includes the prompt. So the prompt's text can change every probability, while the parameters stay the same.</p>
+
+  <p>Now put the queue log line in the prompt before the question, the line that says 14 for Tuesday 4pm and 3 for Thursday 9am.</p>
+
+  <p class="callout"><b>Think first:</b> The parameters are the same, and only the prompt changed. Will Thursday's 0.21 and Wednesday's 0.34 go up or down? Make a guess, then switch on the box below.</p>
+
+  <div class="widget" id="ctx">
+    <h4>Change the prompt, watch the probabilities</h4>
+    <p class="hint">The parameters stay the same. Only the prompt changes. <span class="mine">my numbers</span></p>
+    <label class="switch"><input type="checkbox" id="ctx-on"> Add the queue log line to the prompt</label>
+    <div class="sentence" id="ctx-text"></div>
+    <div class="bars" id="ctx-bars"></div>
+  </div>
+
+  <p>With the log added, Thursday's probability goes from 0.21 to 0.81, and Wednesday's from 0.34 to 0.05, while the parameters stay the same. <b>Put information that is not in the parameters into the prompt, and the model uses it.</b> The whole lecture is built on this.</p>
+
+  <p>The prompt has a limit too. The model can read only a fixed number of tokens at once, and this limit is called the <b class="term">context window</b>. Both the prompt and the answer the model writes count toward it. For example, if the window is 8,000 tokens and the prompt is 7,500, only 500 tokens are left for the answer.</p>
+
+  <p>All of a course's documents together can be far larger than this window. So for every question you have to choose which pieces go into the prompt, and lesson 2 starts from that choice.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>The context window is 8,000 tokens. The question and instructions take 300 tokens, and the answer needs 700. Each passage, a piece of a document, is 500 tokens. At most how many passages fit in the prompt?</p>
+    <details><summary>Show the answer</summary>
+      <p>That leaves 8,000 − 300 − 700 = 7,000 tokens for passages, and 7,000 ÷ 500 = <b>14 passages</b>.</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="hallucination">
+  <h3><span class="cn">5</span>Hallucination: a confident answer without data</h3>
+
+  <p><b>A hallucination is an answer that reads well and sounds confident, but is wrong or does not rest on any source.</b> The Wednesday afternoon answer is one, and its cause comes from putting the last three steps together.</p>
+
+  <p>The queue log was not in the parameters, because it never went into training (step 3). It was not in the prompt either (step 4). Even so, next-token prediction picks some token at every step, and the most common token was Wednesday (step 2).</p>
+
+  <p>Next-token prediction has no step that stops when the data is missing. So a wrong answer is written with the same confidence as a right one, and the reader cannot tell them apart.</p>
+
+  <figure class="slide">
+    <a href="img/slide-p10.png"><img src="img/slide-p10.png" alt="Stanford slide: Why Retrieval? The answer of an LLM alone and of an LLM with retrieval" loading="lazy"></a>
+    <figcaption>Stanford's Why Retrieval slide. On the left is the LLM alone, which wrote Wednesday. On the right the prompt holds the queue log line, and the answer is Thursday 9am. Click the image to open it at full size.</figcaption>
+  </figure>
+
+  <p>The right half of the slide shows retrieval, which means finding the right text when the question arrives and putting it into the prompt. There the answer's 3 comes straight from the log line, so a reader can check it. <a href="02-retrieval-en.html#retrieval">Lesson 2</a> starts from here.</p>
+
+  <div class="recall">
+    <p class="rl">Think first</p>
+    <p>Which prompt gives the lowest chance of a hallucination? (a) Only the question. (b) The question and the queue log. (c) The question and an old 2024 forum post that says <q>midweek afternoons are usually quiet</q>.</p>
+    <details><summary>Show the answer</summary>
+      <p><b>(b)</b>. With (c), the model may trust the old post and write Wednesday again, so wrong text in the prompt also does harm. This point comes back in lesson 2.</p>
+    </details>
+  </div>
+
+  <div class="deeper">
+    <h2>What the dense version adds</h2>
+    <p>The dense version contains this whole lesson, followed by 4 more steps that take you to the level of the Stanford slides:</p>
+    <ul class="plain">
+      <li>Step 6: the slide's notation p(y | x, z) and θ, the probability of a whole answer, and greedy decoding versus sampling.</li>
+      <li>Step 7: answers from parameters alone: four sizes of T5, SSM, Exact Match, and the comparison with RAG.</li>
+      <li>Step 8: the papers' experiments: measuring hallucination, and adding new knowledge by swapping the documents.</li>
+      <li>Step 9: Stanford's four slides, which you read yourself.</li>
+    </ul>
+    <p><a href="01-how-llms-answer-dense-en.html">Open the dense version</a></p>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>3 points from this lesson</h2>
+  <ol class="plain">
+    <li>An LLM writes one token at a time. At each step it gives every token a probability and picks one.</li>
+    <li>Its knowledge comes from two places: the parameters built by training, and the prompt given right now. The prompt's space is limited by the context window.</li>
+    <li>A probability says what is common, not what is true. So even without the data, the model writes a confident answer.</li>
+  </ol>
+
+  <h2 style="margin-top:28px">New terms in this lesson</h2>
+  <dl class="words">
+    <dt id="w-llm">LLM</dt><dd>Large language model: a model that reads text and writes what comes next, one token at a time. For example, the model that wrote Wednesday afternoon.</dd>
+    <dt id="w-token">Token</dt><dd>A small piece of text: a word, part of a word, or punctuation. The model reads and writes these. For example, crowded is two tokens, crowd and ed.</dd>
+    <dt id="w-vocabulary">Vocabulary</dt><dd>The model's fixed list of tokens, each with an ID number. For example, it contains Wednesday but not Wednesdayy.</dd>
+    <dt id="w-tokenizer">Tokenizer</dt><dd>The program that splits text into the vocabulary's tokens. For example, it splits Wednesdayy into Wednesday and y.</dd>
+    <dt id="w-probability">Probability</dt><dd>A number between 0 and 1 that gives the chance of something. The options always add up to 1. For example, a quiz in 5 of 20 lectures gives 5 ÷ 20 = 0.25.</dd>
+    <dt id="w-ntp">Next-token prediction</dt><dd>Looking at the text so far, giving every token a probability, picking one, adding it, and repeating. For example, Wednesday, then afternoon, then a full stop.</dd>
+    <dt id="w-parameters">Parameters (weights)</dt><dd>The numbers inside a model that produce the probability of every next token. For example, T5-11B has about 11 billion parameters.</dd>
+    <dt id="w-training">Training</dt><dd>Changing the parameters little by little so that the real next token in the text gets a higher probability. For example, Thursday after Office hours are on goes from 0.10 to 0.12.</dd>
+    <dt id="w-parametric">Parametric knowledge</dt><dd>Knowledge spread across the parameters. The model cannot name its source, and a new fact needs training again.</dd>
+    <dt id="w-cutoff">Knowledge cutoff</dt><dd>The date on which training stopped. Later events, and your private data, are not in the model. For example, with a March 2026 cutoff, an October 2026 announcement is not in the model.</dd>
+    <dt id="w-prompt">Prompt</dt><dd>The text you give the model right now: the question, instructions, and accompanying documents. For example, the queue log line that lifted Thursday from 0.21 to 0.81.</dd>
+    <dt id="w-context">Context window</dt><dd>The most tokens a model can read at once. Both the prompt and the answer count. For example, an 8,000-token window with a 7,500-token prompt leaves 500 for the answer.</dd>
+    <dt id="w-hallucination">Hallucination</dt><dd>A confident answer that is wrong or has no source. For example, Wednesday afternoon, written without seeing the log.</dd>
+  </dl>
+
+  <div class="pager">
+    <span class="muted">First lesson</span>
+    <a href="02-retrieval-en.html">Next: Lesson 2, Retrieval</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang. Paper: Lewis et al., 2020, “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”. Examples and numbers marked “my” belong to this lesson, not to the slides. Points marked “from the paper” are in the paper but not on the slides.
+</footer>
+</main>
+
+<script src="glossary-en.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  /* ---------- next-token widget ---------- */
+  var START = "The least crowded office hour this week is";
+  var DAYS = [[" Wednesday", 0.34], [" Thursday", 0.21], [" Tuesday", 0.18], [" Friday", 0.15], [" Monday", 0.12]];
+  var TIME = [[" afternoon", 0.46], [" morning", 0.31], [".", 0.23]];
+  var END1 = [[".", 0.71], [" session", 0.29]];
+  var END2 = [[".", 1.0]];
+
+  function nextDist(chosen) {
+    var n = chosen.length;
+    if (n === 0) return DAYS;
+    var last = chosen[n - 1];
+    if (last === ".") return null;
+    if (n === 1) return TIME;
+    if (last === " session") return END2;
+    return END1;
+  }
+
+  var chosen = [];
+  var textEl = document.getElementById("ntp-text");
+  var barsEl = document.getElementById("ntp-bars");
+  var outEl = document.getElementById("ntp-out");
+  var greedyBtn = document.getElementById("ntp-greedy");
+
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+  function render() {
+    var html = esc(START);
+    chosen.forEach(function (t, i) {
+      html += '<span class="' + (i === chosen.length - 1 ? "new" : "") + '">' + esc(t) + "</span>";
+    });
+    textEl.innerHTML = html;
+    var d = nextDist(chosen);
+    if (!d) {
+      barsEl.innerHTML = "";
+      outEl.innerHTML = "The answer is complete: " + chosen.length + " steps, one token per step. At no step did the model look at the queue log, because it never had it.";
+      greedyBtn.disabled = true;
+      return;
+    }
+    greedyBtn.disabled = false;
+    var max = Math.max.apply(null, d.map(function (x) { return x[1]; }));
+    barsEl.innerHTML = d.map(function (x, i) {
+      return '<button type="button" class="lbl" data-i="' + i + '">' + esc(x[0]) + '</button>' +
+        '<div class="bar' + (x[1] === max ? " win" : "") + '"><span style="width:' + (x[1] * 100) + '%"></span></div>' +
+        '<span class="val">' + x[1].toFixed(2) + "</span>";
+    }).join("");
+    outEl.textContent = "Step " + (chosen.length + 1) + ": probabilities for the next token. Click one.";
+    barsEl.querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { chosen.push(d[Number(b.dataset.i)][0]); render(); });
+    });
+  }
+  greedyBtn.addEventListener("click", function () {
+    var d = nextDist(chosen);
+    if (!d) return;
+    var best = d[0];
+    d.forEach(function (x) { if (x[1] > best[1]) best = x; });
+    chosen.push(best[0]);
+    render();
+  });
+  document.getElementById("ntp-reset").addEventListener("click", function () { chosen = []; render(); });
+  render();
+
+  /* ---------- prompt widget ---------- */
+  var LOG = "Queue log, last 3 weeks: Tue 4pm: 14 waiting avg; Thu 9am: 3.";
+  var WITHOUT = [[" Wednesday", 0.34], [" Thursday", 0.21], [" Tuesday", 0.18], [" Friday", 0.15], [" Monday", 0.12]];
+  var WITH = [[" Thursday", 0.81], [" Tuesday", 0.06], [" Wednesday", 0.05], [" Friday", 0.04], [" Monday", 0.04]];
+  var box = document.getElementById("ctx-on");
+  var ctxText = document.getElementById("ctx-text");
+  var ctxBars = document.getElementById("ctx-bars");
+  function renderCtx() {
+    var on = box.checked;
+    ctxText.innerHTML = (on ? '<span class="new">' + esc(LOG) + "</span><br>" : "") + esc(START);
+    var d = on ? WITH : WITHOUT;
+    ctxBars.innerHTML = d.map(function (x, i) {
+      return '<span class="lbl">' + esc(x[0]) + '</span><div class="bar' + (i === 0 ? " win" : "") + '"><span style="width:' + (x[1] * 100) + '%"></span></div><span class="val">' + x[1].toFixed(2) + "</span>";
+    }).join("");
+  }
+  box.addEventListener("change", renderCtx);
+  renderCtx();
+})();
+</script>
+</body>
+</html>

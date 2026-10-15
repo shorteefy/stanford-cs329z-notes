@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="why" content="BM25 ने पुराने forum post को queue log से ऊपर रखा, और pipeline ने उसे बिना परखे prompt में भेज दिया। ढूँढना हर कदम का फ़ैसला बने, जो मिला उसे कोई परखे, और आख़िर में Self-RAG और CRAG की Stanford slides खुद पढ़नी हैं।">
+<title>Lesson 16: Agentic RAG (गहरा)</title>
+<link rel="stylesheet" href="study.css">
+<style>
+  .ladder ol { margin: 0; padding-left: 22px; }
+  .ladder li { margin: 0 0 9px; }
+  .ladder .can { display: block; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
+  .ladder p.can { margin: 0 0 10px; }
+  .topbar .switch b { color: var(--ink); }
+  figure.slide img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .formula sup { font-size: 0.7em; }
+  table.t th.numh { text-align: right; }
+  table.t .sub.mono { font-family: var(--mono); font-size: 13.5px; }
+  .deeper { border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px 6px; margin: 40px 0 0; }
+  .deeper h2 { font-size: 17px; margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { font-size: 16px; padding: 14px 12px; } }
+  .ladder li.lvl { list-style: none; margin: 14px 0 8px -22px; font-weight: 650; color: var(--accent); }
+  .levelup { border-top: 3px solid var(--accent); margin: 64px 0 0; padding-top: 18px; }
+  .levelup h2 { font-size: 22px; margin: 0 0 8px; }
+  figure.slide + figure.slide { margin-top: -6px; }
+  .recall ol.plain { margin-top: 8px; }
+  .recall ol.plain > li > p { margin-bottom: 4px; }
+  .recall ol.plain details { margin-bottom: 14px; }
+  .recall ol.plain details p { margin-top: 6px; }
+</style>
+</head>
+<body class="story">
+<main>
+
+<nav class="topbar">
+  <a href="index.html">Lecture 3: RAG + Agents · सारे lessons</a>
+  <span class="switch">Lesson 16 / 18 · <a href="16-agentic-rag.html">आसान</a> · <b>गहरा</b> · <a href="16-agentic-rag-dense-en.html">English</a></span>
+</nav>
+
+<header>
+  <p class="kicker">Lesson 16 · गहरा version</p>
+  <h1>Agentic RAG: ढूँढना एक फ़ैसला है</h1>
+  <p class="lede"><b>Agentic RAG में ढूँढना pipeline का तय step नहीं रहता। एक LLM हर कदम पर तय करता है कि ढूँढना है या नहीं, क्या ढूँढना है, और जो मिला वो काफ़ी अच्छा है या नहीं।</b> ऐसे LLM को agent कहते हैं, और ये lesson ये फ़ैसले लेने के दो तरीके दिखाता है: Self-RAG और CRAG।</p>
+  <p class="lede">इसकी ज़रूरत <a href="11-bm25-dense.html#bm25">lesson 11</a> में दिखी थी। सवाल <q>which office hour is least crowded</q> पर BM25 ने पुराने forum post को 2.749 दिया, और queue log को 2.473। K = 1 पर prompt में सिर्फ़ forum post जाता है, और LLM लिखता है <q>midweek afternoons [P4]</q>, जहाँ [P4] उसी post का ID है। ये lesson 1 वाला गलत जवाब है, बस अब citation के साथ। उल्टी गलती भी होती है: <q>17 × 3 कितना है?</q> पर भी pipeline 60,000 passages में ढूँढती है।</p>
+
+  <div class="goals ladder">
+    <h2>इस lesson की सीढ़ी</h2>
+    <p class="can">सीढ़ी में 9 पड़ाव हैं। पहले 5 आसान version जैसे ही हैं, और 6 से 9 आपको Stanford की slides के level तक ले जाते हैं। हर पड़ाव के नीचे लिखा है कि उसके बाद आप क्या कर पाएँगे।</p>
+    <ol>
+      <li><a href="#agent">Agent: action, observation और loop</a><span class="can">एक agent loop को कदम-दर-कदम पढ़ पाएँगे, और उसके scores हाथ से गिन पाएँगे।</span></li>
+      <li><a href="#decisions">तीन फ़ैसले, और pipeline कहाँ चूकती है</a><span class="can">हर फ़ैसले को एक सवाल से समझा पाएँगे, और agentic RAG वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#selfrag">Self-RAG: फ़ैसले tokens में</a><span class="can">Reflection tokens से हिस्सों का क्रम निकाल पाएँगे, और Self-RAG वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#crag">CRAG: अलग evaluator और दो thresholds</a><span class="can">Confidence से CRAG का action बता पाएँगे, और CRAG वाली slide पढ़ पाएँगे।</span></li>
+      <li><a href="#compare">Self-RAG और CRAG साथ-साथ, और उनकी हद</a><span class="can">बता पाएँगे कि कौन सा फ़ैसला कौन लेता है, और lesson 17 की ज़रूरत क्यों है।</span></li>
+    <li class="lvl">यहाँ से Stanford वाला level</li>
+      <li value="6"><a href="#srscore">Self-RAG का गणित: हिस्से का score</a><span class="can">Token की probability से हिस्सा, δ से ढूँढना, और हर हिस्से का score हाथ से निकाल पाएँगे।</span></li>
+      <li><a href="#srtrain">Self-RAG की training, और paper के नतीजे</a><span class="can">बता पाएँगे कि training data में reflection tokens कहाँ से आए, और paper की tables points में पढ़ पाएँगे।</span></li>
+      <li><a href="#cragpaper">CRAG का असली evaluator और thresholds</a><span class="can">Paper के scale पर set का फ़ैसला निकाल पाएँगे, और नतीजे points और % में पढ़ पाएँगे।</span></li>
+      <li><a href="#slides">Stanford की slides खुद पढ़िए</a><span class="can">तीनों agentic RAG slides की हर line और हर box समझा पाएँगे।</span></li>
+    </ol>
+  </div>
+  <p class="pre">पहले से क्या चाहिए: <a href="01-how-llms-answer-dense.html#next-token">Lesson 1</a> (next-token prediction, vocabulary), <a href="06-rag-pipeline-dense.html#pre">Lesson 6</a> (pipeline, query rewriting, ITER-RETGEN) और <a href="14-hybrid-rerank-dense.html#rerank">Lesson 14</a> (reranker)। पड़ाव 6 से आगे <a href="04-probability-tools-dense.html#softmax">Lesson 4</a> (probability, softmax, ln, loss) और <a href="13-metrics-dense.html">Lesson 13</a> (points) भी काम आते हैं। जो पड़ाव आपको पहले से आता है, उसे छोड़कर अगले पर जाइए। जिस शब्द के नीचे बिंदुओं वाली line और ▾ हो, उस पर click करने से उसका मतलब खुलता है।</p>
+</header>
+
+<!-- 1 -->
+<article class="concept" id="agent">
+  <h3><span class="cn">1</span>Agent: action, observation और loop</h3>
+
+  <p><b>Agent एक LLM है, जो loop में काम करता है। वो अगला काम चुनता है, वो काम होता है, और फिर वो नतीजा पढ़कर अगला काम चुनता है।</b> Agent का चुना काम <b class="term">action</b> कहलाता है, जैसे search करना या जवाब लिखना। Action को असल में एक program करता है, जैसे search engine, और उसे <b class="term">tool</b> कहते हैं। Tool जो नतीजा लौटाता है, और agent जिसे अगले कदम से पहले पढ़ता है, उसे <b class="term">observation</b> कहते हैं।</p>
+
+  <p>Loop की ज़रूरत <a href="06-rag-pipeline-dense.html#modular">lesson 6</a> में दिखी थी। वहाँ <button class="def" data-w="w-iterretgen">ITER-RETGEN</button> दो बार ढूँढता था, और ये गिनती इंसान ने पहले से लिख दी थी। लेकिन Jed Hoyer वाले <button class="def" data-w="w-multihop">multi-hop</button> सवाल पर model ने तीन searches कीं, और 17 × 3 को एक भी नहीं चाहिए। कोई तय गिनती दोनों पर सही नहीं बैठती, इसलिए गिनती वही तय करे, जो हर search का नतीजा पढ़ रहा है।</p>
+
+  <p>अब एक छोटा loop देखिए। User छोटे रूप में पूछता है <q>OH timings?</q> Retriever lesson 6 वाला word overlap है, जो गिनता है कि query के कितने शब्द passage में भी हैं। <span class="mine">ये loop मेरा example है</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>कदम</th><th>Agent का action</th><th>Observation</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Search: <q>OH timings</q></td><td>हर passage का score 0</td></tr>
+      <tr><td>2</td><td>Search: <q>CS 329Z office hours schedule</q></td><td>Office hours page पर 2, queue log पर 1</td></tr>
+      <tr class="hi"><td>3</td><td>जवाब: <q>Tuesday 4pm, Room 104, or Thursday 9am, Zoom [P2]</q></td><td>Loop ख़त्म</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>पहली query के शब्द oh और timings किसी passage में नहीं हैं। दूसरी query के office और hours, दोनों office hours page में हैं, इसलिए उसका score 2 है। Queue log में office है, लेकिन hours की जगह hour लिखा है, इसलिए उसका score 1 है। जवाब का [P2] office hours page का ID है।</p>
+
+  <p>दूसरा कदम पहले कदम के observation से निकला: कुछ नहीं मिला, इसलिए agent ने query दोबारा लिखी। ये lesson 6 वाली <button class="def" data-w="w-rewriting">query rewriting</button> है। Lesson 6 की Advanced RAG pipeline हर query को rewrite करती है, और इसमें हर query पर एक extra LLM call लगती है। Agent के हर कदम पर भी एक LLM call लगती है, लेकिन rewrite वाला कदम यहाँ तभी आया, जब search खाली लौटी।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>मान लीजिए user ने पहली बार में ही <q>office hour timings</q> लिखा। Observation में किसका score कितना होगा, और क्या agent को query दोबारा लिखनी पड़ेगी?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>Queue log में office और hour, दोनों हैं, इसलिए उसका score 2 है। Office hours page में सिर्फ़ office है, इसलिए 1। Search खाली नहीं लौटी, तो query बदलने की वजह नहीं। लेकिन queue log में समय है, जगह नहीं, इसलिए agent को अब ये तय करना है कि जो मिला वो काफ़ी है या नहीं। ये अगले पड़ाव का तीसरा फ़ैसला है।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="concept" id="decisions">
+  <h3><span class="cn">2</span>तीन फ़ैसले, और pipeline कहाँ चूकती है</h3>
+
+  <p><b>ढूँढने वाले agent के सामने हर कदम पर तीन फ़ैसले आते हैं।</b> पहला, ढूँढें या सीधे जवाब दें। दूसरा, कौन सी query भेजें। तीसरा, जो मिला वो काफ़ी अच्छा है या नहीं। पड़ाव 1 के loop में तीनों दिखे: agent ने ढूँढना चुना, फिर नई query लिखी, और फिर नतीजे को काफ़ी मानकर जवाब लिखा।</p>
+
+  <p>Pipeline ये फ़ैसले नहीं लेती, वो हर सवाल पर वही steps चलाती है। नीचे हर फ़ैसले के लिए एक सवाल है, जिस पर pipeline चूकती है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>फ़ैसला</th><th>सवाल</th><th>Pipeline क्या करती है</th><th>Agent क्या कर सकता है</th></tr></thead>
+    <tbody>
+      <tr><td>1. ढूँढें?</td><td><q>17 × 3 कितना है?</q></td><td>60,000 passages में ढूँढती है<span class="sub">और करीब 2,500 tokens prompt में डालती है</span></td><td>0 searches, सीधा जवाब: 51</td></tr>
+      <tr><td>2. कौन सी query?</td><td><q>OH timings?</q></td><td>वही query भेजती है, 0 passages पाती है</td><td>Search खाली आई, तो query बदलता है</td></tr>
+      <tr class="hi"><td>3. काफ़ी अच्छा?</td><td>Least crowded, K = 1</td><td>अकेला forum post भेजती है</td><td>Post 2024 की राय है, तो दोबारा ढूँढता है</td></tr>
+    </tbody>
+  </table></div>
+
+  <p><b>RAG में ढूँढना जब agent का action बन जाए, और ये तीनों फ़ैसले हर कदम पर हों, तो उसे <span class="term">agentic RAG</span> कहते हैं।</b> Stanford की slide यही कहती है:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p56.png"><img src="img/slide-p56.png" alt="Stanford slide: Agentic RAG, loop के अंदर retrieval, और तीन फ़ैसले" loading="lazy"></a>
+    <figcaption>Stanford की slide: loop के अंदर retrieval। ऊपर लिखा है कि अब तक की कोई चीज़ तय नहीं करती कि ढूँढना है या नहीं, क्या पूछना है, और कब रुकना है। नीचे वही तीन फ़ैसले हैं। Image पर click करने से वो पूरे size में खुलती है।</figcaption>
+  </figure>
+
+  <p>ऊपर का <q>when to stop</q> और नीचे का तीसरा फ़ैसला एक ही बात है। नतीजा काफ़ी अच्छा है, तो agent रुककर जवाब लिखता है, और नहीं है, तो फिर से ढूँढता है।</p>
+
+  <p>अब सवाल ये है कि ये फ़ैसले कौन ले। ये lesson दो जवाब देता है। Self-RAG में जवाब लिखने वाला model खुद फ़ैसले लेता है, और CRAG में एक अलग, छोटा model नतीजा परखता है।</p>
+</article>
+
+<!-- 3 -->
+<article class="concept" id="selfrag">
+  <h3><span class="cn">3</span>Self-RAG: फ़ैसले tokens में</h3>
+
+  <p>सबसे सीधा तरीका ये है कि वही LLM फ़ैसले ले, जो जवाब लिख रहा है, क्योंकि वो सवाल और passages, दोनों पढ़ रहा है। दिक्कत ये है कि LLM सिर्फ़ <button class="def" data-w="w-ntp">अगला token</button> लिखता है, और अलग से कोई फ़ैसला नहीं सुनाता।</p>
+
+  <p><b>Self-RAG इसका हल ये निकालता है कि फ़ैसले भी tokens बन जाएँ।</b> वो model की <button class="def" data-w="w-vocabulary">vocabulary</button> में कुछ खास tokens जोड़ता है, जिन्हें <b class="term">reflection tokens</b> कहते हैं। Model की खास training होती है, और फिर वो इन्हें बाकी text की तरह लिखता है। Self-RAG Asai और साथियों का 2024 का तरीका है, और इसके मुख्य tokens ये हैं:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Token</th><th>मतलब</th><th>फ़ैसला</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td>अभी ढूँढना है</td><td>फ़ैसला 1</td></tr>
+      <tr><td>Relevant / Irrelevant</td><td>मिला हुआ passage सवाल के काम का है या नहीं</td><td>फ़ैसला 3</td></tr>
+      <tr><td>Supported / Partially</td><td>Model का लिखा हिस्सा passage से पूरा साबित होता है, या आधा</td><td>फ़ैसला 3 की दूसरी जाँच</td></tr>
+    </tbody>
+  </table></div>
+  <p>Paper में कुछ और tokens भी हैं, जैसे No support। एक चौथी किस्म पूरे जवाब को 1 से 5 तक का score देती है, और वो गहरे version में है।</p>
+
+  <p>अब हमारा सवाल लीजिए: <q>Which office hour this week is least crowded?</q> मान लीजिए model ने Retrieve लिखा, और retriever queue log, पुराना forum post और Homework 1 की announcement लाया। Model हर passage के साथ अलग से अगला हिस्सा लिखता है, और हर हिस्से के साथ reflection tokens भी। <span class="mine">ये example और tokens मेरे हैं</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Passage</th><th>Reflection tokens</th><th>Model का लिखा हिस्सा</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td>Relevant, Supported</td><td><q>Thursday 9am, about 3 waiting.</q></td></tr>
+      <tr><td>पुराना forum post</td><td>Relevant, Partially</td><td><q>Wednesday afternoon is quietest.</q></td></tr>
+      <tr class="hi"><td>Homework 1 की announcement</td><td>?</td><td><q>Homework 1 will be released on Oct 5.</q></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Forum post वाला हिस्सा Partially है, क्योंकि post में midweek लिखा है, Wednesday नहीं, और साथ में usually भी। यानी Wednesday वाली बात passage में आधी ही है। Queue log वाली बात queue log में पूरी लिखी है, इसलिए वो हिस्सा Supported है।</p>
+
+  <div class="recall">
+    <p class="rl">तीसरी row आप निकालिए</p>
+    <p>Homework वाले हिस्से पर कौन सा token लगेगा? तीनों हिस्सों का क्रम क्या होगा, और जवाब में कौन सा हिस्सा जुड़ेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p><b>Irrelevant</b>। Homework की तारीख सच है, और announcement से साबित भी होती है, लेकिन सवाल office hours की भीड़ का है। क्रम है: queue log, फिर forum post, फिर Homework। Queue log वाला हिस्सा Relevant और Supported है, इसलिए जवाब में वही जुड़ता है: Thursday 9am।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px"><b>तो Self-RAG हर हिस्से को दो बातों पर परखता है: बात सवाल के काम की है या नहीं, और passage से साबित है या नहीं।</b> Stanford की slide पर paper का अपना example है, और अब आप उसे पढ़ सकते हैं:</p>
+
+  <figure class="slide">
+    <a href="img/slide-p57.png"><img src="img/slide-p57.png" alt="Stanford slide: Self-RAG के तीन steps, US states वाले example पर" loading="lazy"></a>
+    <figcaption>Stanford की slide: Self-RAG के तीन steps। हरे box अच्छे tokens हैं, नारंगी box Partially है, और लाल box Irrelevant।</figcaption>
+  </figure>
+
+  <p>Step 1 में model पहला sentence लिखता है, फिर Retrieve, और तीन passages आते हैं। Step 2 में वो हर passage के साथ एक हिस्सा लिखता है, और step 3 में tokens से क्रम बनता है: 1 &gt; 3 &gt; 2। Texas वाली बात सच है, लेकिन उसका passage Irrelevant है, इसलिए वो सबसे नीचे है। फिर model दोबारा Retrieve लिखता है, और यही दोहराता है।</p>
+
+  <p>Self-RAG की कीमत भी है। Generator की खास training चाहिए, इसलिए API से लिया <button class="def" data-w="w-frozen">frozen LLM</button> यहाँ नहीं चलता। हर passage के साथ अलग हिस्सा लिखना पड़ता है, यानी lesson 5 के <button class="def" data-w="w-ragseq">RAG-Sequence</button> की तरह K बार generation। और Supported सिर्फ़ इतना कहता है कि बात passage में है। वो ये नहीं कहता कि passage अब भी सच है।</p>
+</article>
+
+<!-- 4 -->
+<article class="concept" id="crag">
+  <h3><span class="cn">4</span>CRAG: अलग evaluator और दो thresholds</h3>
+
+  <p>ज़्यादातर systems frozen LLM पर बनते हैं, इसलिए फ़ैसला 3 generator के बाहर कोई और ले। पहला idea <a href="14-hybrid-rerank-dense.html#rerank">lesson 14</a> का <button class="def" data-w="w-rerank">reranker</button> है। लेकिन reranker सिर्फ़ क्रम बदलता है। मान लीजिए retriever सिर्फ़ Homework 1 की announcement और project page लाया, जो भीड़ वाले सवाल के लिए बेकार हैं। Reranker तब भी एक को ऊपर रखेगा, और वो prompt में जाएगा। <span class="mine">मेरा example</span></p>
+
+  <p><b>CRAG में एक हल्का model हर document को एक confidence देता है: ये document इस सवाल के लिए कितना सही है।</b> इस model को <b class="term">retrieval evaluator</b> कहते हैं। CRAG का पूरा नाम Corrective RAG है, और ये Yan और साथियों का 2024 का तरीका है। Confidence का अपना मतलब है, इसलिए उस पर एक पहले से तय limit रख सकते हैं, जिसे <b class="term">threshold</b> कहते हैं।</p>
+
+  <p>CRAG दो thresholds रखता है, ऊपर वाला और नीचे वाला। यहाँ confidence 0 से 1 के बीच है, और thresholds 0.6 और 0.2 हैं। <span class="mine">ये scale और numbers मेरे रखे हैं</span> Paper के अपने numbers गहरे version में हैं। पहले वो case लीजिए, जिसमें retriever एक ही document लाया, यानी K = 1:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>अकेला document</th><th class="numh">Confidence</th><th>फ़ैसला</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.85</td><td>Correct<span class="sub">0.6 से ऊपर</span></td></tr>
+      <tr class="hi"><td>पुराना forum post</td><td class="num">0.4</td><td>Ambiguous<span class="sub">0.2 और 0.6 के बीच</span></td></tr>
+      <tr><td>Homework 1 की announcement</td><td class="num">0.05</td><td>Incorrect<span class="sub">0.2 से नीचे</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>कई documents हों, तो एक भी document 0.6 से ऊपर होने पर फ़ैसला Correct है, और Incorrect के लिए सारे 0.2 से नीचे होने चाहिए। Reranker वाले example में Homework 0.05 पर है और project page 0.1 पर, इसलिए फ़ैसला Incorrect है। <span class="mine">project page का 0.1 मेरा</span> हर फ़ैसले पर CRAG अलग action चलाता है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>फ़ैसला</th><th>Action</th><th>Generator को क्या मिलता है</th></tr></thead>
+    <tbody>
+      <tr><td><b>Correct</b></td><td>Knowledge refinement: documents को strips में तोड़िए, बेकार strips हटाइए, बाकी जोड़िए</td><td>सवाल + साफ़ किए documents</td></tr>
+      <tr><td><b>Incorrect</b></td><td>Documents छोड़िए, query दोबारा लिखिए, web search कीजिए</td><td>सवाल + web का नतीजा</td></tr>
+      <tr><td><b>Ambiguous</b></td><td>दोनों</td><td>सवाल + साफ़ किए documents + web का नतीजा</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="widget" id="cw">
+    <h4>CRAG का फ़ैसला, K = 1 पर</h4>
+    <p class="hint">Retriever एक document लाया है। Evaluator का confidence बदलिए, और देखिए कि CRAG क्या करता है। Thresholds 0.6 और 0.2 हैं। <span class="mine">thresholds और तीनों confidence मेरे रखे हैं</span></p>
+    <div class="btns">
+      <button type="button" data-v="0.85">Queue log</button>
+      <button type="button" data-v="0.4">पुराना forum post</button>
+      <button type="button" data-v="0.05">Homework 1 की announcement</button>
+    </div>
+    <div class="ctl"><label for="cw-s">Evaluator का confidence</label><input id="cw-s" type="range" min="0" max="1" step="0.05" value="0.85"><output id="cw-so">0.85</output></div>
+    <div class="tscroll"><table class="t"><tbody id="cw-body"></tbody></table></div>
+  </div>
+
+  <p>Correct वाले रास्ते पर भी document पूरा नहीं जाता। CRAG उसे छोटे टुकड़ों में तोड़ता है, जिन्हें strips कहते हैं। फिर वो हर strip को evaluator से परखता है, और बेकार strips हटाकर बाकी को क्रम से जोड़ता है। इसे <b class="term">knowledge refinement</b> कहते हैं। सवाल <q>When is the milestone due?</q> पर syllabus के तीन sentences तीन strips बनते हैं: <span class="mine">मेरा example</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Syllabus की strip</th><th>रखें?</th></tr></thead>
+    <tbody>
+      <tr><td><q>The project milestone is due Week 6, Thursday 11:59pm.</q></td><td>हाँ, यही जवाब है</td></tr>
+      <tr><td><q>Late days may not be applied to the milestone.</q></td><td>हाँ, milestone की deadline से जुड़ी है</td></tr>
+      <tr class="hi"><td><q>The final report is due Week 10.</q></td><td>नहीं, ये final report की बात है</td></tr>
+    </tbody>
+  </table></div>
+  <p>Generator को 3 में से 2 strips मिलती हैं। Week 10 वाली line prompt में नहीं जाती, इसलिए generator उसे milestone की तारीख नहीं समझ सकता।</p>
+
+  <p>Incorrect वाले रास्ते पर CRAG अपने documents छोड़ देता है। एक LLM सवाल को search engine के लायक keywords में दोबारा लिखता है, और CRAG web पर ढूँढता है। Slide पर सवाल <q>Who was the screenwriter for Death of a Batman?</q> है, और नई query के तीन टुकड़े हैं: Death of a Batman, screenwriter और Wikipedia।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p58.png"><img src="img/slide-p58.png" alt="Stanford slide: CRAG, evaluator के तीन फ़ैसले और उनके actions" loading="lazy"></a>
+    <figcaption>Stanford की slide: CRAG। Correct पर Knowledge Refinement चलता है, Incorrect पर Knowledge Searching, और Ambiguous पर दोनों। सबसे नीचे की line दिखाती है कि हर फ़ैसले पर generator को क्या मिलता है।</figcaption>
+  </figure>
+
+  <p class="callout"><b>ध्यान दीजिए:</b> Web से आया हर text भरोसे लायक नहीं होता। उसमें गलत बातें हो सकती हैं, या agent को भटकाने वाली instructions भी, जो <a href="18-failure-modes-dense.html">lesson 18</a> में आती हैं। इसीलिए slide पर web search के बाद भी एक Select step है।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>K = 1 पर अकेला forum post आया, और evaluator ने उसे 0.4 दिया। CRAG क्या करेगा, और generator को क्या मिलेगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>0.4, 0.2 और 0.6 के बीच है, इसलिए फ़ैसला <b>Ambiguous</b> है। CRAG forum post को refine करके रखेगा, और query दोबारा लिखकर web search भी करेगा। Generator को सवाल, forum post का साफ़ हिस्सा और web का नतीजा, तीनों मिलेंगे।</p>
+    </details>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="concept" id="compare">
+  <h3><span class="cn">5</span>Self-RAG और CRAG साथ-साथ, और उनकी हद</h3>
+
+  <p>अब शुरू के दोनों सवालों पर लौटिए। 17 × 3 पर ठीक से train हुआ Self-RAG Retrieve नहीं लिखता, और सीधे 51 लिखता है। Paper के example में भी essay वाले prompt पर model नहीं ढूँढता। <span class="mine">paper से</span> CRAG यहाँ भी ढूँढेगा, क्योंकि वो हर सवाल पर ढूँढता है, और सिर्फ़ नतीजा परखता है।</p>
+
+  <p>K = 1 पर अकेला forum post आए, तो Self-RAG का Wednesday वाला हिस्सा Partially है, और model दोबारा Retrieve लिख सकता है। CRAG का evaluator forum post को 0.4 देता है, इसलिए वो web पर भी ढूँढता है। <b>दोनों में से कोई अब forum post को बिना परखे आगे नहीं भेजता।</b></p>
+
+  <div class="tscroll"><table class="t">
+    <thead><tr><th></th><th>Self-RAG</th><th>CRAG</th></tr></thead>
+    <tbody>
+      <tr><td><b>फ़ैसला कौन लेता है</b></td><td>Generator खुद, reflection tokens से</td><td>अलग evaluator, दो thresholds से</td></tr>
+      <tr><td><b>Generator बदलना पड़ता है?</b></td><td>हाँ, खास training</td><td>नहीं, कोई भी LLM</td></tr>
+      <tr><td><b>फ़ैसला 1: ढूँढें?</b></td><td>Retrieve token से</td><td>हमेशा ढूँढता है</td></tr>
+      <tr><td><b>फ़ैसला 2: कौन सी query?</b></td><td>अलग से query नहीं लिखता<span class="sub">paper से</span></td><td>Web के लिए query दोबारा लिखता है</td></tr>
+      <tr><td><b>फ़ैसला 3: काफ़ी अच्छा?</b></td><td>Relevant और Supported tokens से</td><td>Evaluator के confidence से</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>दोनों की हद भी है। CRAG के thresholds इंसान रखता है, और evaluator भी गलती कर सकता है। Self-RAG के reflection tokens भी model ही लिखता है, इसलिए वो भी गलत हो सकते हैं। और दोनों में से किसी ने ये फ़ैसले खुद कोशिश करके नहीं सीखे।</p>
+
+  <p><a href="17-search-r1-dense.html">Lesson 17</a> में model ये फ़ैसले कोशिश करके और नतीजा देखकर सीखता है: कब ढूँढना है, कौन सी query लिखनी है, और कब रुकना है। Loop में एक गलत फ़ैसला अगले कदमों पर असर डालता है, और ये बात <a href="18-failure-modes-dense.html">lesson 18</a> में आती है।</p>
+</article>
+
+<div class="levelup">
+  <h2>यहाँ से Stanford वाला level</h2>
+  <p>ऊपर के 5 पड़ाव आसान version जैसे ही हैं। आगे के 4 पड़ाव आपको Stanford की slides के level तक ले जाते हैं। पहले Self-RAG के tokens का गणित आता है, फिर उसकी training और नतीजे, और फिर CRAG का असली evaluator और उसके नतीजे। आख़िर में आप slides खुद पढ़ते हैं। हर गणित वहीं समझाया है, जहाँ वो पहली बार आता है।</p>
+</div>
+
+<!-- 6 -->
+<article class="concept" id="srscore">
+  <h3><span class="cn">6</span>Self-RAG का गणित: token की probability से हिस्से का score</h3>
+
+  <p>पड़ाव 3 में तीन तरह के tokens थे, और हिस्सों का क्रम मैंने tokens देखकर बताया था। Paper में चार तरह के tokens हैं, और क्रम एक number से निकलता है। हर किस्म के अपने कुछ values हैं: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किस्म</th><th>Values</th><th>क्या परखती है</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td>yes, no, continue</td><td>अभी ढूँढना है, नहीं ढूँढना, या पिछला passage ही आगे इस्तेमाल करना है</td></tr>
+      <tr><td>IsRel</td><td><b>relevant</b>, irrelevant</td><td>Passage सवाल के काम का है या नहीं</td></tr>
+      <tr><td>IsSup</td><td><b>fully supported</b>, partially supported, no support</td><td>लिखा हिस्सा passage से कितना साबित होता है</td></tr>
+      <tr><td>IsUse</td><td><b>5</b>, 4, 3, 2, 1</td><td>जवाब सवाल के लिए कितना काम का है</td></tr>
+    </tbody>
+  </table></div>
+  <p>आख़िरी तीन किस्मों को paper critique tokens कहता है, क्योंकि वो लिखे हुए को परखती हैं। हर किस्म में एक value सबसे अच्छी है, जो table में bold है। पड़ाव 3 का Supported यहाँ fully supported है, और Partially यहाँ partially supported।</p>
+
+  <h4 class="sub" id="share">Token की probability से हिस्सा</h4>
+
+  <p>Model हर कदम पर पूरी vocabulary के हर token को एक <button class="def" data-w="w-probability">probability</button> देता है, और ये सब मिलकर 1 होती हैं। Self-RAG एक किस्म के tokens को अलग निकालता है, और उनकी probabilities को आपस में बाँटता है। मान लीजिए queue log वाले हिस्से के बाद relevant की probability 0.54 है, irrelevant की 0.06, और बाकी सारे tokens की मिलाकर 0.40। <span class="mine">मेरे numbers</span></p>
+  <ol class="plain">
+    <li>IsRel के दोनों tokens जोड़िए: 0.54 + 0.06 = 0.60।</li>
+    <li>Relevant को इस जोड़ से भाग दीजिए: 0.54 ÷ 0.60 = 0.9।</li>
+  </ol>
+  <p>ये 0.9 relevant का हिस्सा है, सिर्फ़ IsRel वाले tokens के बीच। बाकी 0.40 इस हिसाब में नहीं आता, इसलिए हिस्सा हमेशा 0 और 1 के बीच रहता है। Paper इसे ऐसे लिखता है:</p>
+  <div class="formula">s<sub>IsRel</sub> = p(relevant) ÷ ( p(relevant) + p(irrelevant) )</div>
+  <p>यहाँ p(relevant) relevant token की probability है, यानी 0.54, और नीचे दोनों का जोड़ 0.60 है। Lesson 4 के <button class="def" data-w="w-softmax">softmax</button> में भी हिस्सा ऐसे ही निकला था: एक number को group के जोड़ से भाग दीजिए।</p>
+
+  <h4 class="sub" id="delta">ढूँढने का फ़ैसला: threshold δ</h4>
+
+  <p>फ़ैसला 1 के लिए भी यही हिस्सा काम आता है। Self-RAG तब ढूँढता है, जब yes और no के बीच yes का हिस्सा एक threshold से ऊपर हो। इस threshold को paper δ लिखता है, जिसे delta पढ़ते हैं:</p>
+  <div class="formula">ढूँढिए, अगर p(yes) ÷ ( p(yes) + p(no) ) &gt; δ</div>
+  <p>दो सवालों पर देखिए, जहाँ p(yes) और p(no) Retrieve वाले tokens की probabilities हैं: <span class="mine">मेरे numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>सवाल</th><th class="numh">p(yes), p(no)</th><th class="numh">yes का हिस्सा</th></tr></thead>
+    <tbody>
+      <tr><td><q>17 × 3 कितना है?</q></td><td class="num">0.03, 0.87</td><td class="num">0.03 ÷ 0.90 = 0.033</td></tr>
+      <tr><td>Least crowded वाला सवाल</td><td class="num">0.56, 0.24</td><td class="num">0.56 ÷ 0.80 = 0.70</td></tr>
+    </tbody>
+  </table></div>
+  <p>अब δ बदलकर देखिए कि कौन सा सवाल ढूँढता है:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th class="numh">δ</th><th>17 × 3 (0.033)</th><th>Least crowded (0.70)</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0</td><td>ढूँढता है</td><td>ढूँढता है</td></tr>
+      <tr class="hi"><td class="num">0.2</td><td>नहीं ढूँढता</td><td>ढूँढता है</td></tr>
+      <tr><td class="num">0.5</td><td>नहीं ढूँढता</td><td>ढूँढता है</td></tr>
+      <tr><td class="num">0.8</td><td>नहीं ढूँढता</td><td>नहीं ढूँढता</td></tr>
+    </tbody>
+  </table></div>
+  <p>यानी δ जितना बड़ा, model उतना कम ढूँढता है। Paper ज़्यादातर tasks पर δ = 0.2 रखता है, ताकि model अक्सर ढूँढे। ALCE नाम के task पर, जहाँ हर दावे के साथ citation चाहिए, paper δ = 0 रखता है। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="segment">हर हिस्से का score: वज़न वाला जोड़</h4>
+
+  <p>अब तीनों critique किस्मों के हिस्से एक number में जुड़ते हैं। पहले हर किस्म का हिस्सा, paper के नियम से: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li><b>IsRel</b>: relevant का हिस्सा, जैसे ऊपर निकाला।</li>
+    <li><b>IsSup</b>: fully का हिस्सा, और उसमें partially के हिस्से का आधा। यानी partially supported को आधा वज़न मिलता है।</li>
+    <li><b>IsUse</b>: पाँचों values को वज़न मिलते हैं। 5 को 1, 4 को 0.5, 3 को 0, 2 को −0.5, और 1 को −1। फिर हर value का हिस्सा उसके वज़न से गुणा होता है, और सब जुड़ते हैं।</li>
+  </ul>
+  <p>IsUse वाला जोड़ एक तरह का औसत है। मान लीजिए 5 का हिस्सा 0.6 है, 4 का 0.3 और 3 का 0.1। तब s<sub>IsUse</sub> = 1 × 0.6 + 0.5 × 0.3 + 0 × 0.1 = 0.75। सारा हिस्सा 5 पर होता, तो ये 1 होता, और सारा 1 पर होता, तो −1। इसलिए s<sub>IsUse</sub> −1 और 1 के बीच रहता है।</p>
+
+  <p>हमारे तीनों हिस्सों पर model ने ये हिस्से दिए। हर group के हिस्से मिलकर 1 हैं: <span class="mine">मेरे numbers</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>हिस्सा किस passage से</th><th class="numh">relevant</th><th class="numh">fully, partially, no</th><th class="numh">5, 4, 3, 2, 1</th></tr></thead>
+    <tbody>
+      <tr><td>Queue log</td><td class="num">0.9</td><td class="num">0.8, 0.15, 0.05</td><td class="num">0.6, 0.3, 0.1, 0, 0</td></tr>
+      <tr><td>पुराना forum post</td><td class="num">0.7</td><td class="num">0.2, 0.7, 0.1</td><td class="num">0.2, 0.5, 0.3, 0, 0</td></tr>
+      <tr><td>Homework 1 की announcement</td><td class="num">0.05</td><td class="num">0.6, 0.3, 0.1</td><td class="num">0, 0, 0.1, 0.3, 0.6</td></tr>
+    </tbody>
+  </table></div>
+  <p>Queue log वाले हिस्से का score चार steps में निकलता है:</p>
+  <ol class="plain">
+    <li>s<sub>IsRel</sub> = 0.9।</li>
+    <li>s<sub>IsSup</sub> = 0.8 + 0.5 × 0.15 = 0.875।</li>
+    <li>s<sub>IsUse</sub> = 1 × 0.6 + 0.5 × 0.3 + 0 × 0.1 = 0.75।</li>
+    <li>S = 1.0 × 0.9 + 1.0 × 0.875 + 0.5 × 0.75 = 0.9 + 0.875 + 0.375 = 2.15।</li>
+  </ol>
+  <p>Step 4 में तीनों हिस्से वज़न के साथ जुड़े। Paper के default वज़न IsRel और IsSup के लिए 1.0 हैं, और IsUse के लिए 0.5। <span class="mine">paper से</span> Formula यही चार steps है:</p>
+  <div class="formula">S = w<sub>IsRel</sub> s<sub>IsRel</sub> + w<sub>IsSup</sub> s<sub>IsSup</sub> + w<sub>IsUse</sub> s<sub>IsUse</sub></div>
+  <p>यहाँ हर w एक वज़न है (1.0, 1.0 और 0.5), और हर s उस किस्म का हिस्सा (0.9, 0.875 और 0.75)। यही हिसाब तीनों हिस्सों पर:</p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>हिस्सा</th><th class="numh">s<sub>IsRel</sub>, s<sub>IsSup</sub>, s<sub>IsUse</sub></th><th class="numh">S</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>Queue log</td><td class="num">0.9, 0.875, 0.75</td><td class="num">2.15</td></tr>
+      <tr><td>पुराना forum post</td><td class="num">0.7, 0.55, 0.45</td><td class="num">1.475</td></tr>
+      <tr><td>Homework 1 की announcement</td><td class="num">0.05, 0.75, −0.75</td><td class="num">0.425</td></tr>
+    </tbody>
+  </table></div>
+  <p>क्रम वही निकला, जो पड़ाव 3 में था: queue log, फिर forum post, फिर Homework। Homework का s<sub>IsSup</sub> 0.75 है, यानी उसकी बात announcement से अच्छी तरह साबित है। लेकिन s<sub>IsRel</sub> 0.05 और s<sub>IsUse</sub> −0.75 उसे सबसे नीचे ले जाते हैं।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>मान लीजिए सिर्फ़ IsSup गिना जाए, यानी w<sub>IsRel</sub> = 0 और w<sub>IsUse</sub> = 0, और w<sub>IsSup</sub> = 1। तीनों हिस्सों का क्रम क्या होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>तब S सिर्फ़ s<sub>IsSup</sub> है: queue log 0.875, Homework 0.75 और forum post 0.55। Homework forum post से ऊपर आ जाता है, क्योंकि उसकी बात अपने passage से साबित है, भले सवाल से उसका कोई लेना-देना नहीं। इसीलिए IsRel ज़रूरी है: Supported सिर्फ़ ये बताता है कि बात passage में है।</p>
+    </details>
+  </div>
+
+  <p style="margin-top:22px">Paper का पूरा score इस S में हिस्से की अपनी probability भी जोड़ता है:</p>
+  <div class="formula">f(y<sub>t</sub>, d) = p(y<sub>t</sub> | x, d, y<sub>&lt;t</sub>) + S</div>
+  <p>यहाँ x सवाल है, d passage, y<sub>t</sub> t-वाँ हिस्सा, और y<sub>&lt;t</sub> उससे पहले लिखे सारे हिस्से। Paper हर हिस्से को एक sentence मानता है। p(y<sub>t</sub> | x, d, y<sub>&lt;t</sub>) इस sentence की probability है, जब सवाल, passage और पिछले हिस्से दिए हों। <span class="mine">paper से</span></p>
+
+  <p>वज़न बदलने से model का बर्ताव बदलता है, और इसके लिए दोबारा training नहीं चाहिए। मान लीजिए w<sub>IsSup</sub> = 2 है। तब scores 3.025, 2.025 और 1.175 होते हैं, यानी क्रम वही रहता है, लेकिन साबित होने का असर बढ़ता है। Paper में ASQA task पर IsSup का वज़न बढ़ाने से citation precision बढ़ा, यानी ज़्यादा citations अपने दावे को सच में साबित करते थे। साथ में MAUVE नाम का fluency score घटा। <span class="mine">paper से, graph का रुझान</span></p>
+
+  <h4 class="sub" id="beam">Beam search: दो अधूरे जवाब साथ</h4>
+
+  <p>Paper हर कदम पर सिर्फ़ एक सबसे अच्छा हिस्सा चुनकर आगे नहीं बढ़ता। वो सबसे ऊँचे score वाले B अधूरे जवाब रखता है, और हर एक को अगले कदम तक बढ़ाता है। इसे <b class="term">beam search</b> कहते हैं, और B को beam की चौड़ाई। Paper में B = 2 है। <span class="mine">paper से</span></p>
+
+  <p>हमारे तीन हिस्सों पर B = 2 लगाइए। Queue log (2.15) और forum post (1.475) वाले दोनों अधूरे जवाब अगले कदम तक जाते हैं, और Homework (0.425) वाला वहीं छूट जाता है। आख़िर में पूरे जवाबों में से सबसे अच्छा लौटता है। B = 1 होता, तो ये lesson 1 के <button class="def" data-w="w-decoding">greedy decoding</button> जैसा होता, बस token की जगह पूरा sentence।</p>
+</article>
+
+<!-- 7 -->
+<article class="concept" id="srtrain">
+  <h3><span class="cn">7</span>Self-RAG की training, और paper के नतीजे</h3>
+
+  <p>Model reflection tokens तभी लिख सकता है, जब training data में ये tokens सही जगह लगे हों। हर sentence पर हाथ से tokens लगाना महँगा है, इसलिए paper ये काम एक दूसरे model से करवाता है। <b>जो model किसी और के लिखे को grade देता है, उसे <span class="term">critic</span> कहते हैं।</b> Self-RAG की training तीन कदमों में होती है: <span class="mine">paper से</span></p>
+  <ol class="plain">
+    <li>GPT-4 को हर किस्म के लिए एक instruction और कुछ examples दिए, और उससे tokens लिखवाए। हर किस्म के लिए 4 हज़ार से 20 हज़ार examples बने, जैसे IsRel के 19,317, IsSup के 11,181 और IsUse के 3,831।</li>
+    <li>इन examples पर Llama 2 7B से critic train हुआ, ताकि आगे GPT-4 की जगह critic tokens लिखे।</li>
+    <li>Critic ने 145,619 training examples में reflection tokens और retrieved passages जोड़े। फिर generator, Llama 2 7B या 13B, इन्हीं examples पर train हुआ।</li>
+  </ol>
+  <p>Critic सिर्फ़ training data बनाने के लिए है। Generator train होने के बाद tokens खुद लिखता है, इसलिए जवाब देते वक्त critic की ज़रूरत नहीं होती।</p>
+
+  <p>Generator की training lesson 4 वाला <button class="def" data-w="w-loss">loss</button> ही है: हर अगले token की probability का −ln, जिसमें reflection tokens भी शामिल हैं। जैसे किसी सही token की probability 0.5 से 0.9 हो जाए, तो उसका −ln 0.693 से 0.105 पर आता है। Passage वाले text पर loss नहीं लगता, क्योंकि उसे model ने नहीं लिखा, retriever ने दिया। Paper यही बात ऐसे लिखता है:</p>
+  <div class="formula">max<sub>M</sub> 𝔼 [ log p<sub>M</sub>(y, r | x) ]</div>
+  <p>यहाँ M generator है, x सवाल, y जवाब, और r उसके reflection tokens। 𝔼 का मतलब है सारे training examples पर औसत। log को सबसे बड़ा करना और −log, यानी loss, को सबसे छोटा करना एक ही बात है।</p>
+
+  <p>Critic कितना भरोसे लायक है, ये paper ने GPT-4 के tokens से मिलाकर नापा: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>किस्म</th><th class="numh">Critic और GPT-4 का मेल (%)</th></tr></thead>
+    <tbody>
+      <tr><td>Retrieve</td><td class="num">93.8</td></tr>
+      <tr><td>IsSup</td><td class="num">93.5</td></tr>
+      <tr><td>IsRel</td><td class="num">80.2</td></tr>
+      <tr class="hi"><td>IsUse</td><td class="num">73.5</td></tr>
+    </tbody>
+  </table></div>
+  <p>IsUse सबसे कमज़ोर है, क्योंकि critic अक्सर 5 और 4 में उलझता है, और इन दोनों पर इंसान भी असहमत होते हैं। इंसानी annotators ने PopQA के 50 जवाब भी जाँचे। Model के IsRel tokens 95.0% बार उनकी राय से मिले, और IsSup tokens 90.0% बार।</p>
+
+  <p>जवाब देते वक्त paper ने Contriever नाम के dense retriever से top 5 passages लिए। वज़न 1.0, 1.0 और 0.5 थे, δ = 0.2, और beam की चौड़ाई 2। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="srresults">नतीजे, points में पढ़े हुए</h4>
+
+  <p>Lesson 13 में <button class="def" data-w="w-points">points</button> आए थे: दो % numbers का सीधा फ़र्क। जैसे 50.8% से 54.9% तक 4.1 points हैं। Paper के चार tasks ये हैं। PopQA में rare लोगों और चीज़ों पर 1,399 सवाल हैं, और PubHealth में health के दावों को सच या झूठ कहना है। ARC-Challenge में science के multiple-choice सवाल हैं, और Bio में biography लिखनी है। <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Task</th><th class="numh">Self-RAG 7B</th><th class="numh">ChatGPT + retrieval</th><th class="numh">ChatGPT</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>PopQA<span class="sub">accuracy</span></td><td class="num">54.9</td><td class="num">50.8</td><td class="num">29.3</td></tr>
+      <tr><td>PubHealth<span class="sub">accuracy</span></td><td class="num">72.4</td><td class="num">54.7</td><td class="num">70.1</td></tr>
+      <tr><td>ARC-Challenge<span class="sub">accuracy</span></td><td class="num">67.3</td><td class="num">75.3</td><td class="num">75.3</td></tr>
+      <tr><td>Bio<span class="sub">FactScore, यानी सच्चे छोटे दावों का %</span></td><td class="num">81.2</td><td class="num">–</td><td class="num">71.8</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>PopQA पर Self-RAG 7B, retrieval वाले ChatGPT से 54.9 − 50.8 = 4.1 points आगे है।</li>
+    <li>ARC पर ChatGPT, Self-RAG 7B से 75.3 − 67.3 = 8.0 points आगे है। Paper का 13B model भी 73.1 पर रहता है, यानी Self-RAG हर task पर नहीं जीतता।</li>
+  </ul>
+
+  <p>Paper ने एक-एक हिस्सा हटाकर भी नापा, यानी <button class="def" data-w="w-ablation">ablation</button> किया। ये 50 हज़ार examples पर train हुए 7B model पर है, इसलिए पहली row ऊपर की table से नीची है: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>क्या बदला</th><th class="numh">PopQA</th><th class="numh">PubHealth</th></tr></thead>
+    <tbody>
+      <tr><td>पूरा Self-RAG</td><td class="num">45.5</td><td class="num">73.5</td></tr>
+      <tr class="hi"><td>जवाब देते वक्त कभी नहीं ढूँढता</td><td class="num">24.7</td><td class="num">73.0</td></tr>
+      <tr><td>हमेशा सिर्फ़ top 1 passage लेता है</td><td class="num">41.8</td><td class="num">73.1</td></tr>
+      <tr><td>δ की जगह तभी ढूँढता है, जब model खुद Retrieve = yes लिखे</td><td class="num">28.3</td><td class="num">72.6</td></tr>
+      <tr><td>Training data में critic के tokens नहीं</td><td class="num">42.6</td><td class="num">72.0</td></tr>
+    </tbody>
+  </table></div>
+  <p>PopQA पर न ढूँढने से accuracy 45.5 से 24.7 पर आती है, यानी 20.8 points की गिरावट। PubHealth पर यही गिरावट सिर्फ़ 0.5 points है। <b>यानी ढूँढना हर task पर बराबर काम का नहीं, और यही फ़ैसला 1 की वजह है।</b> PopQA पर δ = 0.2 वाला नियम, सिर्फ़ Retrieve = yes पर ढूँढने से, 45.5 − 28.3 = 17.2 points बेहतर है, क्योंकि वो ज़्यादा बार ढूँढता है।</p>
+</article>
+
+<!-- 8 -->
+<article class="concept" id="cragpaper">
+  <h3><span class="cn">8</span>CRAG का असली evaluator, thresholds और नतीजे</h3>
+
+  <p>CRAG paper की पहली figure में दिक्कत साफ़ दिखती है। सवाल है <q>Who was the screenwriter for Death of a Batman?</q>, और retriever Batman (1989 film) वाला document लाता है। उसमें Hamm नाम आता है, और generator जवाब देता है <q>Hamm</q>, जो गलत है। <span class="mine">paper से</span></p>
+
+  <p>CRAG का evaluator T5-large नाम का model है, जिसमें 0.77 billion, यानी 77 करोड़ parameters हैं। Self-RAG का critic Llama 2 7B है, यानी करीब 9 गुना बड़ा। Evaluator सवाल और एक document को साथ पढ़कर −1 से 1 के बीच एक score देता है। Training में सही document का label 1 था, और गलत का −1। <span class="mine">paper से</span></p>
+
+  <p>PopQA में करीब 14 हज़ार सवाल हैं, और paper ने test वाले 1,399 छोड़कर बाकी सवालों पर evaluator को train किया। फिर वही evaluator बाकी तीन tasks पर भी चला। हर सवाल पर आम तौर पर 10 documents आते हैं, और evaluator हर एक को अलग score देता है। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="scale">−1 से 1 वाला scale</h4>
+
+  <p>आसान version में मैंने confidence 0 से 1 पर रखा था। Paper का scale −1 से 1 है, और दोनों एक सीधे नियम से जुड़ते हैं: c = (s + 1) ÷ 2। यहाँ s paper का score है, और c 0 से 1 वाला confidence। जैसे s = −1 से c = 0, s = 0 से c = 0.5, और s = 1 से c = 1। ये नियम हर score में 1 जोड़कर 2 से भाग देता है, इसलिए दोनों scales पर क्रम वही रहता है।</p>
+
+  <p>Paper ने thresholds हर dataset पर आज़माकर रखे, यानी ये <button class="def" data-w="w-hyperparam">hyperparameters</button> हैं: <span class="mine">paper से, आख़िरी column मेरा हिसाब</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Dataset</th><th class="numh">ऊपर वाला</th><th class="numh">नीचे वाला</th><th class="numh">0 से 1 पर</th></tr></thead>
+    <tbody>
+      <tr><td>PopQA</td><td class="num">0.59</td><td class="num">−0.99</td><td class="num">0.795, 0.005</td></tr>
+      <tr><td>PubHealth, ARC</td><td class="num">0.5</td><td class="num">−0.91</td><td class="num">0.75, 0.045</td></tr>
+      <tr><td>Biography</td><td class="num">0.95</td><td class="num">−0.91</td><td class="num">0.975, 0.045</td></tr>
+    </tbody>
+  </table></div>
+  <p>आख़िरी column नियम c = (s + 1) ÷ 2 से निकला। जैसे PubHealth का नीचे वाला threshold: (−0.91 + 1) ÷ 2 = 0.09 ÷ 2 = 0.045। नीचे वाले thresholds लगभग −1 पर हैं, यानी Incorrect तभी आता है, जब हर document लगभग पूरी तरह बेकार हो।</p>
+
+  <div class="recall">
+    <p class="rl">पहले सोचिए</p>
+    <p>आसान version में अकेली Homework की announcement 0.05 पर Incorrect थी। PubHealth वाले thresholds पर, 0 से 1 वाले scale में, उसका फ़ैसला क्या होगा?</p>
+    <details><summary>जवाब देखिए</summary>
+      <p>PubHealth के thresholds 0 से 1 पर 0.75 और 0.045 हैं। 0.05 न 0.75 से ऊपर है, न 0.045 से नीचे, इसलिए फ़ैसला <b>Ambiguous</b> है। Paper के thresholds पर CRAG documents को आसानी से नहीं छोड़ता, वो उन्हें रखकर web search भी करता है।</p>
+    </details>
+  </div>
+
+  <h4 class="sub" id="setrule">Documents के set पर फ़ैसला</h4>
+
+  <p>Paper का नियम पूरे set पर लगता है: <span class="mine">paper से</span></p>
+  <ul class="plain">
+    <li><b>Correct</b>: कम से कम एक document का score ऊपर वाले threshold से ज़्यादा है।</li>
+    <li><b>Incorrect</b>: हर document का score नीचे वाले threshold से कम है।</li>
+    <li><b>Ambiguous</b>: बाकी हर हालत।</li>
+  </ul>
+  <p>अब paper के scale पर मेरे scores लीजिए: queue log 0.70, forum post −0.20, Homework −0.95 और project page −0.97। <span class="mine">scores मेरे बनाए</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Retriever क्या लाया</th><th>PopQA<span class="sub">0.59, −0.99</span></th><th>PubHealth<span class="sub">0.5, −0.91</span></th><th>Biography<span class="sub">0.95, −0.91</span></th></tr></thead>
+    <tbody>
+      <tr><td>Queue log, forum post, Homework</td><td>Correct</td><td>Correct</td><td>Ambiguous</td></tr>
+      <tr><td>अकेला forum post</td><td>Ambiguous</td><td>Ambiguous</td><td>Ambiguous</td></tr>
+      <tr class="hi"><td>Homework, project page</td><td>Ambiguous</td><td>Incorrect</td><td>Incorrect</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>पहली row में queue log का 0.70, PopQA के 0.59 से ऊपर है, इसलिए पूरा set Correct है, भले उसमें Homework −0.95 पर हो। Biography पर ऊपर वाला threshold 0.95 है, जिसे queue log पार नहीं करता।</li>
+    <li>तीसरी row में PopQA का नीचे वाला threshold −0.99 है। Homework का −0.95 उससे ऊपर है, इसलिए फ़ैसला Ambiguous है। PubHealth पर −0.95 और −0.97, दोनों −0.91 से नीचे हैं, इसलिए Incorrect।</li>
+  </ul>
+  <p>Ambiguous क्यों है, ये paper के एक शुरुआती experiment से दिखा। सिर्फ़ Correct और Incorrect के साथ CRAG evaluator की हर गलती पर पूरा गलत रास्ता लेता था। Ambiguous बीच का रास्ता है, जिसमें documents भी रहते हैं और web के नतीजे भी आते हैं। <span class="mine">paper से</span></p>
+
+  <h4 class="sub" id="stripsweb">Strips और web search के numbers</h4>
+
+  <p>Refinement में भी यही evaluator चलता है। लंबा document कुछ sentences वाली strips में टूटता है, और evaluator हर strip को score देता है। फिर −0.5 से ऊपर वाली strips में से सबसे ऊँची 5 रहती हैं। <span class="mine">paper से</span> Milestone वाले सवाल पर मान लीजिए syllabus की strips को 0.8, 0.1 और −0.7 मिले। <span class="mine">मेरे scores</span> पहली दो −0.5 से ऊपर हैं और रहती हैं, और Week 10 वाली −0.7 पर हटती है।</p>
+
+  <p>Web के लिए GPT-3.5 Turbo को एक prompt मिलता है, जो सवाल से ज़्यादा से ज़्यादा तीन keywords माँगता है, comma से अलग करके। Paper का example: <q>What is Henry Feilden's occupation?</q> से query <q>Henry Feilden, occupation</q> बनती है। Google Search API से top 5 pages आते हैं, और CRAG Wikipedia के pages को पहले रखता है। फिर इन pages के paragraphs पर भी वही evaluator चलता है। <span class="mine">paper से</span></p>
+
+  <p>हमारे सवाल पर ऐसी query कुछ <q>office hour, least crowded, this week</q> जैसी होगी। <span class="mine">मेरा example</span> लेकिन इस course का queue log web पर नहीं है, इसलिए यहाँ web search से कुछ काम का नहीं आएगा। CRAG तब भी ढूँढेगा, क्योंकि वो सिर्फ़ evaluator के फ़ैसले पर चलता है।</p>
+
+  <h4 class="sub" id="cragresults">नतीजे: points और %</h4>
+
+  <p>Paper ने CRAG को सीधी RAG के ऊपर लगाया, और generator SelfRAG-LLaMA2-7b रखा, यानी वही model, जिसे Self-RAG ने train किया था: <span class="mine">paper से</span></p>
+  <div class="tscroll"><table class="t">
+    <thead><tr><th>Task</th><th class="numh">RAG</th><th class="numh">CRAG</th><th class="numh">फ़र्क</th></tr></thead>
+    <tbody>
+      <tr class="hi"><td>PopQA<span class="sub">accuracy</span></td><td class="num">52.8</td><td class="num">59.8</td><td class="num">+7.0</td></tr>
+      <tr><td>Biography<span class="sub">FactScore</span></td><td class="num">59.2</td><td class="num">74.1</td><td class="num">+14.9</td></tr>
+      <tr><td>PubHealth<span class="sub">accuracy</span></td><td class="num">39.0</td><td class="num">75.6</td><td class="num">+36.6</td></tr>
+      <tr><td>ARC-Challenge<span class="sub">accuracy</span></td><td class="num">53.2</td><td class="num">68.6</td><td class="num">+15.4</td></tr>
+    </tbody>
+  </table></div>
+  <p>Paper इन फ़र्कों को <q>7.0% accuracy</q> जैसा लिखता है। ये points हैं, और % वाली बढ़त इससे अलग है:</p>
+  <ol class="plain">
+    <li>Points: 59.8 − 52.8 = 7.0।</li>
+    <li>% वाली बढ़त: 7.0 ÷ 52.8 = 0.133, यानी 13.3%।</li>
+  </ol>
+  <p>PubHealth पर 36.6 points की बढ़त 39.0 के हिसाब से 93.8% है, यानी accuracy करीब दोगुनी। जाँच: 75.6 ÷ 39.0 = 1.94।</p>
+
+  <p>Paper ने CRAG को Self-RAG के ऊपर भी लगाया, और इसे Self-CRAG कहा। PopQA पर Self-RAG के 54.9 से Self-CRAG 61.8 पर पहुँचा, यानी 6.9 points आगे। ARC पर 67.3 से 67.2, यानी 0.1 point नीचे। <span class="mine">paper से</span></p>
+
+  <p>जब generator आम LLaMA2-hf-7b था, जिसे reflection tokens की training नहीं मिली थी, तब PopQA पर Self-RAG का तरीका 29.0 पर गिरा। उसी generator के साथ सीधी RAG 50.5 पर थी, और CRAG 54.9 पर। <b>यही पड़ाव 5 वाली बात है: Self-RAG को अपना trained generator चाहिए, और CRAG किसी भी generator के साथ चलता है।</b></p>
+
+  <p>Evaluator कितना सही परखता है, ये PopQA पर नापा। T5 evaluator 84.3% बार सही था। ChatGPT से यही काम करवाने पर 58.0% आया, step by step सोचने वाले prompt के साथ 62.4%, और examples के साथ 64.7%। <span class="mine">paper से</span></p>
+
+  <p>Ablation में refinement हटाने पर PopQA 59.8 से 54.2 पर आया, query rewriting हटाने पर 56.2, और web नतीजों में से चुनना हटाने पर 58.6। सीधी RAG में हर बार web जोड़ने से accuracy 52.8 से सिर्फ़ 53.8 हुई। यानी web अकेले 1.0 point देता है, और CRAG का परखना उसके ऊपर 6.0 points और। <span class="mine">paper से</span></p>
+
+  <p>ये परखना मुफ़्त नहीं है। Generation वाले हिस्से में एक सवाल पर RAG को करीब 0.363 second लगे, और CRAG को 0.512, यानी करीब 1.41 गुना। Paper कहता है कि ये मोटा अंदाज़ा है, और इसमें retrieval और web search का वक्त नहीं गिना। <span class="mine">paper से</span></p>
+</article>
+
+<!-- 9 -->
+<article class="concept" id="slides">
+  <h3><span class="cn">9</span>अब Stanford की slides खुद पढ़िए</h3>
+
+  <p>नीचे Stanford की agentic RAG वाली तीनों slides हैं, बिना किसी बदलाव के, और साथ में उनके बड़े किए हिस्से। हर slide के नीचे कुछ सवाल हैं। पहले खुद जवाब सोचिए, फिर खोलिए। कोई बात अटके, तो जवाब में लिखे पड़ाव पर लौट जाइए। Phone पर slide छोटी दिखे, तो image पर click कीजिए, वो पूरे size में खुलेगी।</p>
+
+  <figure class="slide">
+    <a href="img/slide-p56.png"><img src="img/slide-p56.png" alt="Stanford slide: Agentic RAG, loop के अंदर retrieval" loading="lazy"></a>
+    <figcaption>Stanford की slide: Agentic RAG, loop के अंदर retrieval।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Agentic RAG वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>पहली line कहती है <q>Everything so far answers one question well</q>। इस lecture की कौन सी चीज़ें इसमें आती हैं, और उनमें क्या नहीं है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Chunking, BM25, DPR, hybrid search और reranking। ये सब एक सवाल पर एक बार के retrieval को बेहतर करते हैं। इनमें से कोई तय नहीं करता कि ढूँढना है या नहीं, क्या पूछना है, और कब रुकना है। (पड़ाव 2)</p>
+        </details>
+      </li>
+      <li>
+        <p><q>Retrieval should be an action the agent takes</q> में action क्या है, tool क्या है, और observation क्या होगा?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Search करना action है, retriever या search engine tool है, और जो passages लौटे, वो observation हैं। Agent उन्हें पढ़कर अगला action चुनता है। (पड़ाव 1)</p>
+        </details>
+      </li>
+      <li>
+        <p>Slide की ऊपर वाली line में <q>when to stop</q> है, लेकिन नीचे के तीन फ़ैसलों में stop शब्द नहीं है। ये बात किस फ़ैसले में है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>तीसरे फ़ैसले में, <q>whether the result is good enough</q>। नतीजा काफ़ी अच्छा है, तो agent रुककर जवाब लिखता है। (पड़ाव 2)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p57.png"><img src="img/slide-p57.png" alt="Stanford slide: Self-RAG के तीन steps" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p57-step12.png"><img src="img/slide-p57-step12.png" alt="उसी slide का step 1 और step 2, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p57-step3.png"><img src="img/slide-p57-step3.png" alt="उसी slide का step 3, बड़ा करके" loading="lazy"></a>
+    <figcaption>Stanford की Self-RAG वाली slide, और नीचे उसके step 1 और 2, और फिर step 3, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">Self-RAG वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Step 1 का नाम <q>Retrieve on demand</q> है। <q>on demand</q> किस फ़ैसले की बात है, और paper में model कब ढूँढता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>फ़ैसला 1 की। Model Retrieve token लिखता है। Paper में system तब ढूँढता है, जब yes और no के बीच yes का हिस्सा δ = 0.2 से ऊपर हो। (पड़ाव 3 और 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>Step 3 में 1 के आगे दो हरे box हैं, 3 के आगे एक हरा और एक नारंगी, और 2 के आगे एक लाल। ये कौन से tokens हैं, और score से 1 &gt; 3 &gt; 2 कैसे निकलता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>1 पर Relevant और Supported हैं, 3 पर Relevant और Partially, और 2 पर Irrelevant। IsSup में partially को आधा वज़न मिलता है, इसलिए 3 का score 1 से कम है। 2 का IsRel हिस्सा छोटा है, इसलिए वो सबसे नीचे है। हमारे example में यही क्रम 2.15, 1.475 और 0.425 से निकला था। (पड़ाव 6)</p>
+        </details>
+      </li>
+      <li>
+        <p>आख़िरी जवाब में citations 1 और 4 हैं, जबकि step 1 में सिर्फ़ तीन passages आए थे। 4 कहाँ से आया? और दाईं ओर के retrieve, critique और generate किन चीज़ों से जुड़ते हैं?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>Model ने दोबारा Retrieve लिखा, यानी Repeat वाला हिस्सा, और Utah वाली बात अगले round के passage 4 से आई। Retrieve token ढूँढने का फ़ैसला है, IsRel, IsSup और IsUse critique tokens हैं, और generate हर हिस्से का लिखना है। (पड़ाव 3 और 6)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+
+  <figure class="slide" style="margin-top:34px">
+    <a href="img/slide-p58.png"><img src="img/slide-p58.png" alt="Stanford slide: CRAG का पूरा diagram" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p58-evaluator.png"><img src="img/slide-p58-evaluator.png" alt="उसी slide का evaluator और तीन फ़ैसले, बड़ा करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p58-boxes.png"><img src="img/slide-p58-boxes.png" alt="उसी slide के Knowledge Refinement और Knowledge Searching boxes, बड़े करके" loading="lazy"></a>
+  </figure>
+  <figure class="slide">
+    <a href="img/slide-p58-generation.png"><img src="img/slide-p58-generation.png" alt="उसी slide की generation वाली row, बड़ी करके" loading="lazy"></a>
+    <figcaption>Stanford की CRAG वाली slide, और नीचे उसका evaluator, दोनों boxes और generation वाली row, बड़े करके।</figcaption>
+  </figure>
+
+  <div class="recall">
+    <p class="rl">CRAG वाली slide पढ़िए</p>
+    <ol class="plain">
+      <li>
+        <p>Evaluator के बादल में लिखा है <q>If retrieved documents are correct to x?</q> यहाँ x क्या है, और evaluator इसका जवाब किस रूप में देता है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>x सवाल है। Evaluator हर सवाल-document जोड़े को −1 से 1 का score देता है, और दो thresholds से Correct, Ambiguous या Incorrect बनता है। बाईं ओर का नीला box यही कहता है: relevance परखना, और confidence से action चुनना। (पड़ाव 4 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Knowledge Refinement box में d<sub>1</sub>, d<sub>2</sub>, strip और k<sub>in</sub> क्या हैं? strip<sub>2</sub> का रंग अलग क्यों है?</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>d<sub>1</sub> और d<sub>2</sub> retriever के लाए documents हैं। Decompose उन्हें strips में तोड़ता है, Filter पर evaluator का निशान है, और Recompose बची strips को जोड़कर k<sub>in</sub> बनाता है, यानी अंदर का knowledge। strip<sub>2</sub> Filter के बाद नहीं दिखती, इसलिए वो हटाई गई strip है, जैसे हमारे syllabus में Week 10 वाली। (पड़ाव 4 और 8)</p>
+        </details>
+      </li>
+      <li>
+        <p>Knowledge Searching box की query q सवाल x से कैसे अलग है, और k<sub>ex</sub> क्या है? फिर नीचे की generation row पढ़िए।</p>
+        <details><summary>जवाब देखिए</summary>
+          <p>q में सिर्फ़ keywords हैं: Death of a Batman, screenwriter और Wikipedia। Paper का prompt ज़्यादा से ज़्यादा तीन keywords माँगता है, और CRAG Wikipedia के pages पहले रखता है। Web search से k<sub>1</sub> से k<sub>n</sub> आते हैं, और Select के बाद k<sub>ex</sub> बनता है, यानी बाहर का knowledge।</p>
+          <p>Generation row में Correct पर generator को x + k<sub>in</sub> मिलता है, Ambiguous पर x + k<sub>in</sub> + k<sub>ex</sub>, और Incorrect पर x + k<sub>ex</sub>। (पड़ाव 4 और 8)</p>
+        </details>
+      </li>
+    </ol>
+  </div>
+</article>
+
+<section class="wrap">
+  <h2>इस lesson की 3 बातें</h2>
+  <ol class="plain">
+    <li>Agent loop में action लेता है, observation पढ़ता है, और अगला action तय करता है। हर कदम पर तीन फ़ैसले हैं: ढूँढें या नहीं, कौन सी query भेजें, और नतीजा काफ़ी अच्छा है या नहीं।</li>
+    <li>Self-RAG हर critique किस्म की probabilities को उसी किस्म के अंदर हिस्सों में बदलता है। इन हिस्सों का वज़न वाला जोड़ हर हिस्से का score है, और ढूँढने का फ़ैसला yes के हिस्से और δ = 0.2 से होता है।</li>
+    <li>CRAG का T5 evaluator −1 से 1 तक score देता है। एक document ऊपर वाले threshold से ऊपर हो, तो Correct, और सारे नीचे वाले से नीचे हों, तो Incorrect। PopQA पर ये RAG के 52.8 को 59.8 करता है, यानी 7.0 points।</li>
+  </ol>
+
+  <h2 style="margin-top:28px">इस lesson के नए शब्द</h2>
+  <dl class="words">
+    <dt id="w-agent">Agent</dt><dd>Loop में काम करने वाला LLM, जो action चुनता है, observation पढ़ता है, और अगला action तय करता है। जैसे <q>OH timings</q> की search खाली आई, तो agent ने नई query लिखी।</dd>
+    <dt id="w-action">Action और tool</dt><dd>Agent का चुना काम, जैसे <q>OH timings</q> search करना। Tool वो program है, जो ये काम करता है, जैसे search engine।</dd>
+    <dt id="w-observation">Observation</dt><dd>Action का नतीजा, जो agent अगले कदम से पहले पढ़ता है। जैसे पहली search का नतीजा: हर passage का score 0।</dd>
+    <dt id="w-agentic">Agentic RAG</dt><dd>RAG, जिसमें ढूँढना agent का action है, pipeline का तय step नहीं। जैसे 17 × 3 पर 0 searches, और Jed Hoyer वाले सवाल पर 3।</dd>
+    <dt id="w-selfrag">Self-RAG</dt><dd>Generator खुद reflection tokens लिखकर तय करता है कि कब ढूँढना है, और कौन सा हिस्सा रखना है। जैसे forum post वाले हिस्से पर Relevant और Partially।</dd>
+    <dt id="w-reflection">Reflection tokens</dt><dd>Vocabulary में जोड़े गए खास tokens, जिन्हें model बाकी text की तरह लिखता है। जैसे Retrieve, Relevant या Irrelevant, और Supported या Partially।</dd>
+    <dt id="w-crag">CRAG</dt><dd>Corrective RAG: एक evaluator retrieval को Correct, Incorrect या Ambiguous कहता है, और उसी हिसाब से refinement, web search या दोनों चलते हैं। जैसे 0.4 वाला forum post Ambiguous है।</dd>
+    <dt id="w-evaluator">Retrieval evaluator</dt><dd>सवाल और एक document पढ़कर confidence देने वाला हल्का model। जैसे K = 1 पर forum post को 0.4।</dd>
+    <dt id="w-refine">Knowledge refinement</dt><dd>Documents को strips में तोड़ना, बेकार strips हटाना, और बाकी को क्रम से जोड़ना। जैसे milestone वाले सवाल पर syllabus की 3 में से 2 strips रहती हैं।</dd>
+    <dt id="w-threshold">Threshold</dt><dd>पहले से तय limit, जिसके ऊपर या नीचे होने पर अलग action चलता है। जैसे CRAG में 0.6 से ऊपर Correct, और 0.2 से नीचे Incorrect।</dd>
+    <dt id="w-critic">Critic</dt><dd>किसी और के लिखे या लाए को grade देने वाला model। जैसे Self-RAG में Llama 2 7B का critic training data में reflection tokens लगाता है, और CRAG की slide अपने evaluator को critic कहती है।</dd>
+    <dt id="w-segscore">Segment score (Self-RAG)</dt><dd>हर हिस्से के critique हिस्सों का वज़न वाला जोड़: S = 1.0 × s<sub>IsRel</sub> + 1.0 × s<sub>IsSup</sub> + 0.5 × s<sub>IsUse</sub>। जैसे queue log वाले हिस्से का S = 0.9 + 0.875 + 0.5 × 0.75 = 2.15।</dd>
+    <dt id="w-beam">Beam search</dt><dd>हर कदम पर सबसे ऊँचे score वाले B अधूरे जवाब रखकर आगे बढ़ना। जैसे B = 2 पर queue log (2.15) और forum post (1.475) वाले जवाब अगले कदम तक रहते हैं, और Homework (0.425) छूटता है।</dd>
+  </dl>
+
+  <div class="pager">
+    <a href="15-colbert-dense.html">पिछला: Lesson 15</a>
+    <a href="17-search-r1-dense.html">अगला: Lesson 17, Search-R1</a>
+  </div>
+</section>
+
+<footer>
+  Slides: CS 329Z Lecture 3 “RAG + Agents”, Diyi Yang। Papers: Asai et al., 2024, “Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection”, और Yan et al., 2024, “Corrective Retrieval Augmented Generation”। “मेरा” और “मेरे” वाले examples और numbers इस lesson के हैं, slides के नहीं। “paper से” वाली बातें paper में हैं, slides पर नहीं।
+</footer>
+</main>
+
+<script src="glossary-dense.js"></script>
+<script src="def.js"></script>
+<script>
+(function () {
+  var s = document.getElementById("cw-s"), so = document.getElementById("cw-so"), body = document.getElementById("cw-body");
+  var btns = document.querySelectorAll("#cw .btns button");
+  function render() {
+    var v = Number(s.value);
+    so.textContent = v.toFixed(2);
+    var verdict, why, action, gets;
+    if (v > 0.6) { verdict = "Correct"; why = "0.6 से ऊपर"; action = "Knowledge refinement: strips में तोड़िए, बेकार strips हटाइए"; gets = "सवाल + साफ़ किया document"; }
+    else if (v < 0.2) { verdict = "Incorrect"; why = "0.2 से नीचे"; action = "Document छोड़िए, query दोबारा लिखिए, web search कीजिए"; gets = "सवाल + web का नतीजा"; }
+    else { verdict = "Ambiguous"; why = "0.2 और 0.6 के बीच"; action = "दोनों: refinement और web search"; gets = "सवाल + साफ़ किया document + web का नतीजा"; }
+    body.innerHTML = "<tr><td><b>फ़ैसला</b></td><td><b>" + verdict + "</b>, क्योंकि " + v.toFixed(2) + " " + why + " है</td></tr><tr><td><b>Action</b></td><td>" + action + "</td></tr><tr><td><b>Generator को</b></td><td>" + gets + "</td></tr>";
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", Number(b.dataset.v) === v ? "true" : "false"); });
+  }
+  s.addEventListener("input", render);
+  btns.forEach(function (b) { b.addEventListener("click", function () { s.value = b.dataset.v; render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>
